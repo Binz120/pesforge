@@ -1,29 +1,37 @@
 # PESForge
 
-Edits players in **SP Football Life 2027** (PES 2021 engine). Everything is done on files — the
-game never needs to be running, and nothing here touches the game process.
+A player editor for **SP Football Life 2027** (PES 2021 engine) on Linux — GUI and headless CLI.
+Everything is done on files: the game never needs to be running, and nothing touches the game
+process. Edits are patched into the game's own database and load the next time the game starts.
 
-The player's face comes from pesmaster (`/pes-2021/graphics/players/player_<id>.png`,
-128×128, ~17 KB). It is fetched the first time you select a player and cached under
-`~/.local/share/pesforge/portraits/`, so nothing is bundled and offline runs simply show
-"no photo" for players you have not opened yet.
+## What you can edit
 
-The window opens on **workspace 3** on Hyprland without pulling the view across
-(`PESFORGE_PARK=<n>` overrides the workspace, an empty value keeps it on the current one).
-Everything is on one page and sized to fit a 1500×950 window: the list, the player form and the
-skills/club column. The form grids pick their own column counts from the pane widths they are
-given, so a wider window shows more per row instead of scrolling; a window squeezed smaller than
-the design gets a scrollbar back rather than a clipped field.
+- **Players** — 25 abilities (40–99) with value bars; age, height, weight, nationality, form,
+  weak foot usage & accuracy, injury resistance, stronger foot; registered position and 13
+  position ratings; playing style; 48 skills; full + shirt names; nine celebration/motion slots;
+  and the career block (youth club, owner club, contract until, loan until, market value,
+  national caps, reputation, playing attitude, legend / hand / Ballon d'Or flags).
+- **Clubs** — transfers, squad numbers, the club's coach (from the 980-coach list), home stadium
+  (from the 37 in the database) and the club's name slots.
+- **Coaches** — all 980 `Coach.bin` records: name, Japanese name, nationality, adaptability,
+  and the club each one is linked to.
+- **Appearance** — the selected player's 117 appearance fields, grouped by head/eyes/eyebrows/
+  nose/mouth/facial hair/hair/physique/kit, each clamped to its own range.
 
-```bash
-pesforge                  # GUI  (desktop entry: "PESForge")
-pesforge --find messi     # headless, no window at all
-```
+Search by name, shirt name or ID. Club search is accent-blind and takes nicknames (`man u`,
+`spurs`, `barca`, …). Filter by club, country or free agents, show only changed records, sort any
+column, undo/redo (`Ctrl+Z` / `Ctrl+Y`), bulk-edit a selection, compare two players, and import or
+export rosters as CSV.
 
-## Requirements and installing on any distro (running from source)
+The app is fully offline — the only network call is the optional player-photo fetch, and it can
+be switched off in Settings.
 
-Linux with Python 3.8+ and **tkinter**. Tk is the only GUI dependency; the app has no pip
-packages and stores nothing outside XDG directories.
+Every write is safe: the game's CPK is copied to a backups folder before each save, and
+**Vanilla** restores the pristine snapshot taken on first run.
+
+## Requirements
+
+Linux with Python 3.8+ and **tkinter** (Tk 8.6 or newer). No pip packages, no other dependencies.
 
 ```bash
 sudo apt install python3-tk          # Debian, Ubuntu, Mint, Pop!_OS
@@ -32,103 +40,76 @@ sudo pacman -S tk                    # Arch, Manjaro, EndeavourOS
 sudo zypper install python3-tk       # openSUSE
 ```
 
+Any desktop works: Tk draws through X11, which Wayland sessions provide via XWayland (GNOME, KDE,
+XFCE, Cinnamon, sway, Hyprland, niri are all fine). On a bare Wayland compositor **without**
+XWayland, run it under `xwayland-run` or use the headless CLI.
+
+## Install
+
 ```bash
 git clone <this repo> && cd pesforge
 ./install.sh                         # ~/.local/bin/pesforge + a menu entry, no root
-pesforge --check                # what it found: python, Tk, display, game folder
 ./install.sh --uninstall             # removes both; config and backups stay
 ```
 
 The launcher works from any directory and picks the first interpreter with tkinter, preferring
 the distro's `/usr/bin/python3` (that build carries the system fontconfig). Override with
-`SPFL_PYTHON=/path/to/python3` or point at a checkout elsewhere with `SPFL_EDITOR_DIR=…`.
+`SPFL_PYTHON=/path/to/python3`, or point at a checkout elsewhere with `SPFL_EDITOR_DIR=…`.
 
-Any desktop works: Tk draws through X11, which Wayland sessions provide via XWayland (GNOME, KDE,
-XFCE, Cinnamon, sway, Hyprland, niri all fine). On a bare Wayland compositor **without**
-XWayland, run it under `xwayland-run` or use the headless CLI.
+## Quick start
 
-The game folder is found on its own: on first run (or whenever the configured folder no longer
-holds a `download/data_s*.cpk`) `~/Games`, the Steam/Lutris libraries, `/run/media` and `/media`
-are searched a few levels deep, the newest `data_s*.cpk` wins (any data pack name), and the path is written into
-`~/.config/pesforge/config.json` so CLI and GUI agree. If nothing is found the first run asks you to pick the game folder and remembers it. `SPFL_DIR` still overrides everything.
+```bash
+pesforge                  # GUI  (menu entry: "PESForge")
+pesforge --check          # environment report: python, Tk, display, game folder
+pesforge --find messi     # headless, no window at all
+```
 
-Edits are patched **into the game's `download/data_s*.cpk` itself** (the table's own bytes, same length;
-or appended with its TOC entry repointed when the recompressed table needs a few extra bytes).
-Changes load the next time the game starts. The CPK is copied to
-`~/.local/share/pesforge/backups/` before every write, and **Vanilla** restores the pristine
-snapshot taken on first run.
+On first run the game folder is found automatically: `~/Games`, the Steam/Lutris libraries,
+`/run/media` and `/media` are searched a few levels deep, and the newest `data_s*.cpk` wins. If
+nothing is found, the first run asks you to pick the folder and remembers it. The path is stored
+in `~/.config/pesforge/config.json` so the CLI and GUI agree.
 
-**An in-game edit save shadows the database.** PES writes `EDIT00000000` under
-`.../Documents/SPGAME/Football Life/2027/save/` the first time you save anything in Edit mode; on
-boot the game layers that file over `data_s2627.cpk`, so squads/players/names stored there win over
-anything patched here. Move it aside (`mv EDIT00000000 EDIT00000000.off`) to make database edits
-visible again, and the editor's Club section warns you while such a file is present.
+## The GUI
 
-A Sider live-CPK override does *not* work for pesdb tables on this install: the file is served
-(`livecpk file found` in `sider.log`) but the game then lists every player as
-`--- / Unregistered`, even for a byte-identical copy of the shipped file.
+The window is sized for a 1500×950 setup: the player list, the player form and the skills/club
+column side by side. A narrower window folds to a stacked layout instead of clipping fields, and
+the form grids pick their own column counts from the pane widths they are given.
 
-## GUI
-
-Search by name, shirt name or ID. A query that matches club names lists **clubs** instead
-(team ID, name, squad size) — click one, or press Enter for the first, to get its squad. Club search is accent-blind
-(`munchen` finds Bayern München) and takes nicknames — `man u`, `utd`, `spurs`, `barca`, `juve`,
-`psg`, `bvb`, `toon`, `wolves`, `barca`, `atleti`, `naples` — with a partial alias working too
-(`man` lists both Manchester clubs). Click a
-column header to sort by ID, name, club, position, OVR or age (click again to reverse). → edit →
-**Save to game**. The app re-reads what it wrote and reports the
-record count in the status bar. **Vanilla** deletes the override. Earlier versions land in
-`~/.local/share/pesforge/backups/`.
+Select a player to load the form. **Save to game** writes every changed table in one go (only the
+tables you actually changed are re-packed, each re-read and its row count compared before the
+status line reports `ok`); **Revert** reloads the selected player; **Reload** re-reads the
+database. Earlier versions of the file land in the backups folder.
 
 The **Club** box is a type-ahead search, not a 745-item dropdown: type `arse` and the list narrows
 to Arsenal FC *and* Olympique Marseille, `united` finds all 15 Uniteds, an exact name like
-`Arsenal FC` pins one squad. Typed text filters the dropdown as you go and the table after a
-short pause; Enter applies immediately. It reads the `PlayerAssignment.bin` override if one
-exists, so transfers show up here too.
+`Arsenal FC` pins one squad. It reads the `PlayerAssignment.bin` override if one exists, so
+transfers show up here too.
 
-Filter the list by **Club** and **Country** (the player's nationality, named from `data/countries.json`,
-214 countries keyed by the record's Nationality field).
-
-Editable per player: 25 abilities (40–99) with value bars, age/height/weight/nationality/form/weak
-foot usage & accuracy/injury resistance/stronger foot, registered position, playing style,
-13 position ratings, 48 skills, full + shirt name, nine celebration/motion slots, the
-**career** block (youth club, owner club, contract until, loan until, market value, national
-caps, reputation, playing attitude, legend / hand / Ballon d'Or flags), and the
-**Club** record. Club names come from `Team.bin` + `PlayerAssignment.bin`.
-
-Form, the weak-foot sliders, injury resistance, reputation and playing attitude all read
-1-based, exactly as the game shows them (they are stored one lower).
-
-Menu entries **Coaches…** and **Appearance of the selected player…** open two more editors:
-
-- **Coaches** — all 980 `Coach.bin` records, searchable by name or club: name, Japanese name,
-  nationality and adaptability (40–99), with the club each one is linked to.
-- **Appearance** — the selected player's `PlayerAppearance.bin` record, grouped by head/eyes/
-  eyebrows/nose/mouth/facial hair/hair/physique/kit, each field clamped to its own range.
-
-### Club
-
-Five things in the Club section:
-
-- **Transfer** — writes the player's first *club* `PlayerAssignment.bin` row (national rows
-  ≤ 99 are never touched). A player with no club row gets one appended rather than an error.
-- **Coach** — the club's coach link (`Team.bin` +0), set from the 980-coach list.
-- **Stadium** — the club's home stadium (`Team.bin` +60), picked from the 37 stadiums in
-  `Stadium.bin`, names from the table itself.
-- **Squad no.** — the number the player wears in this club (`PlayerAssignment.bin` +12,
-  stored one below the number the game shows).
-- **Club name** — edits the English (70 bytes) and short (10) name slots of the
-  club in `Team.bin`; the club filter and the list update immediately.
-
-Every section saves into the same CPK write: only tables you actually changed are re-packed, each one
-re-read and its row count compared before the status line reports `ok`.
-
-### OVR
-
-The list and the player header show a rating computed from a per-position model
+The **OVR** in the list and the player header is computed from a per-position model
 (`pesdb.OVR_MODEL`, `pesdb.overall`): weighted abilities for the running position, rounded
-half-to-even. Messi reads 85. It is a model of its own, not the game's
-own hidden overall — PES 2021 stores no rating in the record.
+half-to-even. It is a model of its own, not the game's hidden overall — PES 2021 stores no rating
+in the record.
+
+Menu entries: **Settings…** (`Ctrl+,`), open backups folder, **Reload database**, **Restore
+vanilla**, export/import roster CSV, **Bulk edit selected…**, **Compare selected players…**,
+**Coaches…**, **Appearance of the selected player…**, **About**.
+
+Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the search box ·
+`Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field.
+
+## Settings
+
+| Setting | Meaning |
+|---|---|
+| Game folder | Folder holding `download/data_s2627.cpk`; checked before it is accepted |
+| Backup folder | Where previous file versions go; blank = `~/.local/share/pesforge/backups` |
+| Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
+| Ask before writing the game file | Confirmation dialog before a save is written |
+| Load player photos from pesmaster (online) | Fetch each player's face the first time it is shown; off = fully offline |
+
+Saved to `~/.config/pesforge/config.json` and applied immediately. The CLI reads the same file
+for the game folder and backup cap. `SPFL_DIR`, `SPFL_STATE` and `SPFL_CONFIG` override the
+config file for both GUI and CLI.
 
 ## Headless
 
@@ -162,34 +143,30 @@ edit the name slots. Unknown columns are rejected. Unknown ids are skipped with 
 line unless `--append` is given, which creates a blank record first.
 
 `--transfer` edits the player's first **club** assignment row. National teams own rows 1–99 in
-this database, so a player's country row is left untouched; `player_teams` ignores those rows
-for the club label. Rows referencing a team id missing from `Team.bin` export with a blank club
-and are counted in the export summary rather than dropped.
+this database, so a player's country row is left untouched. Rows referencing a team id missing
+from `Team.bin` export with a blank club and are counted in the export summary rather than
+dropped.
 
-## Settings
+## Good to know
 
-The **Menu** button in the header (or `Ctrl+,`) opens:
+**An in-game edit save shadows the database.** PES writes `EDIT00000000` under
+`.../Documents/SPGAME/Football Life/2027/save/` the first time you save anything in Edit mode; on
+boot the game layers that file over `data_s2627.cpk`, so squads/players/names stored there win
+over anything patched here. Move it aside (`mv EDIT00000000 EDIT00000000.off`) to make database
+edits visible again — the editor's Club section warns you while such a file is present.
 
-| Setting | Meaning |
-|---|---|
-| Game folder | Folder holding `download/data_s2627.cpk`; checked before it is accepted |
-| Backup folder | Where previous `Player.bin` versions go; blank = `~/.local/share/pesforge/backups` |
-| Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
-| Ask before writing the game file | Confirmation dialog before an override is written |
-
-Saved to `~/.config/pesforge/config.json` and applied immediately (the table is re-read).
-The CLI reads the same file for the game folder and backup cap; `SPFL_DIR`, `SPFL_STATE` and
-`SPFL_CONFIG` still override it.
-
-Menu also has: open the backups folder, reload the database, restore vanilla, export and import a
-roster CSV, bulk edit and compare the selected players, the coach and appearance editors, and about.
+**Writes go into the CPK itself.** PESForge does not use a Sider live-CPK override for the pesdb
+tables — an override for these tables ends up listing every player as `--- / Unregistered`, even
+for a byte-identical copy of the shipped file — so edits are patched into `download/data_s*.cpk`
+directly (the table's own bytes, same length; or appended with its TOC entry repointed when the
+recompressed table needs a few extra bytes).
 
 ## Ability and skill tables (eFootball ↔ PES 2021)
 
 `data/pesdb_maps.json` carries the per-version ability, skill and playing-style lists;
 `pesdb_maps.py` loads them: `abilities(version)`, `skills(version)`, `PLAYING_STYLES`,
 `convert_stats(values, src, dst)` and `skill_id(label)`. The PES 2021 list is the game's own
-25-stat order and matches `pesdb.ATTRS` label for label — a second opinion on our bit table.
+25-stat order and matches `pesdb.ATTRS` label for label — a second opinion on the bit table.
 
 Conversion is by each stat's `PropertyName`, with one rename (`SetPieceTaking` ↔ `PlaceKicking`
 in both directions). Three stats exist in only one game — eFootball's *GK Parrying* and
@@ -205,7 +182,7 @@ finds id 12; the 12 FL27 skills the list lacks return `None`.
 | `pesdb.py` | WESYS pack/unpack, CPK table extraction, 312-byte bit-field record codec, team maps |
 | `editor.py` | Tkinter UI (and entry point) |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
-| `settings.py` | config file: game folder, backup folder, backup cap, save confirmation |
+| `settings.py` | config file: game folder, backup folder, backup cap, save confirmation, photos |
 | `pesdb_maps.py` | ability/skill/style tables + eFootball↔PES2021 conversion |
 | `data/pesdb_maps.json` | the tables above (generated) |
 | `data/countries.json` | nationality names keyed by the record's field |
@@ -216,7 +193,7 @@ finds id 12; the 12 FL27 skills the list lacks return `None`.
 The pristine table extracted from the CPK is cached at
 `~/.local/share/pesforge/Player.vanilla.bin`; delete it to re-extract.
 
-## Format notes (PES 2021 / FL)
+## File format notes (PES 2021 / SP Football Life)
 
 - `Player.bin` = 2048-byte block (`PlayerWeekno`) + WESYS block of 312-byte player records.
 - Records are little-endian **bit fields** counted from bit 0:
@@ -238,5 +215,3 @@ The pristine table extracted from the CPK is cached at
 - The shipped `data_s2627.cpk` understates `Player.bin` by 3,072 bytes in its TOC, so every
   later file sits 3,072 bytes further in; `pesdb._find_block()` scans for the real `WESYS`
   start instead of trusting the TOC offset.
-- Sider logs `read_file:: livecpk file found: …\pesdb\Player.bin` when the override is in use
-  (`debug = 1` in `sider.ini` is needed for file-level lines).
