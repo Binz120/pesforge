@@ -26,6 +26,13 @@ ID_OFF = 0
 NAME_OFFS = {"japanese": 0x28, "shirt": 0x56, "full": 0x84}
 NAME_LEN = 46
 
+# primary position: 4 bits, 0 GK, 1 CB, 2 LB, 3 RB, 4 DMF, 5 CMF, 6 LMF, 7 RMF, 8 AMF,
+# 9 LWF, 10 RWF, 11 SS, 12 CF. Checked against C. Ronaldo (9 LWF), L. Messi (11 SS),
+# M. Neuer (0 GK), S. Ramos (1 CB) and G. Buffon (0 GK).
+PRIMARY_POSITION = 0xCF
+POSITION_NAMES = ("GK", "CB", "LB", "RB", "DMF", "CMF", "LMF", "RMF",
+                  "AMF", "LWF", "RWF", "SS", "CF")
+
 # label -> bit offset (width 6, value = raw + 40)
 ABILITIES = {
     "Place Kicking": 0x47,
