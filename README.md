@@ -72,20 +72,26 @@ in `~/.config/pesforge/config.json` so the CLI and GUI agree.
 ## The GUI
 
 The window is sized for a 1500×950 setup: the player list, the player form and the skills/club
-column side by side. A narrower window folds to a stacked layout instead of clipping fields, and
-the form grids pick their own column counts from the pane widths they are given.
+column side by side. The header carries the search box — type a name, shirt name, club or ID and
+press Enter to open the first match — beside **Save to game**, **Undo**, **Revert** and the menu.
+The player card shows the big OVR with the playing-style, height, weight, age and form chips; the
+position ratings and skills are click-to-edit chips; and the footer keeps the status line, the
+unsaved marker and the `Ctrl+Z` / `Ctrl+S` hints. A narrower window folds to a stacked layout
+instead of clipping fields, and the form grids pick their own column counts from the pane widths
+they are given.
 
 Select a player to load the form. **Save to game** writes every changed table in one go (only the
 tables you actually changed are re-packed, each re-read and its row count compared before the
-status line reports `ok`); **Revert** reloads the selected player; **Reload** re-reads the
-database. Earlier versions of the file land in the backups folder.
+status line reports `ok`); **Undo** reverses the last edit; **Revert** reloads the selected
+player; the menu's **Reload database** re-reads the database. Earlier versions of the file land
+in the backups folder.
 
 The **Club** box is a type-ahead search, not a 745-item dropdown: type `arse` and the list narrows
 to Arsenal FC *and* Olympique Marseille, `united` finds all 15 Uniteds, an exact name like
 `Arsenal FC` pins one squad. It reads the `PlayerAssignment.bin` override if one exists, so
 transfers show up here too.
 
-The **OVR** in the list and the player header is computed from a per-position model
+The **OVR** in the list and on the player card is computed from a per-position model
 (`pesdb.OVR_MODEL`, `pesdb.overall`): weighted abilities for the running position, rounded
 half-to-even. It is a model of its own, not the game's hidden overall — PES 2021 stores no rating
 in the record.
