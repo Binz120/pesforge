@@ -814,16 +814,17 @@ class Editor(tk.Tk):
         self._title.pack(side="left")
 
         # search: a dim hint label lies over the entry while it is empty and unfocused; the
-        # hint is not entry text, so the search variable itself stays clean. The box keeps its
-        # own width and a spacer takes the slack — stretched across the header it read as a
-        # broken bar, and at a narrow window it squeezed the buttons out of view.
+        # hint is not entry text, so the search variable itself stays clean. The box expands
+        # into the header's slack (the mockup's ~70% wide field) but with a small requested
+        # width, because pack has to be able to shrink it before it touches a button: a fixed
+        # width plus a spacer pushed the action bar off the right edge of a narrow window.
         self.q = tk.StringVar()
         self._search_box = box = tk.Frame(top, bg=C_PANEL2, highlightthickness=1,
                                           highlightbackground=C_LINE)
-        box.pack(side="left", padx=(16, 12))
+        box.pack(side="left", fill="x", expand=True, padx=(16, 12))
         self.search_entry = ent = tk.Entry(box, textvariable=self.q, bg=C_PANEL2, fg=C_FG,
                                            insertbackground=C_FG, relief="flat", bd=0,
-                                           width=int(46 * self.ui))
+                                           width=int(26 * self.ui))
         ent.pack(side="left", fill="x", expand=True, padx=10, pady=5)
         ent.bind("<Return>", lambda e: self.open_first(self.q.get()))
         ent.bind("<FocusIn>", self._search_focus_in)
@@ -835,7 +836,6 @@ class Editor(tk.Tk):
                                      fg=C_DIM, cursor="xterm")
         self._search_hint.bind("<Button-1>", lambda e: ent.focus_set())
         self.q.trace_add("write", lambda *a: (self._debounced(), self._show_search_hint()))
-        tk.Frame(top, bg=C_BG).pack(side="left", fill="both", expand=True)   # the slack
         self._after = None
         self._show_search_hint()
 
