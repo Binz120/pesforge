@@ -623,6 +623,54 @@ class Editor(tk.Tk):
         self._country_names = sorted(set(pesdb.COUNTRIES.values()))
         self._ovr_cache = {}
 
+    # ---------------------------------------------------------------- theme
+    def _apply_theme(self, name):
+        """Repaint the whole window in another palette, without a restart.
+
+        Every colour in the UI is a module constant bound from theme.py, so switching palettes
+        means rebinding those constants and building the widgets again — they were created with
+        the old colours baked in.
+        """
+        global THEME
+        THEME = theme.choice({"theme": name})
+        for key, value in theme.tokens(THEME).items():
+            globals()["C_" + key.upper()] = value
+        self.cfg["theme"] = THEME
+        try:
+            settings.save(self.cfg)
+        except OSError:
+            pass
+        self._rebuild_ui()
+
+    def _rebuild_ui(self):
+        """Destroy and rebuild every widget, keeping the loaded tables, query and selection."""
+        query = self.q.get() if getattr(self, "q", None) is not None else ""
+        index = self.index
+        for child in self.winfo_children():
+            try:
+                child.destroy()
+            except tk.TclError:
+                pass
+        self._pane_canvases = []
+        self._section_counts = {}
+        self._field_widgets = {}
+        self._field_section = {}
+        self._name_counters = {}
+        self.vars = {}
+        self._build_style()
+        self._build_ui()
+        self._apply_cursors()
+        self.index = index
+        self.populate(query)
+        if index is not None and self.tree.exists(str(index)):
+            self.tree.selection_set(str(index))
+            self.load_form()
+        self._update_changes_badge()
+        self._sync_history_buttons()
+        if self.dirty_tables:
+            self.lbl_dirty.configure(text="● unsaved")
+        self.status(f"theme {dict(theme.CHOICES).get(THEME, THEME)} applied", "ok")
+
     # ---------------------------------------------------------------- style
     def _build_style(self):
         st = ttk.Style(self)
@@ -901,6 +949,15 @@ class Editor(tk.Tk):
         menu.add_separator()
         menu.add_command(label="Settings…", accelerator="Ctrl+,",
                          command=self._later(self.open_settings))
+        theme_menu = tk.Menu(menu, tearoff=0, bg=C_PANEL2, fg=C_FG,
+                             activebackground=C_ACCENT, activeforeground=C_INK, bd=0,
+                             cursor="hand2")
+        current = dict(theme.CHOICES).get(THEME, "Amber")
+        theme_var = tk.StringVar(master=self, value=current)
+        for key, label in theme.CHOICES:
+            theme_menu.add_radiobutton(label=label, variable=theme_var, value=label,
+                                       command=self._later(lambda k=key: self._apply_theme(k)))
+        menu.add_cascade(label="Theme", menu=theme_menu)
         menu.add_command(label="Open backups folder",
                          command=self._later(self.open_backups))
         menu.add_separator()
@@ -3824,7 +3881,7 @@ class Editor(tk.Tk):
         ttk.Combobox(body, textvariable=chosen_theme, state="readonly", width=14,
                      values=[label for _key, label in theme.CHOICES],
                      font=self.F_LABEL).grid(row=7, column=1, sticky="w", padx=8, pady=(10, 0))
-        tk.Label(body, text="applies next launch", bg=C_BG, fg=C_HINT,
+        tk.Label(body, text="applies when you save", bg=C_BG, fg=C_HINT,
                  font=self.F_TINY).grid(row=7, column=2, sticky="w")
 
         err = tk.Label(body, text="", bg=C_BG, fg=C_MAGENTA, anchor="w",
@@ -3845,6 +3902,7 @@ class Editor(tk.Tk):
                 return
             picked = next((key for key, label in theme.CHOICES
                            if label == chosen_theme.get()), THEME)
+            theme_changed = picked != THEME
             self.cfg.update(game_dir=gd, backups_dir=backups.get().strip(),
                             max_backups=max_backups, confirm_save=bool(confirm.get()),
                             photos=bool(photos.get()), theme=picked)
@@ -3857,6 +3915,8 @@ class Editor(tk.Tk):
             self.edit_saves = settings.edit_save_files()
             self.tables = load_tables(self.cpk_path)
             self.reindex()
+            if theme_changed:                # rebuilds every widget in the new palette
+                self._apply_theme(picked)
             self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
             self.cb_club["values"] = self._club_names
             self.club_filter.set("")
@@ -3872,8 +3932,8 @@ class Editor(tk.Tk):
                 note += " · SPFL_DIR is set and still wins over the game folder"
             if kept:
                 note += f" · pruned {kept} old backup(s)"
-            if picked != THEME:
-                note += f" · theme {dict(theme.CHOICES)[picked]} applies next launch"
+            if theme_changed:
+                note += f" · theme {dict(theme.CHOICES)[picked]} applied"
             self.status(f"{note} · {len(self.table.records):,} players", "ok")
 
         buttons = tk.Frame(body, bg=C_BG)
