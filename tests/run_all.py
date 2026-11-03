@@ -546,9 +546,13 @@ def test_compact_layout_fits_without_scrolling():
         # the window chrome at the design size: one header row, the footer, the 8px padding
         design_w = int(1460 * app.ui) - 2 * int(12 * app.ui)
         design_h = int(920 * app.ui) - int(90 * app.ui)
+        # cancel a queued fold first: the window on a tiling compositor is narrower than the
+        # planned layout, and a 120 ms rebuild would replace the plan before it is measured
+        if app._one_page_job is not None:
+            app.after_cancel(app._one_page_job)
+            app._one_page_job = None
         app._layout_one_page(body, wide=True, width=design_w, height=design_h)
         for _ in range(8):
-            app.update()
             app.update_idletasks()
         panes = []
         for frame in sorted(body.grid_slaves(row=0), key=lambda w: int(w.grid_info()["column"])):
@@ -563,7 +567,8 @@ def test_compact_layout_fits_without_scrolling():
             planned = plan["mid"] if idx == 0 else plan["right"]
             assert inner.winfo_reqheight() <= plan["height"] + 1, (
                 f"column {idx} content {inner.winfo_reqheight()}px does not fit the planned "
-                f"{plan['height']}px pane")
+                f"{plan['height']}px pane (plan {plan}, panes {len(panes)}, "
+                f"heights {[p.winfo_children()[0].winfo_reqheight() for p in panes]})")
             for section in inner.winfo_children():
                 assert section.winfo_reqwidth() <= planned + 1, (
                     f"section {section.winfo_class()} at column {idx} needs "

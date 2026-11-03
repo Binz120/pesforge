@@ -1014,15 +1014,18 @@ class Editor(tk.Tk):
     def _maybe_fold_one_page(self, evt):
         """Rebuild the body when the window crosses a size the columns still fit at.
 
-        The rebuild is where the compact grids pick their column counts, so a window that is
-        too small for the wide layout gets the stacked one instead of clipped fields. An
-        unmapped body reports a handful of pixels; that is not a layout decision.
+        Three shapes: two form columns beside the list (wide), the form stacked beside the
+        list (folded), and - below the width a side-by-side pair can share - the list above
+        the form with a draggable splitter. A tiling window manager can hand the app a window
+        narrower than its own minimum, and clipping would leave neither pane usable.
         """
         width = evt.width
         if width < 200:
             return
         wide = width >= 1120 * self.ui
-        mode = (wide, *self._detail_columns(width, wide).values())
+        compact = width < int(900 * self.ui)
+        mode = ("wide" if wide else ("compact" if compact else "folded"),
+                *self._detail_columns(width, wide).values())
         if mode == self._one_page_mode:
             return
         if self._one_page_job is not None:
@@ -1043,7 +1046,8 @@ class Editor(tk.Tk):
         if width < 200:                      # still not sized: leave the layout alone
             return
         wide = width >= 1120 * self.ui
-        self._layout_one_page(body, wide=wide)
+        compact = width < int(900 * self.ui)
+        self._layout_one_page(body, wide=wide, compact=compact)
 
     def _detail_columns(self, body_w, wide):
         """How many cells per row each form grid fits, for a body `body_w` px wide.
@@ -1070,7 +1074,7 @@ class Editor(tk.Tk):
             "skills": fit(right_w, 4, 118),
         }
 
-    def _layout_one_page(self, body, wide, width=None, height=None):
+    def _layout_one_page(self, body, wide, width=None, height=None, compact=False):
         """Build (or rebuild) the body. `width`/`height` plan a layout for a size the window
         may not currently have — the tests use that to check the design size on a desktop
         whose window manager tiles the window to its own size."""
@@ -1078,17 +1082,53 @@ class Editor(tk.Tk):
         for child in body.winfo_children():
             if child is not self._left:        # the list survives a relayout
                 child.destroy()
-        for c in range(3):                     # the wide layout's column weights survived the fold
+        for c in range(3):                     # the wide layout's weights survived the fold
             body.columnconfigure(c, weight=0, minsize=0)
+        for r in range(3):                     # and compact's row weights survive a fold back
+            body.rowconfigure(r, weight=0, minsize=0)
         left = self._left
-        # the list keeps the width its own columns ask for; the form panes get what is left
+        # The list keeps the width its own columns ask for; the form panes get what is left.
+        # The filters are laid out first: compact mode puts the three rows side by side, which
+        # makes the list request the whole window, and measuring before that would hand the
+        # form panes a tiny share of a wide window.
+        self._layout_list_filters(compact=compact)
         self.update_idletasks()
         self._list_w = max(int(236 * self.ui), left.winfo_reqwidth())
         body_w = width or body.winfo_width()
         body_h = height or body.winfo_height()
         cols = self._detail_columns(body_w, wide)
-        self._plan = {"width": body_w, "height": body_h, "wide": wide}
-        if wide:
+        self._plan = {"width": body_w, "height": body_h, "wide": wide, "compact": compact}
+        if compact:
+            # one column: the list on top, a splitter, the form below. The filter rows go
+            # side by side so they do not eat the small pane.
+            body.columnconfigure(0, weight=1)
+            body.rowconfigure(2, weight=1)
+            split = getattr(self, "_compact_list_h", 0) or int(body_h * 0.42)
+            split = max(int(150 * self.ui), min(split, max(int(200 * self.ui),
+                                                          body_h - int(200 * self.ui))))
+            self._compact_list_h = split
+            body.rowconfigure(0, minsize=split, weight=0)
+            body.grid_rowconfigure(1, minsize=int(7 * self.ui), weight=0)
+            left.grid(row=0, column=0, sticky="nsew")
+            sash = tk.Frame(body, bg=C_PANEL, height=int(7 * self.ui),
+                            cursor="sb_v_double_arrow")
+            sash.grid(row=1, column=0, sticky="ew")
+            tk.Frame(sash, bg=C_ACCENT, height=2).place(relx=0.5, rely=0.5, relwidth=0.12,
+                                                        anchor="center")
+            sash.bind("<Button-1>", self._sash_press)
+            sash.bind("<B1-Motion>", self._sash_drag)
+            self._sash = sash
+            detail = tk.Frame(body, bg=C_BG)
+            detail.grid(row=2, column=0, sticky="nsew")
+            col = self._scroll_pane(detail)
+            self._build_player_card(col)
+            self._build_attributes(col, cols=cols["abilities"])
+            self._build_position_grid(col, cols=cols["positions"])
+            self._build_details(col, cols=cols["details"])
+            self._build_career(col, cols=cols["contract"])
+            self._build_skills(col, cols=cols["skills"])
+            self._build_club(col)
+        elif wide:
             # the right column (radar, 48 skill chips, club) and the middle one (card, 25
             # ability rows, positions, details) are both measured; 45/55 with 8px gutters is
             # the split the design size fits both at
@@ -1130,7 +1170,8 @@ class Editor(tk.Tk):
             self._build_career(col, cols["contract"])
             self._build_skills(col, cols=cols["skills"])
             self._build_club(col)
-        self._one_page_mode = (wide, *self._detail_columns(body_w, wide).values())
+        self._one_page_mode = ("wide" if wide else ("compact" if compact else "folded"),
+                               *self._detail_columns(body_w, wide).values())
         if getattr(self, "statusbar", None) is not None:    # a relayout, not the first build
             if self.index is not None:
                 self.load_form()
@@ -1139,25 +1180,74 @@ class Editor(tk.Tk):
             self.after_idle(self._force_repaint)
             self.after(80, self._force_repaint)
 
+    def _layout_list_filters(self, compact):
+        """Stack the three filter rows, or put them side by side in a short pane."""
+        rows = getattr(self, "_filter_rows", [])
+        if not rows or getattr(self, "_filter_box", None) is None:
+            return
+        for row, label, combo in rows:
+            row.pack_forget()
+            label.pack_forget()
+            combo.pack_forget()
+        for row, label, combo in rows:
+            if compact:
+                # the labels stay: three unlabelled dropdowns side by side say nothing about
+                # which one filters clubs and which one filters countries
+                row.pack(side="left", fill="x", expand=True, padx=(0, 6))
+                label.configure(width=0)          # natural width, not the 7-char gutter
+                label.pack(side="left", padx=(0, 4))
+                combo.pack(side="left", fill="x", expand=True)
+            else:
+                row.pack(fill="x", pady=(0, 8))
+                label.configure(width=7)
+                label.pack(side="left")
+                combo.pack(side="left", fill="x", expand=True, padx=8)
+
+    def _sash_press(self, evt):
+        self._sash_origin = (evt.y_root, getattr(self, "_compact_list_h", 0))
+
+    def _sash_drag(self, evt):
+        """Drag the splitter: the list keeps a usable height, the form keeps the rest."""
+        origin = getattr(self, "_sash_origin", None)
+        if origin is None or not getattr(self, "_one_page_body", None):
+            return
+        body = self._one_page_body
+        try:
+            if not body.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        y0, height0 = origin
+        limit = max(int(140 * self.ui), body.winfo_height() - int(180 * self.ui))
+        self._compact_list_h = max(int(120 * self.ui),
+                                   min(limit, height0 + (evt.y_root - y0)))
+        body.rowconfigure(0, minsize=self._compact_list_h)
+
     # ---------------------------------------------------------------- left pane
     def _build_list_pane(self, left):
-        filt = tk.Frame(left, bg=C_BG)
+        self._filter_box = tk.Frame(left, bg=C_BG)
+        self._filter_box.pack(fill="x")
+        self._filter_rows = []          # (row frame, label, combobox) for the compact layout
+        filt = tk.Frame(self._filter_box, bg=C_BG)
         filt.pack(fill="x", pady=(0, 8))
-        tk.Label(filt, text="Club", bg=C_BG, fg=C_DIM, width=7, anchor="w").pack(side="left")
+        club_label = tk.Label(filt, text="Club", bg=C_BG, fg=C_DIM, width=7, anchor="w")
+        club_label.pack(side="left")
         self.club_filter = tk.StringVar(value="")   # empty = every club
         self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
         self.cb_club = ttk.Combobox(filt, textvariable=self.club_filter, width=30,
                                     values=self._club_names)
         self.cb_club.pack(side="left", fill="x", expand=True, padx=8)
+        self._filter_rows.append((filt, club_label, self.cb_club))
         self.cb_club.bind("<<ComboboxSelected>>", lambda e: self.apply_club_filter())
         self.cb_club.bind("<Return>", lambda e: self.apply_club_filter())
         self.cb_club.bind("<KeyRelease>", self._filter_club_values)
         self._club_after = None
 
-        filt_nat = tk.Frame(left, bg=C_BG)
+        filt_nat = tk.Frame(self._filter_box, bg=C_BG)
         filt_nat.pack(fill="x", pady=(0, 8))
-        tk.Label(filt_nat, text="Country", bg=C_BG, fg=C_DIM, width=7,
-                 anchor="w").pack(side="left")
+        nat_label = tk.Label(filt_nat, text="Country", bg=C_BG, fg=C_DIM, width=7,
+                             anchor="w")
+        nat_label.pack(side="left")
         self.country_filter = tk.StringVar(value="")      # empty = every nationality
         self._country_names = sorted(set(pesdb.COUNTRIES.values()))
         self.cb_country = ttk.Combobox(filt_nat, textvariable=self.country_filter, width=30,
@@ -1167,16 +1257,19 @@ class Editor(tk.Tk):
         self.cb_country.bind("<Return>", lambda e: self.apply_country_filter())
         self.cb_country.bind("<KeyRelease>", self._filter_country_values)
         self._country_after = None
+        self._filter_rows.append((filt_nat, nat_label, self.cb_country))
 
-        filt_pos = tk.Frame(left, bg=C_BG)
+        filt_pos = tk.Frame(self._filter_box, bg=C_BG)
         filt_pos.pack(fill="x", pady=(0, 8))
-        tk.Label(filt_pos, text="Position", bg=C_BG, fg=C_DIM, width=7,
-                 anchor="w").pack(side="left")
+        pos_label = tk.Label(filt_pos, text="Position", bg=C_BG, fg=C_DIM, width=7,
+                             anchor="w")
+        pos_label.pack(side="left")
         self.position_filter = tk.StringVar(value="")      # empty = every position
         self.cb_pos = ttk.Combobox(filt_pos, textvariable=self.position_filter, width=30,
                                    values=[""] + pesdb.POS_NAMES, state="readonly")
         self.cb_pos.pack(side="left", fill="x", expand=True, padx=8)
         self.cb_pos.bind("<<ComboboxSelected>>", lambda e: self.populate(self.q.get()))
+        self._filter_rows.append((filt_pos, pos_label, self.cb_pos))
 
         self.changed_only = tk.BooleanVar(value=False)
         self.pill_changed = CheckPill(left, "Changed only", self._label_font, self.changed_only,
