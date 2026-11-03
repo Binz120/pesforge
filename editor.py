@@ -771,6 +771,19 @@ class Editor(tk.Tk):
         except tk.TclError:
             return
         targets = [self]
+        for extra in ("_header", "_header_top", "_statusbar"):
+            widget = getattr(self, extra, None)
+            try:
+                if widget is None or not widget.winfo_exists():
+                    continue
+                targets.append(widget)
+                # a container's Expose repaints its own background, not its children: the
+                # action buttons live in rows inside the header and were left unpainted, so
+                # walk the header and expose every leaf as well
+                if extra == "_header":
+                    targets.extend(self._walk(widget))
+            except tk.TclError:
+                continue
         for pane in getattr(self, "_pane_canvases", []):
             try:
                 if pane.winfo_exists() and pane.winfo_ismapped():
@@ -793,24 +806,24 @@ class Editor(tk.Tk):
         top = tk.Frame(header, bg=C_BG)
         top.pack(fill="x")
         self._header_top = top
-        self._title = tk.Label(top, text=settings.APP_NAME.upper(), bg=C_BG, fg=C_ACCENT,
-                               font=(self.FONT, 15, "bold"))
-        self._subtitle = tk.Label(top, text="SP Football Life 2027", bg=C_BG, fg=C_DIM,
-                                  font=(self.FONT, 10))
+        self._title = tk.Label(top, text=settings.APP_NAME, bg=C_BG, fg=C_ACCENT,
+                               font=(self.FONT, 16, "bold"))
         # the actions are packed first so they own the header's right edge: pack() shrinks the
         # last-packed child when the header narrows, and that must never be a button
         self._build_actions(top)
         self._title.pack(side="left")
-        self._subtitle.pack(side="left", padx=10)
 
         # search: a dim hint label lies over the entry while it is empty and unfocused; the
-        # hint is not entry text, so the search variable itself stays clean
+        # hint is not entry text, so the search variable itself stays clean. The box keeps its
+        # own width and a spacer takes the slack — stretched across the header it read as a
+        # broken bar, and at a narrow window it squeezed the buttons out of view.
         self.q = tk.StringVar()
         self._search_box = box = tk.Frame(top, bg=C_PANEL2, highlightthickness=1,
                                           highlightbackground=C_LINE)
-        box.pack(side="left", fill="x", expand=True, padx=(16, 12))
+        box.pack(side="left", padx=(16, 12))
         self.search_entry = ent = tk.Entry(box, textvariable=self.q, bg=C_PANEL2, fg=C_FG,
-                                           insertbackground=C_FG, relief="flat", bd=0)
+                                           insertbackground=C_FG, relief="flat", bd=0,
+                                           width=int(46 * self.ui))
         ent.pack(side="left", fill="x", expand=True, padx=10, pady=5)
         ent.bind("<Return>", lambda e: self.open_first(self.q.get()))
         ent.bind("<FocusIn>", self._search_focus_in)
@@ -822,6 +835,7 @@ class Editor(tk.Tk):
                                      fg=C_DIM, cursor="xterm")
         self._search_hint.bind("<Button-1>", lambda e: ent.focus_set())
         self.q.trace_add("write", lambda *a: (self._debounced(), self._show_search_hint()))
+        tk.Frame(top, bg=C_BG).pack(side="left", fill="both", expand=True)   # the slack
         self._after = None
         self._show_search_hint()
 
@@ -949,7 +963,7 @@ class Editor(tk.Tk):
                 space = int(700 * self.ui)                 # the header is not mapped yet
             # the bar shares the row with the brand: split for the width the bar gets once the
             # brand has drawn, and never below one button's worth
-            brand = self._title.winfo_reqwidth() + self._subtitle.winfo_reqwidth()
+            brand = self._title.winfo_reqwidth()
             space = max(int(196 * self.ui), space - brand - int(16 * self.ui))
             widths = [b.winfo_reqwidth() + 6 for b in self._bar_buttons] or \
                      [int((len(text) + 3) * 8 * self.ui) for text, _s, _c in defs]
@@ -966,6 +980,8 @@ class Editor(tk.Tk):
                 return
             self._bar_groups = groups
             build_rows(groups)
+            if getattr(self, "statusbar", None) is not None:
+                self.after_idle(self._force_repaint)
 
         self._header.bind("<Configure>", layout_bar, add="+")
         layout_bar()
