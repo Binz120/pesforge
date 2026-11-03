@@ -71,37 +71,85 @@ in `~/.config/pesforge/config.json` so the CLI and GUI agree.
 
 ## The GUI
 
-The window is sized for a 1500×950 setup: the player list, the player form and the skills/club
-column side by side. The header carries the search box — type a name, shirt name, club or ID and
-press Enter to open the first match — beside **Save to game**, **Undo**, **Revert** and the menu.
-The player card shows the big OVR with the playing-style, height, weight, age and form chips; the
-position ratings and skills are click-to-edit chips; and the footer keeps the status line, the
-unsaved marker and the `Ctrl+Z` / `Ctrl+S` hints. A narrower window folds to a stacked layout
-instead of clipping fields, and the form grids pick their own column counts from the pane widths
-they are given.
+The window is sized for a 1460×920 setup: the player list, the player form and the
+radar/skills/club column side by side. The header carries the search box — type a name, shirt
+name, club or ID and press Enter to open the first match — beside **Save to game**, **Undo**,
+**Redo**, **Discard** and the menu. The footer keeps the status line, the pending-change count
+(click it to open the change drawer) and the keyboard hints. A narrower window folds to a stacked
+layout instead of clipping fields, and the form grids pick their own column counts from the pane
+widths they are given.
 
-Select a player to load the form. **Save to game** writes every changed table in one go (only the
-tables you actually changed are re-packed, each re-read and its row count compared before the
-status line reports `ok`); **Undo** reverses the last edit; **Revert** reloads the selected
-player; the menu's **Reload database** re-reads the database. Earlier versions of the file land
-in the backups folder.
+**Sections fold.** Player, Abilities, Position ratings, Details, Contract · motion · celebration,
+Ability profile, Skills, Current club and Club name are collapsible: click a section title. The
+career block and the club-name slots start folded because they are touched once a save, not once
+a player, and the choice is remembered in the config.
 
-The **Club** box is a type-ahead search, not a 745-item dropdown: type `arse` and the list narrows
-to Arsenal FC *and* Olympique Marseille, `united` finds all 15 Uniteds, an exact name like
-`Arsenal FC` pins one squad. It reads the `PlayerAssignment.bin` override if one exists, so
-transfers show up here too.
+**Every edit is tracked.** Changing a value tints the field it belongs to and adds a row to the
+change drawer, which lists what changed, from what to what, with *Revert selected*, *Revert all*
+and *Save now*. The section titles carry their own count, so a folded block still says it has
+edits. **Undo** / **Redo** walk the history (`Ctrl+Z` / `Ctrl+Y`); **Discard** throws every
+unsaved change away and reloads the tables from disk — it is not a one-step undo, and the header
+says so.
+
+**Save to game** opens a review sheet first: which tables are written, how many edits and rows
+each has, where the backup lands, and the warnings that matter (the game is running, an in-game
+`EDIT00000000` save shadows the database, two players in one club share a squad number). Only the
+tables you changed are re-packed, each re-read and its row count compared before the status line
+reports `ok`. The **Ask before writing** setting can skip the sheet; warnings still show it.
+
+**Abilities** are edited with a number box and a full-width bar: click or drag the bar, or type
+the value. A ghost tick on the bar marks the value the player started with, so an edit is visible
+before it is saved. Right-click a bar to put that one field back.
+
+**Position and skill chips** work from the keyboard too: `Tab` to a chip, `Space`/`Enter` to
+toggle. A position chip cycles none → can play → natural (right-click walks the other way) and
+shows the state as a mark, not only as a colour: `CB`, `CB ·`, `CB ✓`. The 48 skills have a
+filter box, and the count says how many are chosen.
+
+**The list has two tabs.** A search reports players *and* clubs — typing `arsenal` keeps the
+players whose club matches on the Players tab and puts the club itself on the Clubs tab, each
+tab showing its count. The list has a slim drag indicator on its right edge; it appears only when
+there is something to scroll.
+
+**The club block edits the club, not the player.** Coach, stadium and squad number belong to the
+club record (and every player at that club), and the block says so above its fields. Transfers
+move the player's first club assignment row; the club column, coach and stadium boxes all take
+type-ahead.
 
 The **OVR** in the list and on the player card is computed from a per-position model
 (`pesdb.OVR_MODEL`, `pesdb.overall`): weighted abilities for the running position, rounded
 half-to-even. It is a model of its own, not the game's hidden overall — PES 2021 stores no rating
-in the record.
+in the record. The card colours it by tier: 90+ accent, 80+ green, 70+ plain text.
+
+**Coaches** open in their own window: search by name or club, edit name, Japanese name,
+nationality (a country name, picked from the same list as the player form) and adaptability.
+
+**Appearance** opens grouped by head/eyes/eyebrows/nose/mouth/facial hair/hair/physique/kit, with
+a filter, a slider that knows the field's own range, and a *Reset field* button. Changed rows are
+marked in the list.
 
 Menu entries: **Settings…** (`Ctrl+,`), open backups folder, **Reload database**, **Restore
 vanilla**, export/import roster CSV, **Bulk edit selected…**, **Compare selected players…**,
-**Coaches…**, **Appearance of the selected player…**, **About**.
+**Coaches…**, **Appearance of the selected player…**, **About**, plus Undo/Redo/Discard at the top.
 
 Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the search box ·
-`Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field.
+`Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field ·
+`Space`/`Enter` on a focused chip.
+
+## Settings
+
+| Setting | Meaning |
+|---|---|
+| Game folder | Folder holding `download/data_s2627.cpk`; checked before it is accepted |
+| Backup folder | Where previous file versions go; blank = `~/.local/share/pesforge/backups` |
+| Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
+| Ask before writing the game file | Show the review sheet before a save is written |
+| Load player photos from pesmaster (online) | Fetch each player's face the first time it is shown; off = fully offline, and the card drops the empty photo box |
+| Theme | Amber, Crimson, Ice or Pitch (the four palettes in `docs/mockups`); applied at the next launch |
+
+Saved to `~/.config/pesforge/config.json` and applied immediately. The window size and the folded
+sections are remembered there too. The CLI reads the same file for the game folder and backup cap.
+`SPFL_DIR`, `SPFL_STATE` and `SPFL_CONFIG` override the config file for both GUI and CLI.
 
 ## Settings
 
@@ -188,7 +236,8 @@ finds id 12; the 12 FL27 skills the list lacks return `None`.
 | `pesdb.py` | WESYS pack/unpack, CPK table extraction, 312-byte bit-field record codec, team maps |
 | `editor.py` | Tkinter UI (and entry point) |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
-| `settings.py` | config file: game folder, backup folder, backup cap, save confirmation, photos |
+| `settings.py` | config file: game folder, backups, save confirmation, photos, theme, window size |
+| `theme.py` | the four palettes and the derived colour tokens (contrast-checked) |
 | `pesdb_maps.py` | ability/skill/style tables + eFootball↔PES2021 conversion |
 | `data/pesdb_maps.json` | the tables above (generated) |
 | `data/countries.json` | nationality names keyed by the record's field |

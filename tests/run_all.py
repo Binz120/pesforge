@@ -1,0 +1,1358 @@
+#!/usr/bin/env python3
+"""Assert-based tests for the PESForge editor. Run: python3 tests/run_all.py
+
+No pytest on this box: every check is a plain assert and the exit code is the verdict.
+Each CLI test gets its own sandbox (SPFL_DIR / SPFL_STATE) so nothing touches the real
+game directory.
+"""
+import csv
+import contextlib
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+import pesdb
+import pesdb_maps as maps
+import settings
+import settings
+
+# Any machine: SPFL_GAME wins, else whatever the editor would auto-detect.
+GAME = os.environ.get("SPFL_GAME") or settings.game_dir()
+CPK = settings.database_path(GAME) if GAME else ""
+PLAYER = "Player.bin"
+PA = "PlayerAssignment.bin"
+
+
+@contextlib.contextmanager
+def gui():
+    """A throwaway Editor with its own config; skips when there is no display/database."""
+    if not os.environ.get("DISPLAY"):
+        raise FileNotFoundError("no DISPLAY")
+    import tkinter as tk
+    import editor
+    box = tempfile.mkdtemp(prefix="pesforge-gui-")
+    saved = settings.CONFIG_PATH
+    settings.CONFIG_PATH = os.path.join(box, "config.json")
+    app = editor.Editor()
+    app.attributes("-alpha", 0.0)      # tests must never flash a window on the real desktop
+    app.update()
+    try:
+        yield app
+    finally:
+        try:
+            app.destroy()
+        except tk.TclError:
+            pass
+        settings.CONFIG_PATH = saved
+
+
+def sandbox():
+    """A private copy of the CPK: edits patch it in place, so a symlink would hit the real game."""
+    box = tempfile.mkdtemp(prefix="pesforge-test-")
+    os.makedirs(os.path.join(box, "game", "download"))
+    shutil.copy2(CPK, os.path.join(box, "game", "download", "data_s2627.cpk"))
+    os.makedirs(os.path.join(box, "state"))
+    return box
+
+
+def box_cpk(box):
+    return os.path.join(box, "game", "download", "data_s2627.cpk")
+
+
+def cli(box, *args, expect=0):
+    env = dict(os.environ, SPFL_DIR=os.path.join(box, "game"),
+               SPFL_STATE=os.path.join(box, "state"),
+               SPFL_CONFIG=os.path.join(box, "state", "config.json"))
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "cli.py")] + list(args),
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == expect, f"{args} -> rc {p.returncode}\n{p.stdout}\n{p.stderr}"
+    return p.stdout + p.stderr
+
+
+def override(box, name):
+    return box_cpk(box)
+
+
+def scan_rows(raw, field, team=None):
+    """Direct row scan: values of `field` (1=pid, 2=team), optionally filtered by team."""
+    out = []
+    for i in range(0, len(raw) - 15, 16):
+        row = struct.unpack_from("<IIII", raw, i)
+        if team is None or row[2] == team:
+            out.append(row[field])
+    return out
+
+
+# ---------------------------------------------------------------- 1. tables
+def test_tables():
+    assert len(pesdb.read_table(CPK, "Player")) == 26395 * 312
+    assert len(pesdb.read_table(CPK, "Team")) == 745 * 1532
+    assert len(pesdb.read_table(CPK, "PlayerAssignment")) == 21240 * 16
+    # the lead block survives a re-pack byte for byte
+    blob = pesdb.table_blob(CPK, "Player")
+    t = pesdb.PlayerTable(blob)
+    assert t.to_file()[:2048] == blob[:2048]
+    assert len(pesdb.PlayerTable(t.to_file()).records) == 26395
+
+
+# ---------------------------------------------------------------- 2. squads
+def test_squads():
+    raw = pesdb.read_table(CPK, "PlayerAssignment")
+    squads = pesdb.squads(raw)
+    assert sum(len(v) for v in squads.values()) == 21240
+
+    single = min(squads, key=lambda t: (len(squads[t]), t))
+    assert len(squads[single]) > 0
+    for team in (101, single):
+        assert squads[team] == scan_rows(raw, 1, team=team), team
+
+    box = sandbox()
+    out = cli(box, "--squad", "Arsenal")
+    assert "team id 101" in out
+    assert f"{len(scan_rows(raw, 1, team=101))} players" in out
+    # every listed id resolves back to the same club through the first-row map
+    teams = pesdb.player_teams(raw)
+    for pid in squads[101]:
+        assert teams[pid] == 101, pid
+
+
+def test_free_agent_still_findable():
+    """Review focus 1: a player with no assignment row is findable and exports a blank club."""
+    raw = pesdb.read_table(CPK, "PlayerAssignment")
+    assigned = set(scan_rows(raw, 1))
+    player = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    free = [i for i in range(len(player.records)) if player.pid(i) not in assigned]
+    assert free, "no free agent in the shipped table"
+    i = free[0]
+    box = sandbox()
+    out = cli(box, "--find", str(player.pid(i)))
+    assert str(player.pid(i)) in out
+    path = os.path.join(box, "ass.csv")
+    cli(box, "--export-assignments", path)
+    assert str(player.pid(i)) not in {r for r in open(path).read().splitlines()}
+
+
+# ---------------------------------------------------------------- 3. export
+def test_export_assignments():
+    box = sandbox()
+    path = os.path.join(box, "ass.csv")
+    out = cli(box, "--export-assignments", path)
+    rows = list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+    assert len(rows) == 21240, len(rows)
+    assert list(rows[0]) == ["id", "name", "shirt", "team_id", "club", "league_id"]
+    raw = pesdb.read_table(CPK, "PlayerAssignment")
+    expected = [(r[1], r[2]) for r in (struct.unpack_from("<IIII", raw, i)
+                                       for i in range(0, len(raw), 16)) if r[1]]
+    assert [(int(r["id"]), int(r["team_id"])) for r in rows] == expected
+    assert "row(s) reference" not in out
+
+
+def test_export_reports_orphans():
+    """Review focus 5: a PA row whose id is not in Player.bin is reported, never reconciled."""
+    box = sandbox()
+    blob = pesdb.table_blob(CPK, "PlayerAssignment")
+    rows = bytearray(pesdb.table_rows(blob))
+    struct.pack_into("<I", rows, 4, 999999)          # pid
+    struct.pack_into("<I", rows, 8, 12345)           # team id absent from Team.bin
+    pesdb.patch_table(box_cpk(box), "PlayerAssignment",
+                      blob[:2048] + pesdb.wesys_pack(bytes(rows)))
+    out = cli(box, "--export-assignments", os.path.join(box, "ass.csv"))
+    assert "1 row(s) reference player ids absent" in out
+    rec = [r for r in csv.DictReader(open(os.path.join(box, "ass.csv")))
+           if r["id"] == "999999"]
+    assert len(rec) == 1 and rec[0]["name"] == "" and rec[0]["club"] == ""
+    assert rec[0]["team_id"] == "12345"
+
+
+# ---------------------------------------------------------------- 4. transfer
+def test_transfer():
+    box = sandbox()
+    raw = pesdb.read_table(CPK, "PlayerAssignment")
+    pid = 101520                                    # David Raya: Spain row + Arsenal row
+    assert len(pesdb.assignment_rows(raw, pid)) == 2
+    out = cli(box, "--transfer", "David Raya", "--to", "Chelsea FC", "--save")
+    assert "Arsenal FC -> Chelsea FC" in out
+    assert "1 changed" in out
+    assert "2 club assignment rows" not in out      # only one club row; the country row is skipped
+
+    after = pesdb.table_rows(pesdb.table_blob(box_cpk(box), "PlayerAssignment"))
+    blob = pesdb.table_blob(box_cpk(box), "PlayerAssignment")
+    assert len(after) == len(raw)
+    assert blob[:2048] == pesdb.table_blob(CPK, "PlayerAssignment")[:2048]
+    diffs = [i for i in range(0, len(after), 16) if after[i:i + 16] != raw[i:i + 16]]
+    assert len(diffs) == 1, len(diffs)
+    assert struct.unpack_from("<II", after, diffs[0] + 4) == (pid, 102)
+    # the national-team row is untouched
+    assert struct.unpack_from("<I", after, pesdb.assignment_rows(raw, pid)[0] + 8)[0] == 7
+
+
+def test_transfer_duplicate_rows():
+    """Review focus 2: with 2+ club rows the first is edited, and the run says so."""
+    box = sandbox()
+    blob = pesdb.table_blob(CPK, "PlayerAssignment")
+    rows = bytearray(pesdb.table_rows(blob))
+    pid = 999901
+    for k, team in ((0, 101), (1, 103)):
+        off = 4 + k * 16
+        struct.pack_into("<I", rows, off, pid)
+        struct.pack_into("<I", rows, off + 4, team)
+    # give it a Player.bin record so the transfer can find the name
+    player = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    rec = bytearray(pesdb.REC)
+    struct.pack_into("<I", rec, 8, pid)
+    player.records.append(rec)
+    player.set_name(len(player.records) - 1, full="Dup Test", shirt="DUP")
+    pesdb.patch_table(box_cpk(box), "PlayerAssignment",
+                      blob[:2048] + pesdb.wesys_pack(bytes(rows)))
+    pesdb.patch_table(box_cpk(box), "Player", player.to_file())
+
+    out = cli(box, "--transfer", "Dup Test", "--to", "Chelsea FC", "--save")
+    assert "2 club assignment rows" in out and "edited the first" in out
+    after = pesdb.table_rows(pesdb.table_blob(box_cpk(box), "PlayerAssignment"))
+    touched = [struct.unpack_from("<II", after, i + 4) for i in range(0, len(after), 16)
+               if struct.unpack_from("<I", after, i + 4)[0] == pid]
+    assert touched == [(pid, 102), (pid, 103)], touched
+
+
+# ---------------------------------------------------------------- 5. blank tables
+def test_blank_tables():
+    box = sandbox()
+    out_dir = os.path.join(box, "blank")
+    cli(box, "--clean-tables", out_dir)
+    for name in ("Player", "Team", "PlayerAssignment", "Coach"):
+        path = os.path.join(out_dir, name + ".bin")
+        blob = open(path, "rb").read()
+        assert pesdb.table_rows(blob) == b"", name
+        assert blob[:2048] == pesdb.table_blob(CPK, name)[:2048], name
+        assert len(blob) > 2048
+
+
+# ---------------------------------------------------------------- 6. append import
+def test_append_import():
+    box = sandbox()
+    pesdb.patch_table(box_cpk(box), "Player", pesdb.blank_table(pesdb.table_blob(CPK, "Player")))
+    path = os.path.join(box, "rows.csv")
+    long_name = "Long Name " * 7
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "name", "shirt", "Speed", "Age"])
+        w.writerow([900001, "Test Player One", "ONE", 99, 20])
+        w.writerow([900002, "Test Player Two", "TWO", 88, 25])
+        w.writerow([900003, long_name, "THREE", 77, 30])
+
+    # without --append the ids are refused by name and nothing is written
+    out = cli(box, "--import", path, "--save")
+    assert "skip id 900001: not in table" in out
+    assert "0 players changed" in out
+    assert len(pesdb.PlayerTable(pesdb.table_blob(box_cpk(box), "Player")).records) == 0
+
+    out = cli(box, "--import", path, "--append", "--save")
+    assert "3 players changed" in out
+    t = pesdb.PlayerTable(pesdb.table_blob(box_cpk(box), "Player"))
+    assert len(t.records) == 3
+    assert [(t.pid(i), t.get(i, "Speed"), t.get(i, "Age")) for i in range(3)] == \
+           [(900001, 99, 20), (900002, 88, 25), (900003, 77, 30)]
+    # Review focus 4: a 61+ byte name is cut at the slot, never spilling into the next one
+    assert len(t.name(2).encode()) == 60
+    assert t.name(2).startswith("Long Name")
+    assert t.shirt(2) == "THREE"
+
+
+# ---------------------------------------------------------------- 7. copy
+def test_copy_tsv():
+    box = sandbox()
+    out = cli(box, "--copy", "Lionel Messi").strip()
+    cells = out.split("\t")
+    labels = list(pesdb.FIELD_BY_LABEL)
+    assert len(cells) == len(labels), (len(cells), len(labels))
+    player = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    i = next(k for k in range(len(player.records)) if player.name(k) == "Lionel Messi")
+    import cli as cli_mod
+    for label, cell in zip(labels, cells):
+        assert cli_mod.canonical(label) == label
+        assert int(cell) == player.get(i, label), label
+
+
+# ---------------------------------------------------------------- 8. vendor maps
+def test_vendor_maps():
+    """Tables lifted from the PESDatabase client: names, ids, and eFootball -> PES2021."""
+    assert len(maps.abilities("PES2021")) == 25
+    assert set(maps.abilities("PES2021")) == {label for label, *_ in pesdb.ATTRS}
+    assert len(maps.abilities("EFootball")) == 26
+    assert len(maps.PLAYING_STYLES) == 25 and len(set(maps.PLAYING_STYLES)) == 25
+
+    conv = maps.convert_stats({"Offensive Awareness": 90, "Set Piece Taking": 70,
+                               "Tackling": 45, "GK Parrying": 60}, "EFootball", "PES2021")
+    assert conv["stats"] == {"OffensiveAwareness": 90, "PlaceKicking": 70, "BallWinning": 45}
+    assert conv["unmapped"] == ["GK Parrying"]
+    back = maps.convert_stats({"PlaceKicking": 70}, "PES2021", "EFootball")
+    assert back["stats"] == {"SetPieceTaking": 70} and back["unmapped"] == []
+
+    assert maps.skill_id("Scissors Feint") == 1
+    assert maps.skill_id("Chip shot control") == 12        # vendor spells it "Chip Shot Control"
+    assert maps.skill_id("Mazing Run") is None             # in our table, not in the vendor list
+
+
+# ---------------------------------------------------------------- 9. settings
+def test_settings():
+    box = sandbox()
+    # the config file alone (no SPFL_DIR) points the CLI at a game folder
+    with open(os.path.join(box, "state", "config.json"), "w") as f:
+        json.dump({"game_dir": os.path.join(box, "game"), "max_backups": 2}, f)
+    env = dict(os.environ, SPFL_STATE=os.path.join(box, "state"),
+               SPFL_CONFIG=os.path.join(box, "state", "config.json"))
+    env.pop("SPFL_DIR", None)
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "cli.py"), "--squad", "Arsenal"],
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == 0, p.stderr
+    assert "team id 101" in p.stdout, p.stdout[:200]
+
+    # max_backups prunes the oldest, newest survive
+    bdir = os.path.join(box, "backups")
+    os.makedirs(bdir)
+    for n in range(5):
+        path = os.path.join(bdir, f"Player.{n}.bin")
+        open(path, "wb").close()
+        os.utime(path, (1_700_000_000 + n, 1_700_000_000 + n))
+    assert settings.prune_backups(bdir, 2) == 3
+    assert sorted(os.listdir(bdir)) == ["Player.3.bin", "Player.4.bin"]
+    assert settings.prune_backups(bdir, 0) == 0      # 0 keeps everything
+
+
+
+def test_appearance_table():
+    app = pesdb.AppearanceTable(pesdb.table_blob(CPK, "PlayerAppearance"))
+    assert len(app.records) == 26395
+    i = {app.pid(k): k for k in range(len(app.records))}[7511]
+    # Messi's record, checked against the reference client's own decode
+    assert (app.get(i, "Skin Colour"), app.get(i, "Head Length"), app.get(i, "Head Width")) == (1, 2, 3)
+    assert (app.get(i, "Hair Red"), app.get(i, "Hair Green"), app.get(i, "Hair Blue")) == (5, 4, 3)
+    # every field must survive a write + re-read at its maximum
+    for label, (bit, width, add) in pesdb.APPEARANCE_BY_LABEL.items():
+        app.set(i, label, add + (1 << width) - 1)
+    again = pesdb.AppearanceTable(app.to_file())
+    for label, (bit, width, add) in pesdb.APPEARANCE_BY_LABEL.items():
+        assert again.get(i, label) == add + (1 << width) - 1, label
+    assert len(again.records) == len(app.records)
+    # the player id field is untouched by the appearance bits
+    assert again.pid(i) == 7511
+
+
+def test_team_and_assignment_tables():
+    box = sandbox()
+    team = pesdb.TeamTable(pesdb.table_blob(CPK, "Team"))
+    assert len(team.records) == 745
+    idx = {team.tid(k): k for k in range(len(team.records))}[101]
+    assert team.name(idx) == "Arsenal FC"
+    team.set_slot(idx, 368, 70, "Arsenal TEST")
+    assert "Arsenal TEST" in [team.name(k) for k in range(len(team.records))]
+
+    asg = pesdb.AssignmentTable(pesdb.table_blob(CPK, "PlayerAssignment"))
+    rows = [k for k in range(len(asg.records)) if asg.pid(k) == 7511 and asg.team(k) > 99]
+    asg.set_team(rows[0], 101)
+    assert asg.team(rows[0]) == 101
+
+    pesdb.patch_table(box_cpk(box), "Team", team.to_file())
+    pesdb.patch_table(box_cpk(box), "PlayerAssignment", asg.to_file())
+    team2 = pesdb.TeamTable(pesdb.table_blob(box_cpk(box), "Team"))
+    asg2 = pesdb.AssignmentTable(pesdb.table_blob(box_cpk(box), "PlayerAssignment"))
+    assert team2.name({team2.tid(k): k for k in range(len(team2.records))}[101]) == "Arsenal TEST"
+    assert len(team2.records) == 745 and len(asg2.records) == 21240
+    assert asg2.team(rows[0]) == 101
+
+
+def test_overall_matches_reference():
+    t = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    i = next(k for k in range(len(t.records)) if t.pid(k) == 7511)
+    get = lambda label: t.get(i, label)
+    assert pesdb.overall(get, t.get(i, "Registered Position")) == 85   # reference client: 85
+    assert 40 <= pesdb.overall(get, 99) <= 99                          # no model for that slot
+
+
+def test_database_autodiscovery():
+    """A fresh install with no config finds the game folder and remembers it."""
+    box = sandbox()
+    games = os.path.join(box, "games")
+    cpk = os.path.join(games, "SP Football Life 2027", "download", "data_s2627.cpk")
+    os.makedirs(os.path.dirname(cpk))
+    open(cpk, "wb").close()
+    assert settings.find_databases([games]) == [cpk]
+    assert settings.has_database(os.path.dirname(os.path.dirname(cpk)))
+    assert not settings.has_database(os.path.join(box, "nowhere"))
+
+    saved = settings.CONFIG_PATH, settings.SEARCH_ROOTS, os.environ.pop("SPFL_DIR", None)
+    try:
+        settings.CONFIG_PATH = os.path.join(box, "state", "config.json")
+        settings.SEARCH_ROOTS = (games,)
+        cfg = {"game_dir": os.path.join(box, "uninstalled"), "backups_dir": "",
+               "max_backups": 50, "confirm_save": True}
+        assert settings.game_dir(cfg) == os.path.dirname(os.path.dirname(cpk))
+        assert json.load(open(settings.CONFIG_PATH))["game_dir"] == settings.game_dir(cfg)
+        os.environ["SPFL_DIR"] = os.path.join(box, "game")        # env still wins
+        assert settings.game_dir(cfg) == os.path.join(box, "game")
+    finally:
+        settings.CONFIG_PATH, settings.SEARCH_ROOTS, env = saved
+        os.environ.pop("SPFL_DIR", None)
+        if env:
+            os.environ["SPFL_DIR"] = env
+
+
+def test_gui_helpers():
+    import editor
+    # drag_bar mapping: left edge 40, right edge 99, clamps outside
+    assert [editor.bar_value(x, 64) for x in (0, 31, 32, 63, 200)] == [40, 69, 70, 99, 99]
+    assert editor.bar_value(0, 1) == 40
+    # radar group average
+    assert editor.group_average(lambda label: {"a": 80, "b": 90}[label], ("a", "b")) == 85.0
+    # search status line
+    assert editor.search_summary(800, 800) == "800 shown"
+    assert editor.search_summary(800, 3210) == "first 800 of 3,210 matches (refine the search)"
+
+
+def test_close_guard():
+    with gui() as app:
+        import editor
+        assert hasattr(app, "on_close"), "no close handler yet"
+        app.dirty_tables.add("Player")
+        asked = []
+        real = editor.messagebox.askokcancel
+        try:
+            editor.messagebox.askokcancel = lambda *a, **k: (asked.append(1), False)[1]
+            app.on_close()
+            assert app.winfo_exists(), "window closed while edits were unsaved"
+            assert asked, "close did not ask"
+            editor.messagebox.askokcancel = lambda *a, **k: True
+            app.on_close()
+            try:
+                alive = bool(app.winfo_exists())
+            except Exception:
+                alive = False
+            assert not alive, "window survived an approved close"
+        finally:
+            editor.messagebox.askokcancel = real
+
+
+def test_row_refresh_after_edit():
+    with gui() as app:
+        i = 0
+        app.index = i
+        app.load_form()
+        app.update()
+        assert app.tree.exists(str(i)), "row 0 not in the first 800 rows"
+        app.vars["Age"].set("44")
+        app.apply_field("Age")
+        app.update()
+        values = app.tree.item(str(i), "values")
+        assert values[5] == "44", f"age column stale: {values}"
+        assert values[4] == str(app.ovr(i)), f"OVR column stale: {values[4]} vs {app.ovr(i)}"
+
+
+def test_keyboard_shortcuts():
+    with gui() as app:
+        assert app.bind("<Control-s>"), "Ctrl+S is not bound"
+        calls = []
+        app.save = lambda: calls.append("save")
+        app.on_save_key()
+        assert calls == ["save"], "Ctrl+S did not save"
+        app.q.set("messi")
+        app.on_clear_key()
+        app.update()
+        assert app.q.get() == "", "Escape did not clear the search"
+
+
+def test_button_bar_fits():
+    """Save/Revert/Reload stay on screen at every width: the header wraps instead of squeezing.
+
+    A tiling compositor hands out less than the requested width, and pack() answers by shrinking
+    the last-packed widget — the button bar — to nothing while still reporting it as mapped, so
+    the check is a real width, not `winfo_ismapped`.
+    """
+    with gui() as app:
+        bar = getattr(app, "_button_bar", None)
+        assert bar is not None, "button bar not exposed for layout checks"
+        header = app._header
+        app.lbl_dirty.configure(text="● unsaved")
+        saved = header.pack_info()
+        header.pack_configure(fill="none", side="top", anchor="nw")
+        header.pack_propagate(False)          # an explicit width only counts with propagate off
+        try:
+            for width in (1500, 1180, 940, 780, 620, 460, 360, 240, 200):
+                header.configure(width=width, height=int(120 * app.ui))
+                app.update()
+                app.update_idletasks()
+                for b in app._bar_buttons:
+                    name = b.cget("text")
+                    left = b.winfo_rootx() - header.winfo_rootx()
+                    right = left + b.winfo_width()
+                    assert b.winfo_ismapped(), f"{name} hidden at {width}px"
+                    assert b.winfo_width() > 40, f"{name} squeezed to {b.winfo_width()}px at {width}px"
+                    assert left >= -1 and right <= header.winfo_width() + 1, \
+                        f"{name} outside the header at {width}px: {left}..{right} of {header.winfo_width()}"
+                    # a button packed -in a frame it does not belong to still reports a
+                    # geometry, so ask which widget is really under the button's own centre
+                    under = app.winfo_containing(b.winfo_rootx() + b.winfo_width() // 2,
+                                                 b.winfo_rooty() + b.winfo_height() // 2)
+                    assert under is b, f"{name} is not painted (found {under}) at {width}px"
+        finally:
+            header.configure(width=0)
+            header.pack_propagate(True)
+            header.pack_configure(**saved)
+        app.update()
+        right = max(b.winfo_rootx() + b.winfo_width() for b in app._bar_buttons)
+        assert right <= bar.winfo_rootx() + bar.winfo_width() + 1, \
+            f"last button ends at {right}, bar ends at {bar.winfo_rootx() + bar.winfo_width()}"
+        for b in app._bar_buttons:
+            assert b.winfo_width() > 40, b.cget("text")
+        # the bar row must sit inside the header it was moved into, not below its visible edge
+        assert bar.winfo_rooty() + bar.winfo_height() <= header.winfo_rooty() + header.winfo_height() + 1, \
+            "button row is outside the header"
+
+
+def test_compact_layout_fits_without_scrolling():
+    """Both form columns fit the size the app asks for (1460x920 at ui 1.0): nothing scrolls.
+
+    A tiling window manager gives a mapped window its own size, so the layout is planned at
+    the design width and height (`_layout_one_page` takes both) and the content's requested
+    size is compared with the pane it was planned into. When the window does honour the size,
+    the mapped geometry is checked too — a `ttk.Scrollbar` may only be off screen then.
+    """
+    if not os.environ.get("DISPLAY"):
+        raise FileNotFoundError("no DISPLAY")
+    import tkinter as tk
+    from tkinter import ttk
+    import editor as editor_mod
+    box = tempfile.mkdtemp(prefix="pesforge-fit-")
+    saved = settings.CONFIG_PATH
+    settings.CONFIG_PATH = os.path.join(box, "config.json")
+    with open(settings.CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"game_dir": GAME, "photos": False}, f)
+    app = editor_mod.Editor()
+    app.attributes("-alpha", 0.0)
+    app.update()
+    try:
+        app.q.set("messi")
+        app.populate("messi", select_first=True)
+        for _ in range(8):
+            app.update()
+            app.update_idletasks()
+        body = app._one_page_body
+        # the window chrome at the design size: one header row, the footer, the 8px padding
+        design_w = int(1460 * app.ui) - 2 * int(12 * app.ui)
+        design_h = int(920 * app.ui) - int(90 * app.ui)
+        app._layout_one_page(body, wide=True, width=design_w, height=design_h)
+        for _ in range(8):
+            app.update()
+            app.update_idletasks()
+        panes = []
+        for frame in sorted(body.grid_slaves(row=0), key=lambda w: int(w.grid_info()["column"])):
+            # the form pane canvases hold their content frame; a scroll indicator holds nothing
+            canvases = [c for c in frame.winfo_children()
+                        if isinstance(c, tk.Canvas) and c.winfo_children()]
+            panes.extend(canvases)
+        assert len(panes) == 2, f"expected two form panes, found {len(panes)}"
+        plan = app._plan
+        for idx, canvas in enumerate(panes):
+            inner = canvas.winfo_children()[0]
+            planned = plan["mid"] if idx == 0 else plan["right"]
+            assert inner.winfo_reqheight() <= plan["height"] + 1, (
+                f"column {idx} content {inner.winfo_reqheight()}px does not fit the planned "
+                f"{plan['height']}px pane")
+            for section in inner.winfo_children():
+                assert section.winfo_reqwidth() <= planned + 1, (
+                    f"section {section.winfo_class()} at column {idx} needs "
+                    f"{section.winfo_reqwidth()}px inside a {planned}px pane")
+        # the same check on real geometry, when the window manager lets the window be the size
+        # the app asked for (Xvfb, a floating window); a tiled window is sized by the WM
+        body_w = body.winfo_width()
+        if abs(body_w - design_w) <= 4:
+            for name in app._walk(app):
+                if isinstance(name, ttk.Scrollbar):
+                    assert not name.winfo_ismapped(), "a scrollbar is showing although nothing scrolls"
+    finally:
+        app.destroy()
+        settings.CONFIG_PATH = saved
+
+
+def test_photo_toggle_default():
+    assert "photos" in settings.DEFAULTS, "DEFAULTS has no photos key"
+    assert settings.DEFAULTS["photos"] is True
+    box = tempfile.mkdtemp(prefix="pesforge-cfg-")
+    path = settings.CONFIG_PATH
+    try:
+        settings.CONFIG_PATH = os.path.join(box, "config.json")
+        cfg = settings.load()
+        cfg["photos"] = False
+        settings.save(cfg)
+        assert settings.load()["photos"] is False
+    finally:
+        settings.CONFIG_PATH = path
+
+
+def test_no_false_dirty():
+    """Tabbing through a field fires FocusOut -> apply_*; an unchanged value must not dirty."""
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.update()
+        for label in ("Offensive Awareness", "Age"):
+            app.vars[label].set(str(app.table.get(0, label)))
+            app.apply_field(label)
+            assert not app.dirty_tables, f"{label} marked dirty without a change: {app.dirty_tables}"
+        app.apply_style()
+        app.apply_foot()
+        app.apply_position("CF")
+        assert not app.dirty_tables, f"no-op appliers dirtied the player: {app.dirty_tables}"
+
+
+def test_settings_migration():
+    """First run as PESForge takes the old spfl27-editor config and state with it."""
+    box = tempfile.mkdtemp(prefix="pesforge-mig-")
+    old_cfg = os.path.join(box, "config", "spfl27-editor")
+    old_state = os.path.join(box, "data", "spfl27-editor")
+    os.makedirs(old_cfg)
+    os.makedirs(os.path.join(old_state, "portraits"))
+    with open(os.path.join(old_cfg, "config.json"), "w") as f:
+        f.write('{"game_dir": "/games/x"}')
+    with open(os.path.join(old_state, "portraits", "7511.png"), "w") as f:
+        f.write("x")
+    env = dict(os.environ, HOME=box, XDG_CONFIG_HOME=os.path.join(box, "config"),
+               XDG_DATA_HOME=os.path.join(box, "data"))
+    env.pop("SPFL_CONFIG", None)
+    env.pop("SPFL_STATE", None)
+    out = subprocess.run([sys.executable, "-c",
+                          "import settings; print(settings.CONFIG_PATH); print(settings.state_dir())"],
+                         cwd=ROOT, env=env, capture_output=True, text=True, check=True).stdout.split()
+    assert out[0].endswith("/config/pesforge/config.json"), out
+    assert out[1].endswith("/data/pesforge"), out
+    with open(out[0]) as f:
+        assert json.load(f)["game_dir"] == "/games/x"
+    assert os.path.exists(os.path.join(out[1], "portraits", "7511.png")), out[1]
+
+
+def test_country_names():
+    assert pesdb.country_name(144) == "Argentina"
+    assert pesdb.country_name(204) == "England"
+    assert pesdb.country_name(99999) == ""
+    assert len(pesdb.COUNTRIES) >= 200
+
+
+def test_country_filter():
+    with gui() as app:
+        app.country_filter.set("Wales")
+        app.populate("")
+        app.update()
+        rows = app.tree.get_children()
+        assert 0 < len(rows) < 800, f"wales matched {len(rows)}"
+        for item in rows:
+            assert pesdb.country_name(app.table.get(int(item), "Nationality")) == "Wales", item
+        welsh = len(rows)
+        app.country_filter.set("")
+        app.populate("")
+        app.update()
+        assert len(app.tree.get_children()) == 800 > welsh, "clearing the filter did not widen"
+        app.country_filter.set("England")
+        app.club_filter.set("Portsmouth FC")
+        app.populate("")
+        app.update()
+        rows = app.tree.get_children()
+        assert rows, "England + Portsmouth FC matched nothing"
+        for item in rows:
+            i = int(item)
+            assert pesdb.country_name(app.table.get(i, "Nationality")) == "England"
+            assert app.clubs.get(app.player_team.get(app.table.pid(i), -1)) == "Portsmouth FC"
+
+
+def test_undo_redo():
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.update()
+        start = app.table.get(0, "Speed")
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        assert app.table.get(0, "Speed") == 99
+        app.undo()
+        app.update()
+        assert app.table.get(0, "Speed") == start, "undo did not restore the value"
+        assert app.vars["Speed"].get() == str(start), "the form kept the undone value"
+        app.redo()
+        app.update()
+        assert app.table.get(0, "Speed") == 99, "redo did not reapply"
+        app.undo(); app.undo()          # empty stack must not raise
+        assert app.table.get(0, "Speed") == start
+
+
+def test_bulk_edit():
+    with gui() as app:
+        assert str(app.tree.cget("selectmode")) == "extended", "tree must allow multi-select"
+        app.tree.selection_set(("0", "1", "2"))
+        before = [app.table.get(i, "Aggression") for i in (0, 1, 2)]
+        app.bulk_apply("Aggression", "add", 5)
+        after = [app.table.get(i, "Aggression") for i in (0, 1, 2)]
+        assert all(min(99, b + 5) == a for b, a in zip(before, after)), (before, after)
+        app.undo()
+        assert [app.table.get(i, "Aggression") for i in (0, 1, 2)] == before
+
+
+def test_compare_players():
+    with gui() as app:
+        app.tree.selection_set(("0", "1"))
+        dlg = app.compare_dialog()
+        assert dlg is not None, "compare needs exactly two selected players"
+        rows = app.compare_rows(0, 1)
+        assert len(rows) == len(pesdb.ATTRS), "one row per ability"
+        name_a, val_a, val_b = rows[0]
+        assert val_a == app.table.get(0, name_a) and val_b == app.table.get(1, name_a)
+        dlg.destroy()
+
+
+def test_changed_only_view():
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        app.changed_only.set(True)
+        app.populate("")
+        app.update()
+        shown = {int(i) for i in app.tree.get_children()}
+        assert shown == {0}, shown
+        app.changed_only.set(False)
+        app.populate("")
+        app.update()
+        assert len(app.tree.get_children()) == 800
+
+
+def test_position_and_free_agent_filters():
+    with gui() as app:
+        app.position_filter.set("GK")
+        app.populate("")
+        app.update()
+        rows = app.tree.get_children()
+        assert rows, "no goalkeepers"
+        for item in rows:
+            assert pesdb.POS_NAMES[app.table.get(int(item), "Registered Position")] == "GK"
+        app.position_filter.set("")
+        app.free_agents_only.set(True)
+        app.populate("")
+        app.update()
+        rows = app.tree.get_children()
+        assert rows and all(app.player_team.get(app.table.pid(int(i))) is None for i in rows)
+
+
+def test_csv_round_trip():
+    with gui() as app:
+        path = os.path.join(tempfile.mkdtemp(prefix="pesforge-csv-"), "roster.csv")
+        n = app.export_roster(path)
+        assert n > 10000 and os.path.getsize(path) > 100000, (n, path)
+        app.index = 0
+        app.load_form()
+        old = app.table.get(0, "Speed")
+        with open(path, encoding="utf-8") as f:
+            rows = f.read().splitlines()
+        header = rows[0].split(",")
+        speed_col = header.index("Speed")
+        line = rows[1].split(",")
+        line[speed_col] = "99"
+        rows[1] = ",".join(line)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        touched = app.import_roster(path)
+        assert touched >= 1
+        assert app.table.get(0, "Speed") == 99
+        app.index = None                    # importing with nothing selected must not raise
+        assert app.import_roster(path) >= 1
+
+
+def test_portrait_fits_slot():
+    """A portrait is never clipped or stretched: the slot fits the image, oversized ones are halved."""
+    with gui() as app:
+        path = os.path.join(tempfile.mkdtemp(), "portrait.ppm")
+        with open(path, "wb") as f:              # Tk reads binary P6 only
+            f.write(b"P6\n256 256\n255\n" + bytes([200, 120, 90]) * (256 * 256))
+        app._show_portrait(path)
+        assert (app.photo_img.width(), app.photo_img.height()) == (128, 128), \
+            (app.photo_img.width(), app.photo_img.height())
+        app.update()
+        # a photo is shown at its full size or not at all: never squashed into a narrow slot
+        if app.photo.winfo_ismapped():
+            assert app.photo.winfo_width() >= 128 and app.photo.winfo_height() >= 128, \
+                (app.photo.winfo_width(), app.photo.winfo_height())
+        shutil.rmtree(os.path.dirname(path))
+
+def test_colour_tokens():
+    """Colours live in theme.py only, and every palette clears the contrast it promises."""
+    import theme
+    text = open(os.path.join(ROOT, "editor.py"), encoding="utf-8").read()
+    stray = [f"{n}: {ln.strip()}" for n, ln in enumerate(text.splitlines(), 1)
+             if re.search(r'"#[0-9a-fA-F]{6}"', ln)]
+    assert not stray, f"colours outside the palette module: {stray}"
+    for name, _label in theme.CHOICES:
+        t = theme.tokens(name)
+        assert theme.contrast(t["fg"], t["bg"]) >= 12, name
+        assert theme.contrast(t["dim"], t["bg"]) >= 4.5, name
+        assert theme.contrast(t["hint"], t["bg"]) >= 4.4, name
+        assert theme.contrast(t["accent"], t["bg"]) >= 4.5, name
+        assert theme.contrast(t["bar_low"], t["panel2"]) >= 3.0, name
+        assert theme.contrast(t["ghost"], t["bg"]) >= 3.0, name
+        assert theme.contrast(t["ink"], t["accent"]) >= 4.5, name
+    assert theme.choice({"theme": "nope"}) == theme.DEFAULT
+    assert theme.choice({"theme": "ice"}) == "ice"
+    # theme.py may only carry hexes as base palette entries
+    for n, ln in enumerate(open(os.path.join(ROOT, "theme.py"), encoding="utf-8"), 1):
+        if re.search(r'"#[0-9a-fA-F]{6}"', ln):
+            assert re.match(r'(\s+"[a-z0-9_]+": "#[0-9a-fA-F]{6}"'
+                            r'|[A-Z]+(, [A-Z]+)? = "#[0-9a-fA-F]{6}")',
+                            ln), f"theme.py:{n} {ln!r}"
+
+
+def test_field_clamp():
+    """A typed or bulk value must stop at 99 for abilities, not at the bit field's 103."""
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.vars["Speed"].set("103")
+        app.apply_field("Speed")
+        assert app.table.get(0, "Speed") == 99, app.table.get(0, "Speed")
+        app.vars["Age"].set("90")
+        app.apply_field("Age")
+        assert app.table.get(0, "Age") == 78, app.table.get(0, "Age")   # 15 + 2**6 - 1
+        app.tree.selection_set(("0",))
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        app.bulk_apply("Speed", "add", 40)
+        assert app.table.get(0, "Speed") == 99, app.table.get(0, "Speed")
+
+
+def test_career_fields():
+    """The career block of the vendor PES 2021 schema: decoded, writable, and sane in the data."""
+    t = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    for label, bit, width, add in pesdb.CAREER:
+        assert pesdb.FIELD_BY_LABEL[label] == (bit, width, add)
+    i = next(k for k in range(len(t.records)) if t.pid(k) == 7511)
+    assert t.get(i, "Contract Until") == pesdb.bit_get(t.records[i], 96, 27)
+    t.set(i, "Contract Until", 20270630)
+    t.set(i, "Market Value", 1234567)
+    t.set(i, "National Caps", 198)
+    t.set(i, "Youth Club", 101)
+    t.set(i, "Owner Club", 102)
+    t.set(i, "Legend", 1)
+    again = pesdb.PlayerTable(t.to_file())
+    assert (again.get(i, "Contract Until"), again.get(i, "Market Value"),
+            again.get(i, "National Caps"), again.get(i, "Youth Club"),
+            again.get(i, "Owner Club"), again.get(i, "Legend")) == \
+        (20270630, 1234567, 198, 101, 102, 1)
+    assert again.pid(i) == 7511 and again.name(i) == t.name(i)   # neighbours untouched
+    # the shipped database keeps contract dates in YYYYMMDD form; caps fit their byte
+    dates = {t.get(k, "Contract Until") for k in range(0, 4000)}
+    dates.discard(0)
+    for d in dates:
+        assert 20000000 <= d <= 20999999, d
+        assert d % 100 <= 31, d
+    assert max(t.get(k, "National Caps") for k in range(len(t.records))) <= 255
+
+
+def test_display_addends():
+    """Form, the weak foot, injury and reputation/attitude sliders read 1-based, like the game."""
+    t = pesdb.PlayerTable(pesdb.table_blob(CPK, "Player"))
+    for label in ("Form", "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance",
+                  "Reputation", "Playing Attitude"):
+        assert pesdb.FIELD_BY_LABEL[label][2] == 1, label
+    bit = pesdb.FIELD_BY_LABEL["Form"][0]
+    pesdb.bit_set(t.records[0], bit, 3, 0, 0)
+    assert t.get(0, "Form") == 1                       # stored 0 is the lowest the game shows
+    t.set(0, "Form", 8)
+    assert pesdb.bit_get(t.records[0], bit, 3) == 7 and t.get(0, "Form") == 8
+    t.set(0, "Form", 1)
+    assert pesdb.bit_get(t.records[0], bit, 3) == 0
+    assert pesdb.bit_get(t.records[0], 451, 3) <= 7    # reputation raw fits its 3 bits
+
+
+def test_coach_table():
+    """Coach.bin: 100-byte records, 980 coaches; name, Japanese name, country, adaptability."""
+    co = pesdb.CoachTable(pesdb.table_blob(CPK, "Coach"))
+    assert len(co.records) == 980 and len(pesdb.read_table(CPK, "Coach")) == 980 * 100
+    ids = [co.cid(i) for i in range(len(co.records))]
+    assert len(set(ids)) == len(ids), "coach ids repeat"
+    i = next(k for k in range(len(co.records)) if co.name(k) == "Mikel Arteta")
+    assert co.japanese(i) and 40 <= co.adaptability(i) <= 99
+    co.set_name(i, "Test Arteta")
+    co.set_japanese(i, "テスト監督")
+    co.set_country(i, 42)
+    co.set_adaptability(i, 90)
+    again = pesdb.CoachTable(co.to_file())
+    assert (again.name(i), again.japanese(i), again.country(i), again.adaptability(i)) == \
+        ("Test Arteta", "テスト監督", 42, 90)
+    assert again.cid(i) == co.cid(i) and len(again.records) == 980
+
+
+def test_team_coach_and_stadium_links():
+    """Team.bin +0 is the coach id and +60 the stadium id; every link resolves."""
+    team = pesdb.TeamTable(pesdb.table_blob(CPK, "Team"))
+    coaches = pesdb.CoachTable(pesdb.table_blob(CPK, "Coach"))
+    coach_ids = {coaches.cid(k) for k in range(len(coaches.records))}
+    stadiums = pesdb.stadium_names(pesdb.read_table(CPK, "Stadium"))
+    assert len(stadiums) == 37 and stadiums[2] == "Spotify Camp Nou"
+    for i in range(len(team.records)):
+        assert team.coach_id(i) in coach_ids or team.coach_id(i) == 0, team.name(i)
+        assert team.stadium_id(i) in stadiums or team.stadium_id(i) == 0, team.name(i)
+    idx = {team.tid(i): i for i in range(len(team.records))}[108]          # FC Barcelona
+    assert team.name(idx) == "FC Barcelona"
+    cid = team.coach_id(idx)
+    assert coaches.name(next(k for k in range(len(coaches.records)) if coaches.cid(k) == cid))
+    assert stadiums[team.stadium_id(idx)] == "Spotify Camp Nou"
+    team.set_coach(idx, 2)
+    team.set_stadium(idx, 5)
+    again = pesdb.TeamTable(team.to_file())
+    assert (again.coach_id(idx), again.stadium_id(idx), again.name(idx)) == \
+        (2, 5, "FC Barcelona")
+
+
+def test_squad_numbers():
+    """PlayerAssignment +12 is the number the game shows, stored one below it."""
+    asg = pesdb.AssignmentTable(pesdb.table_blob(CPK, "PlayerAssignment"))
+    rows = [j for j in range(len(asg.records)) if asg.pid(j) == 7511 and asg.team(j) > 99]
+    assert len(rows) == 1
+    assert asg.shirt_number(rows[0]) == 10                  # Messi at Inter Miami
+    asg.set_shirt_number(rows[0], 30)
+    again = pesdb.AssignmentTable(asg.to_file())
+    assert again.shirt_number(rows[0]) == 30 and again.pid(rows[0]) == 7511
+    asg.set_shirt_number(rows[0], 0)
+    assert asg.shirt_number(rows[0]) == 1                   # clamped into 1..99
+    asg.set_shirt_number(rows[0], 200)
+    assert asg.shirt_number(rows[0]) == 99
+
+
+def test_cli_coach_stadium_shirt():
+    """--coaches, --club-coach, --stadium and --shirt write through to the CPK."""
+    box = sandbox()
+    out = cli(box, "--coaches", "arteta")
+    assert "Mikel Arteta" in out and "Arsenal FC" in out, out
+    out = cli(box, "--club-coach", "Arsenal FC", "Hansi Flick", "--save")
+    assert "-> 102080" in out and "re-read coach id 102080" in out, out
+    out = cli(box, "--club-coach", "Arsenal FC", "Hansi Flick")
+    assert "nothing changed" in out, out
+    out = cli(box, "--stadium", "Arsenal FC", "5", "--save")
+    assert "Wembley" in out and "re-read stadium id 5" in out, out
+    out = cli(box, "--shirt", "Lionel Messi", "30", "--save")
+    assert "shirt [10] -> 30" in out and "re-read shirt 30" in out, out
+    team = pesdb.TeamTable(pesdb.table_blob(box_cpk(box), "Team"))
+    idx = {team.tid(i): i for i in range(len(team.records))}[101]
+    assert (team.stadium_id(idx), team.coach_id(idx)) == (5, 102080)
+    asg = pesdb.AssignmentTable(pesdb.table_blob(box_cpk(box), "PlayerAssignment"))
+    assert [asg.shirt_number(j) for j in range(len(asg.records))
+            if asg.pid(j) == 7511 and asg.team(j) > 99] == [30]
+    out = cli(box, "--export", os.path.join(box, "roster.csv"))
+    header = open(os.path.join(box, "roster.csv"), encoding="utf-8").readline()
+    for label in ("Contract Until", "Market Value", "National Caps", "Ballon d'Or"):
+        assert label in header, label
+
+
+def test_new_tables_patch_into_cpk():
+    """Coach.bin and PlayerAppearance.bin patch into the CPK exactly like the older tables."""
+    box = sandbox()
+    co = pesdb.CoachTable(pesdb.table_blob(box_cpk(box), "Coach"))
+    i = next(k for k in range(len(co.records)) if co.name(k) == "Hansi Flick")
+    co.set_adaptability(i, 88)
+    pesdb.patch_table(box_cpk(box), "Coach", co.to_file())
+    again = pesdb.CoachTable(pesdb.table_blob(box_cpk(box), "Coach"))
+    assert again.adaptability(i) == 88 and len(again.records) == 980
+
+    app = pesdb.AppearanceTable(pesdb.table_blob(box_cpk(box), "PlayerAppearance"))
+    app.set(276, "Skin Colour", 5)
+    pesdb.patch_table(box_cpk(box), "PlayerAppearance", app.to_file())
+    again = pesdb.AppearanceTable(pesdb.table_blob(box_cpk(box), "PlayerAppearance"))
+    assert again.get(276, "Skin Colour") == 5 and len(again.records) == 26395
+    assert again.pid(276) == 7511
+
+
+def test_career_and_appearance_ui():
+    """The new career fields, coaches window and appearance window work on a live Editor."""
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        for label in ("Contract Until", "Loan Until", "Market Value", "National Caps",
+                      "Reputation", "Playing Attitude", "Legend", "Ballon d'Or"):
+            assert label in app.vars, label
+        app.vars["Contract Until"].set("20270630")
+        app.apply_field("Contract Until")
+        assert app.table.get(0, "Contract Until") == 20270630
+        app.vars["Form"].set("8")
+        app.apply_field("Form")
+        assert app.table.get(0, "Form") == 8
+        app.vars["Form"].set("0")                     # clamped to the lowest the game shows
+        app.apply_field("Form")
+        assert app.table.get(0, "Form") == 1
+
+        app.open_coaches()
+        win = app._coach_win
+        win.update()
+        assert len(win.tree.get_children()) == 980
+        win.q.set("arteta")
+        win.fill()
+        assert len(win.tree.get_children()) == 1
+        row = win.tree.get_children()[0]
+        win.tree.selection_set(row)
+        win.pick()
+        assert win.vars["Name"].get() == "Mikel Arteta"
+        win.vars["Adaptability"].set("91")
+        win.apply()
+        assert app.coach_table.adaptability(int(row)) == 91
+        assert "Coach" in app.dirty_tables
+        win.destroy()
+
+        app.open_appearance()
+        aware = app._app_win
+        aware.update()
+        assert aware.tree.exists("Skin Colour")
+        aware.tree.selection_set("Skin Colour")
+        aware.pick()
+        aware.value.set("4")
+        aware.apply()
+        assert app.appearance_table.get(0, "Skin Colour") == 4
+        assert "PlayerAppearance" in app.dirty_tables
+        aware.destroy()
+
+        app.index = 0
+        app.load_form()
+        assert app.shirt_var.get() == "—" or app.shirt_var.get().isdigit()
+        app.status("")                                 # the club links must not have thrown
+
+
+def test_form_columns_and_club_refs():
+    """One career grid with even columns; club-id fields read and take club names."""
+    if not os.environ.get("DISPLAY"):
+        raise FileNotFoundError("no DISPLAY")
+    import tkinter as tk
+    import editor as editor_mod
+    box = tempfile.mkdtemp(prefix="pesforge-cols-")
+    saved = settings.CONFIG_PATH
+    settings.CONFIG_PATH = os.path.join(box, "config.json")
+    with open(settings.CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"game_dir": GAME, "photos": False}, f)
+    app = editor_mod.Editor()
+    app.attributes("-alpha", 0.0)
+    app.update()
+    try:
+        app.q.set("messi")
+        app.populate("messi", select_first=True)
+        for _ in range(6):
+            app.update()
+            app.update_idletasks()
+
+        # the career block is one grid, and every grid column shares a single left edge
+        secs = []
+
+        def walk(w):
+            for c in w.winfo_children():
+                if getattr(c, "section_key", None) == "career":
+                    secs.append(c)
+                walk(c)
+
+        walk(app)
+        assert secs, "no career section"
+        grids = [g for s in secs for g in s.body.winfo_children() if g.grid_slaves()]
+        assert len(grids) == 1, f"career block split across {len(grids)} grids"
+        cols = {}
+        for w in grids[0].grid_slaves():
+            cols.setdefault(int(w.grid_info()["column"]), []).append(w)
+        for col, ws in cols.items():
+            xs = {w.winfo_rootx() for w in ws}
+            assert len(xs) == 1, f"grid column {col} staggered: {sorted(xs)}"
+
+        # club-id fields show the club name and take one by name or id
+        app.index = 0
+        app.load_form()
+        name = app.clubs.get(app.table.get(0, "Youth Club"), "")
+        if name:
+            assert name in app.vars["Youth Club"].get()
+        app.vars["Youth Club"].set("127  Bayern München")
+        app.apply_club_ref("Youth Club")
+        assert app.table.get(0, "Youth Club") == 127
+        assert "Bayern" in app.vars["Youth Club"].get()
+        app.vars["Youth Club"].set("Manchester United")
+        app.apply_club_ref("Youth Club")
+        assert app.table.get(0, "Youth Club") == 100
+        app.vars["Youth Club"].set("not a club at all")
+        app.apply_club_ref("Youth Club")
+        assert app.table.get(0, "Youth Club") == 100      # nothing written, no crash
+    finally:
+        try:
+            app.destroy()
+        except tk.TclError:
+            pass
+        settings.CONFIG_PATH = saved
+
+
+def test_header_chips_and_country_filter():
+    """Header search/actions, the card chips and the country type-ahead all work."""
+    with gui() as app:
+        # search and the action buttons live in the header, not in the list pane
+        for w in (app.search_entry, app._button_bar):
+            r_top = w.winfo_rooty()
+            assert app._header.winfo_rooty() <= r_top, "widget sits above the header"
+            assert r_top + w.winfo_height() <= \
+                app._header.winfo_rooty() + app._header.winfo_height() + 1, \
+                "widget falls below the header"
+        names = [b.cget("text") for b in app._bar_buttons]
+        for want in ("Save to game", "Undo", "Redo", "Discard", "Menu"):
+            assert any(want in n for n in names), f"{want!r} missing from {names}"
+
+        app.index = 0
+        app.load_form()
+        app.update_idletasks()
+
+        # the card shows the rating and the value chips (pills; read through the Pill API)
+        import editor as editor_mod
+        assert app.ovr_big.cget("text").isdigit(), app.ovr_big.cget("text")
+        assert app._card_chips["Style"].get_text() not in ("", "—")
+        assert app._card_chips["Height"].get_text().endswith("cm")
+        assert isinstance(app._skill_chips["Trickster"], editor_mod.Pill)
+
+        # the search hint yields to the caret: hidden while focused, back when idle and empty
+        app.q.set("")
+        app._search_focus_in()
+        app.update_idletasks()
+        assert not app._search_hint.place_info(), "hint shows over the focused box"
+        app._search_focus_out()
+        app.update_idletasks()
+        assert app._search_hint.place_info(), "hint missing while the box is empty and idle"
+
+        # an edit repaints the card chips and the meta line, not only the form field
+        age = int(app.vars["Age"].get())
+        app.vars["Age"].set(str(age + 1))
+        app.apply_field("Age")
+        assert app._card_chips["Age"].get_text() == f"age {age + 1}", \
+            app._card_chips["Age"].get_text()
+        app.undo()
+        app.update_idletasks()
+        assert app._card_chips["Age"].get_text() == f"age {age}", \
+            app._card_chips["Age"].get_text()
+        before_meta = app.lbl_sub.cget("text")
+        app.cycle_position("GK")                # none -> can play: the meta list gains GK
+        assert app.lbl_sub.cget("text") != before_meta
+        assert "GK" in app.lbl_sub.cget("text")
+        app.cycle_position("GK")
+        app.cycle_position("GK")
+        assert app.lbl_sub.cget("text") == before_meta
+
+        # a position chip cycles none -> can play -> natural and writes to the table
+        before = app.vars["Pos GK"].get()
+        app.cycle_position("GK")
+        after = app.vars["Pos GK"].get()
+        assert after != before, "position chip did not cycle"
+        assert app.table.get(0, "Pos GK") == ["none", "can play", "natural"].index(after)
+        app.cycle_position("GK")
+        app.cycle_position("GK")                       # back to the stored value
+        assert app.vars["Pos GK"].get() == before
+
+        # a skill chip toggles and writes to the table
+        v = app.vars["Skill Trickster"]
+        was = v.get()
+        app.toggle_skill("Trickster")
+        assert v.get() != was
+        assert app.table.get(0, "Skill Trickster") == v.get()
+        app.toggle_skill("Trickster")
+        assert v.get() == was
+
+        # club pickers offer clubs only — team ids under 100 are national teams
+        vals = app._club_ref_values()
+        assert vals, "club list empty"
+        assert all(int(s.split("  ", 1)[0]) >= 100 for s in vals), vals[:4]
+        assert "Ireland" not in app._club_names, "a national team is offered as a club"
+        app.vars["Owner Club"].set("Ireland")
+        app.apply_club_ref("Owner Club")
+        assert app.table.get(0, "Owner Club") == 0, "a national team was written as a club"
+
+        # the country box narrows as you type and Enter accepts the single fit
+        full = len(app._country_names)
+        app.country_filter.set("Engl")
+        app._filter_country_values(type("E", (), {"keysym": "l"})())
+        values = [str(x) for x in app.tk.splitlist(app.cb_country.cget("values"))]
+        assert "England" in values, values[:8]
+        assert len(values) < full, "dropdown was not narrowed"
+        app.apply_country_filter()
+        assert app.country_filter.get() == "England"
+        app.country_filter.set("")
+        app.apply_country_filter()                     # leave the filter empty again
+
+
+def test_theme_module():
+    import theme
+    assert theme.choice({}) == theme.DEFAULT
+    assert dict(theme.CHOICES)["ice"] == "Ice"
+    assert set(theme.tokens("crimson")) == set(theme.TOKEN_NAMES)
+    assert "theme" in settings.DEFAULTS and settings.DEFAULTS["theme"] in theme.BASE
+    light = theme.toward(theme.BASE["amber"]["dim"], theme.BASE["amber"]["bg"], 4.5)
+    assert theme.contrast(light, theme.BASE["amber"]["bg"]) <= 4.6
+
+
+def test_change_ledger():
+    """Every edit is listed in the ledger, and the field it belongs to is tinted."""
+    import editor as editor_mod
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.update()
+        start = app.table.get(0, "Speed")
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        key = ("Player", app.table.pid(0), "Speed")
+        assert key in app._changes, "the edit is not in the change ledger"
+        entry = app._changes[key]
+        assert entry["base"] == start and entry["new"] == 99, entry
+        assert "change" in app.lbl_changes.cget("text")
+        assert str(app._field_widgets["Speed"].cget("background")) == editor_mod.C_DIRTY
+        # undo returns the field and drops the ledger row
+        app.undo()
+        assert key not in app._changes, "undo left the change in the ledger"
+        assert app.lbl_changes.cget("text") == ""
+        assert str(app._field_widgets["Speed"].cget("background")) == editor_mod.C_PANEL2
+        # an edit that returns to its start value is not a change
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        app.vars["Speed"].set(str(start))
+        app.apply_field("Speed")
+        assert key not in app._changes
+        # revert one entry directly (what the drawer's button calls)
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        app._changes[key]["revert"]()
+        app._reconcile_dirty()
+        assert app.table.get(0, "Speed") == start
+        assert key not in app._changes and "Player" not in app.dirty_tables
+
+
+def test_sections_fold_and_remember():
+    """The career block starts folded and the choice survives in the config."""
+    import editor as editor_mod
+    with gui() as app:
+        def walk(w, out):
+            for c in w.winfo_children():
+                if isinstance(c, editor_mod.Section):
+                    out[c.section_key] = c
+                walk(c, out)
+        secs = {}
+        walk(app, secs)
+        career = secs.get("career")
+        assert career is not None, "no career section"
+        assert career.folded and not career.body.winfo_manager(), "career should start folded"
+        career.toggle()
+        app.update()
+        assert career.body.winfo_manager(), "expanding did not show the body"
+        assert "career" not in (settings.load()["collapsed"] or [])
+        career.toggle()
+        app.update()
+        assert not career.body.winfo_manager()
+        assert "career" in (settings.load()["collapsed"] or [])
+
+
+def test_list_tabs_and_club_rows():
+    """Clubs are a tab, not a mode that hides the players; club rows are not players."""
+    with gui() as app:
+        app.q.set("arsenal")
+        app.populate("arsenal")
+        app.update()
+        assert app.view_mode.get() == "players", "a club search must keep the player rows"
+        assert app._mode_counts["clubs"] >= 1, app._mode_counts
+        assert "Clubs" in app.tab_clubs.cget("text")
+        players = app.tree.get_children()
+        assert players and not any(p.startswith("club:") for p in players)
+        app.set_view_mode("clubs")
+        app.update()
+        clubs = app.tree.get_children()
+        assert clubs and all(c.startswith("club:") for c in clubs), clubs[:3]
+        # bulk edit and compare must not try to parse a club id as a player record
+        app.tree.selection_set(clubs[0])
+        assert app.bulk_apply("Speed", "add", 1) == 0
+        assert app.compare_dialog() is None
+        app.set_view_mode("players")
+        app.q.set("")
+        app.populate("")
+        assert len(app.tree.get_children()) == 800
+
+
+def test_country_picker_and_name_counter():
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.vars["Nationality"].set("Argentina")
+        app.apply_field("Nationality")
+        assert app.table.get(0, "Nationality") == 144
+        assert app.vars["Nationality"].get() == "Argentina", "the box lost the country name"
+        app.vars["name"].set("X" * 61)
+        app.update()
+        assert app._name_counters["name"].cget("text") == "61/60"
+
+
+def test_ovr_cache_and_skill_filter():
+    import pesdb as db
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        before = app.ovr(0)
+        for label, _bit, _w, _add in db.ATTRS:
+            app.vars[label].set("99")
+            app.apply_field(label)
+        assert app.ovr(0) > before, "the OVR cache was not invalidated by an ability edit"
+        shown = sum(1 for c in app._skill_chips.values() if c.winfo_manager())
+        app.skill_filter.set("turn")
+        app._filter_skills()
+        now = sum(1 for c in app._skill_chips.values() if c.winfo_manager())
+        assert 0 < now < shown, (shown, now)
+        app.skill_filter.set("")
+        app._filter_skills()
+
+
+def test_preflight_summary():
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.vars["Speed"].set("99")
+        app.apply_field("Speed")
+        counts, warnings = app._preflight_summary()
+        assert counts.get("Player") == 1, counts
+        assert any("EDIT" in w for w in warnings) == bool(app.edit_saves)
+        team = app.player_team.get(app.table.pid(0))
+        rows = [j for j in range(len(app.assign.records)) if app.assign.team(j) == team][:2]
+        if team is not None and len(rows) == 2:
+            for j in rows:
+                app.assign.set_shirt_number(j, 7)
+            app._mark_table_dirty("PlayerAssignment")
+            dups = app._duplicate_squad_numbers()
+            assert any("number 7" in d for d in dups), dups
+
+
+def test_window_size_is_remembered():
+    with gui() as app:
+        app._remember_geometry()
+        size = settings.load()["window"]
+        assert "x" in size and all(part.isdigit() for part in size.split("x")), size
+
+
+def main():
+    tests = [(name, fn) for name, fn in sorted(globals().items())
+             if name.startswith("test_") and callable(fn)]
+    failures = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"ok   {name}")
+        except FileNotFoundError as exc:
+            print(f"skip {name}: no game database ({exc.filename})")
+        except AssertionError as exc:
+            failures += 1
+            print(f"FAIL {name}: {exc}")
+    print(f"{len(tests) - failures}/{len(tests)} passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

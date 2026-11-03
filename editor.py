@@ -2,8 +2,8 @@
 """SP Football Life 2027 — player editor.
 
 Reads the game's own player database out of download/data_s*.cpk, lets you change
-attributes / positions / skills / identity, and writes the result as a Sider live-CPK
-override so the game picks it up on the next launch.
+attributes / positions / skills / identity, and patches the changed tables back into that CPK
+(after backing it up) so the game picks them up on its next launch.
 """
 import json
 import math
@@ -25,6 +25,7 @@ from tkinter import ttk, messagebox, filedialog
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pesdb
 import settings
+import theme
 
 STATE_DIR = settings.state_dir()
 VANILLA = os.path.join(STATE_DIR, "Player.vanilla.bin")
@@ -86,22 +87,32 @@ RADAR_GROUPS = (
     ("Keeping", ("GK Awareness", "GK Catching", "GK Clearing", "GK Reflexes", "GK Reach")),
 )
 
-C_BG = "#120e0a"
-C_PANEL = "#1b1510"
-C_PANEL2 = "#251c14"
-C_LINE = "#35281c"      # grid lines, separators
-C_HOVER = "#2e2318"     # hover/active background
-C_SEL = "#3a2a16"       # selected row / listbox selection
-C_INK = "#1a1004"       # text on the accent colour
-C_FG = "#f4ead9"
-C_DIM = "#ab927a"
-C_ACCENT = "#f0a63f"
-C_ACCENT_HI = "#f7c169"    # hover of accent-coloured buttons
-C_ACCENT_LO = "#a86f24"    # radar spoke for a group averaging under 65
-C_LINE_SOFT = "#6b5128"    # dim spoke on the radar's outer ring
-C_GREEN = "#7fd08b"
-C_MAGENTA = "#dd6f9f"
-C_WARN = "#e05d5d"
+# ---- palette ---------------------------------------------------------------
+# Every colour the window draws comes from theme.py; a palette is ten base colours and the
+# rest is derived there (contrast included). These names are the only colour references the
+# UI code uses — the palette switch in Settings picks which set they resolve to at launch.
+THEME = theme.choice(settings.load())
+_PAL = theme.tokens(THEME)
+C_BG = _PAL["bg"]
+C_PANEL = _PAL["panel"]
+C_PANEL2 = _PAL["panel2"]
+C_LINE = _PAL["line"]            # grid lines, separators
+C_HOVER = _PAL["hover"]          # hover/active background
+C_SEL = _PAL["sel"]              # selected row / listbox selection
+C_INK = _PAL["ink"]              # text on the accent colour
+C_FG = _PAL["fg"]
+C_DIM = _PAL["dim"]              # secondary text
+C_HINT = _PAL["hint"]            # quietest text still legible (shortcut hints)
+C_ACCENT = _PAL["accent"]
+C_ACCENT_HI = _PAL["accent_hi"]  # hover of accent-coloured buttons
+C_ACCENT_LO = _PAL["accent_lo"]  # mid ability bar fill
+C_GREEN = _PAL["green"]
+C_MAGENTA = _PAL["magenta"]
+C_WARN = _PAL["warn"]
+C_DIRTY = _PAL["dirty"]          # field background while an edit is pending
+C_BAR = _PAL["bar"]              # ability bar track
+C_BAR_LOW = _PAL["bar_low"]      # ability fill under 65 — still 3:1 on the panel
+C_GHOST = _PAL["ghost"]          # the tick showing the value before the edit
 
 
 class Pill(tk.Canvas):
@@ -112,19 +123,44 @@ class Pill(tk.Canvas):
     uses for every chip family (`.chip{border-radius:999px}`).
     """
 
-    def __init__(self, parent, text, font, click=None):
-        super().__init__(parent, bg=C_BG, bd=0, highlightthickness=0, cursor="hand2")
+    def __init__(self, parent, text, font, click=None, click_back=None):
+        # highlightthickness gives the chip a real focus ring when it is reached by Tab: the
+        # chips are the position and skill editors, so they must be operable without a mouse.
+        super().__init__(parent, bg=C_BG, bd=0, highlightthickness=1,
+                         highlightbackground=C_BG, highlightcolor=C_ACCENT,
+                         takefocus=1 if click is not None else 0, cursor="hand2")
         self._text = text
         self._font = font
         self._click = click
+        self._click_back = click_back
+        self._hover = False
         self._fill, self._fg, self._line = C_PANEL2, C_DIM, C_LINE
         self._redraw()
         if click is not None:
             self.bind("<Button-1>", self._fire)
+            self.bind("<Return>", self._fire)
+            self.bind("<space>", self._fire)
+            self.bind("<Enter>", self._enter)
+            self.bind("<Leave>", self._leave)
+            if click_back is not None:
+                self.bind("<Button-3>", self._fire_back)
+
+    def _enter(self, _event=None):
+        self._hover = True
+        self._redraw()
+
+    def _leave(self, _event=None):
+        self._hover = False
+        self._redraw()
 
     def _fire(self, _event=None):
         if self._click is not None:
             self._click()
+
+    def _fire_back(self, _event=None):
+        """Right-click: the same chip the other way round (natural -> can play -> none)."""
+        if self._click_back is not None:
+            self._click_back()
 
     def get_text(self):
         return self._text
@@ -145,8 +181,9 @@ class Pill(tk.Canvas):
         self._redraw()
 
     def _redraw(self):
-        w = self._font.measure(self._text) + 18
+        w = self._font.measure(self._text) + 12
         h = self._font.metrics("linespace") + 6
+        fill = theme.mix(self._fill, C_FG, 0.07) if self._hover else self._fill
         r = min(h / 2, w / 2)
         self.configure(width=w, height=h)
         self.delete("all")
@@ -159,8 +196,145 @@ class Pill(tk.Canvas):
         for deg in (90, 68, 45, 22, 0, -22, -45, -68, -90):           # right end, bottom to top
             a = math.radians(deg)
             pts += [w - r + r * math.cos(a), r + r * math.sin(a)]
-        self.create_polygon(pts, fill=self._fill, outline=self._line, width=1, smooth=True)
+        self.create_polygon(pts, fill=fill, outline=self._line, width=1, smooth=True)
         self.create_text(w / 2, h / 2 + 1, text=self._text, fill=self._fg, font=self._font)
+
+
+class CheckPill(Pill):
+    """A checkbox drawn as a chip: filled with a check when on, an outline when off.
+
+    ttk's clam indicator is a dark square on a dark background — in the reference captures the
+    two filters read as empty boxes whether they were ticked or not. The chip grammar the rest
+    of the window already uses (filled = on) carries the state in shape as well as colour.
+    """
+
+    def __init__(self, parent, text, font, variable, command=None):
+        self._variable = variable
+        self._command = command
+        self._base = text
+        super().__init__(parent, text=text, font=font, click=self._toggle)
+        variable.trace_add("write", lambda *a: self._paint())
+        self._paint()
+
+    def _toggle(self):
+        self._variable.set(0 if self._variable.get() else 1)
+        if self._command is not None:
+            self._command()
+
+    def _paint(self):
+        on = bool(self._variable.get())
+        self.set_text(("\u2713 " if on else "") + self._base)
+        if on:
+            self.set_state(fill=C_ACCENT, fg=C_INK, line=C_ACCENT)
+        else:
+            self.set_state(fill=C_PANEL2, fg=C_DIM, line=C_LINE)
+
+
+class Section(tk.Frame):
+    """A collapsible form section: chevron, title, optional hint, change count, hairline rule.
+
+    Tk's LabelFrame cannot make its own border label clickable, and its label was also what
+    clipped a long section title inside a narrow pane. Drawing the header as a row fixes both:
+    the whole title line folds the body, and the parenthetical explanations live beside the
+    title in quiet type instead of inside it.
+    """
+
+    def __init__(self, parent, title, hint=None, collapsed=False, fonts=None, on_toggle=None):
+        super().__init__(parent, bg=C_BG)
+        self.section_key = None
+        self.folded = bool(collapsed)
+        self.on_toggle = on_toggle
+        sec_font, tiny = fonts or (None, None)
+        head = tk.Frame(self, bg=C_BG, cursor="hand2")
+        head.pack(fill="x")
+        self.chevron = tk.Label(head, text="\u25be", bg=C_BG, fg=C_ACCENT,
+                                font=sec_font, width=1)
+        self.chevron.pack(side="left")
+        self.title = tk.Label(head, text=" " + title.upper() + " ", bg=C_BG, fg=C_ACCENT,
+                              font=sec_font)
+        self.title.pack(side="left")
+        self.hint = tk.Label(head, text=hint or "", bg=C_BG, fg=C_HINT, font=tiny)
+        self.hint.pack(side="left", padx=(2, 6))
+        self.count_label = tk.Label(head, text="", bg=C_BG, fg=C_MAGENTA, font=tiny)
+        self.count_label.pack(side="right", padx=(6, 0))
+        self.rule = tk.Frame(head, bg=C_LINE, height=1)
+        self.rule.pack(side="left", fill="x", expand=True, padx=(8, 6))
+        self.body = tk.Frame(self, bg=C_BG)
+        if not self.folded:
+            self.body.pack(fill="x")
+        for w in (head, self.chevron, self.title, self.hint):
+            w.bind("<Button-1>", lambda _e: self.toggle())
+        self.chevron.configure(text="\u25b8" if self.folded else "\u25be")
+
+    def toggle(self):
+        self.set_folded(not self.folded)
+        if self.on_toggle is not None:
+            self.on_toggle(self)
+
+    def set_folded(self, folded):
+        self.folded = bool(folded)
+        if self.folded:
+            self.body.pack_forget()
+            self.chevron.configure(text="\u25b8")
+        else:
+            self.body.pack(fill="x")
+            self.chevron.configure(text="\u25be")
+
+
+class SlimScroll(tk.Canvas):
+    """A 6px scroll indicator that overlays its list instead of taking a column.
+
+    The list used to have no scrollbar at all ("the wheel and PageDown are enough"), which is
+    true until you want to drag to the top of 800 rows. A ttk.Scrollbar costs 15px of width
+    that the form panes cannot spare, so this draws a thumb over the tree's right edge and
+    disappears when the list fits.
+    """
+
+    def __init__(self, parent, command, width=7):
+        super().__init__(parent, width=width, bg=C_BG, highlightthickness=0, bd=0,
+                         cursor="sb_v_double_arrow")
+        self._command = command
+        self._first, self._last = 0.0, 1.0
+        self._drag = None
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Button-1>", self._press)
+        self.bind("<B1-Motion>", self._motion)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
+
+    def set(self, first, last):
+        self._first, self._last = float(first), float(last)
+        need = not (self._first <= 0.0 and self._last >= 1.0)
+        if need and not self.winfo_manager():
+            self.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne")
+        elif not need and self.winfo_manager():
+            self.place_forget()
+        if need:
+            self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        h = self.winfo_height()
+        if not h:
+            return
+        top = int(self._first * h)
+        bottom = max(top + 18, int(self._last * h))
+        w = int(self.cget("width"))
+        self.create_rectangle(w - 5, top + 1, w - 1, bottom - 1,
+                              fill=C_HINT, width=0)
+
+    def _frac(self, y):
+        h = max(1, self.winfo_height())
+        span = max(0.02, self._last - self._first)
+        return max(0.0, min(1.0, y / h - span / 2))
+
+    def _press(self, evt):
+        self._drag = self._frac(evt.y)
+        self._command("moveto", self._drag)
+
+    def _motion(self, evt):
+        if self._drag is None:
+            return
+        self._command("moveto", self._frac(evt.y))
 
 
 # Nicknames the database does not spell out. Typing the alias lists the clubs whose name
@@ -274,14 +448,22 @@ class Editor(tk.Tk):
             pass                       # no bundled icon: Tk's default shows, nothing breaks
         self.title(f"{settings.APP_NAME} — SP Football Life 2027")
         self.configure(bg=C_BG)
+        self.cfg = settings.load()
         win_w = min(int(1460 * self.ui), self.winfo_screenwidth())
         win_h = min(int(920 * self.ui), self.winfo_screenheight())
+        # the size the window was left at last time, within what this screen allows
+        try:
+            last_w, last_h = (int(v) for v in str(self.cfg.get("window") or "").split("x"))
+            win_w = max(min(int(1180 * self.ui), win_w), min(last_w, self.winfo_screenwidth()))
+            win_h = max(min(int(760 * self.ui), win_h), min(last_h, self.winfo_screenheight()))
+        except ValueError:
+            pass
         self.geometry(f"{win_w}x{win_h}")
         self.minsize(min(int(1180 * self.ui), win_w), min(int(760 * self.ui), win_h))
 
-        self.cfg = settings.load()
         self.FONT = _pick_font()
         self._chip_font = tkfont.Font(root=self, family=self.FONT, size=8)   # pill chips measure
+        self._label_font = tkfont.Font(root=self, family=self.FONT, size=9)  # filter chips
         configured = self.cfg["game_dir"]
         self.game_dir = settings.game_dir(self.cfg)      # searches the disk if that folder is gone
         self.auto_found = configured != self.game_dir
@@ -329,12 +511,18 @@ class Editor(tk.Tk):
         self._radar_poly = None
         self._radar_axes = None
         self.index = None          # record index shown
+        self.view_mode = tk.StringVar(value="players")   # the list's Players/Clubs tab
         self.reindex()
         self.dirty = False
         self.vars = {}
         self._undo = []           # [(undo_callable, redo_callable), ...]
         self._redo = []
         self._edited_pids = set()  # players touched this session, for the "changed only" view
+        self._changes = {}         # (table, record id, field) -> pending edit, the change ledger
+        self._field_widgets = {}   # (table, record id, field) -> the widget that shows it
+        self._field_section = {}   # field name -> section key, for the per-section counts
+        self._section_counts = {}  # section key -> the label that carries its changed count
+        self._ovr_cache = {}       # record index -> OVR, invalidated when an ability changes
         self._build_style()
         self._build_ui()
         self._apply_cursors()
@@ -374,31 +562,51 @@ class Editor(tk.Tk):
         self.club_counts = {}
         for tid in self.player_team.values():
             self.club_counts[tid] = self.club_counts.get(tid, 0) + 1
+        self.index_by_pid = {self.table.pid(i): i for i in range(len(self.table.records))}
+        self._country_ids = {name: cid for cid, name in pesdb.COUNTRIES.items() if name}
+        self._country_names = sorted(set(pesdb.COUNTRIES.values()))
+        self._ovr_cache = {}
 
     # ---------------------------------------------------------------- style
     def _build_style(self):
         st = ttk.Style(self)
         st.theme_use("clam")
+        # One type scale for the whole window: labels, values, section headings, quiet text.
+        # Every widget names one of these instead of carrying its own size, which is what kept
+        # the form at 8pt everywhere while the card shouted at 26.
+        self.F_LABEL = (self.FONT, 9)
+        self.F_VALUE = (self.FONT, 10)
+        self.F_SECTION = (self.FONT, 10, "bold")
+        self.F_SMALL = (self.FONT, 9)
+        self.F_TINY = (self.FONT, 8)
         st.configure(".", background=C_BG, foreground=C_FG, fieldbackground=C_PANEL2,
                      bordercolor=C_PANEL2, lightcolor=C_PANEL2, darkcolor=C_PANEL2,
                      troughcolor=C_PANEL, focuscolor=C_ACCENT)
         st.configure("Treeview", background=C_PANEL, fieldbackground=C_PANEL,
-                     foreground=C_FG, rowheight=int(24 * self.ui), borderwidth=0)
-        st.configure("Treeview.Heading", background=C_PANEL2, foreground=C_ACCENT,
-                     relief="flat", font=(self.FONT, 9, "bold"))
+                     foreground=C_FG, rowheight=int(25 * self.ui), borderwidth=0,
+                     font=self.F_LABEL)
+        st.configure("Treeview.Heading", background=C_PANEL2, foreground=C_DIM,
+                     relief="flat", font=(self.FONT, 8, "bold"))
         st.map("Treeview", background=[("selected", C_SEL)],
                foreground=[("selected", C_FG)])
         st.configure("TEntry", fieldbackground=C_PANEL2, foreground=C_FG, insertcolor=C_FG,
-                     padding=(2, 1))
+                     padding=(3, 2))
         st.configure("TCombobox", fieldbackground=C_PANEL2, background=C_PANEL2, foreground=C_FG,
                      selectbackground=C_PANEL2, selectforeground=C_FG, arrowcolor=C_ACCENT,
-                     insertcolor=C_FG, padding=(2, 1))
+                     insertcolor=C_FG, padding=(3, 2))
         st.map("TCombobox",
                fieldbackground=[("readonly", C_PANEL2), ("focus", C_PANEL2)],
                foreground=[("readonly", C_FG)],
                selectbackground=[("readonly", C_PANEL2)],
                selectforeground=[("readonly", C_FG)],
                background=[("active", C_PANEL2)])
+        # A pending edit tints the field itself (C_DIRTY) instead of only the footer dot; the
+        # Dirty.* siblings are the same widgets with that background.
+        st.configure("Dirty.TEntry", fieldbackground=C_DIRTY, foreground=C_FG)
+        st.configure("Dirty.TCombobox", fieldbackground=C_DIRTY, foreground=C_FG,
+                     selectbackground=C_DIRTY, selectforeground=C_FG, arrowcolor=C_ACCENT)
+        st.map("Dirty.TCombobox", fieldbackground=[("readonly", C_DIRTY), ("focus", C_DIRTY)],
+               foreground=[("readonly", C_FG)])
         self.option_add("*TCombobox*Listbox.background", C_PANEL2)
         self.option_add("*TCombobox*Listbox.foreground", C_FG)
         self.option_add("*TCombobox*Listbox.selectBackground", C_SEL)
@@ -406,13 +614,15 @@ class Editor(tk.Tk):
         self.option_add("*Spinbox.background", C_PANEL2)
         self.option_add("*Spinbox.foreground", C_FG)
         self.option_add("*Spinbox.insertBackground", C_FG)
-        self.option_add("*Spinbox.buttonBackground", C_PANEL)
+        self.option_add("*Spinbox.buttonBackground", C_PANEL2)
         self.option_add("*Spinbox.activeBackground", C_HOVER)
-        self.option_add("*Spinbox.highlightThickness", 0)
+        self.option_add("*Spinbox.highlightThickness", 1)
+        self.option_add("*Spinbox.highlightBackground", C_PANEL2)
+        self.option_add("*Spinbox.highlightColor", C_ACCENT)
         self.option_add("*Spinbox.relief", "flat")
         self.option_add("*Spinbox.bd", 0)
         st.configure("TSpinbox", fieldbackground=C_PANEL2, foreground=C_FG, arrowcolor=C_ACCENT,
-                     padding=(2, 1))
+                     padding=(3, 2))
         st.configure("TCheckbutton", background=C_BG, foreground=C_FG, padding=(0, 0))
         st.map("TCheckbutton", background=[("active", C_BG)])
         # ttk button colours have to go through map(): on the clam theme a plain configure()
@@ -420,15 +630,19 @@ class Editor(tk.Tk):
         st.configure("Save.TButton", font=(self.FONT, 10, "bold"), padding=(18, 8), borderwidth=0)
         st.map("Save.TButton", background=[("", C_ACCENT), ("active", C_ACCENT_HI)],
                foreground=[("", C_INK)])
-        st.configure("Ghost.TButton", padding=(12, 6), borderwidth=0)
-        st.map("Ghost.TButton", background=[("", C_PANEL2), ("active", C_HOVER)],
-               foreground=[("", C_FG)])
+        # -4 chars is the smallest minimum clam allows without clipping a label: the
+        # secondary buttons size to their text instead of the theme's 11-char floor
+        st.configure("Ghost.TButton", font=(self.FONT, 9), padding=(10, 5),
+                     width=-4, borderwidth=0)
+        st.map("Ghost.TButton", background=[("", C_PANEL2), ("active", C_HOVER),
+                                            ("disabled", C_PANEL2)],
+               foreground=[("", C_FG), ("disabled", C_HINT)])
 
     # ---------------------------------------------------------------- ui
     def _build_ui(self):
         self._build_header()
         body = tk.Frame(self, bg=C_BG)
-        body.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self._build_body_one_page(body)
 
         foot = tk.Frame(self, bg=C_PANEL)
@@ -436,11 +650,18 @@ class Editor(tk.Tk):
         self.statusbar = tk.Label(foot, text="", bg=C_PANEL, fg=C_DIM, anchor="w",
                                   font=(self.FONT, 9), padx=12, pady=6)
         self.statusbar.pack(side="left", fill="x", expand=True)
-        tk.Label(foot, text="Ctrl+Z undo · Ctrl+S save", bg=C_PANEL, fg=C_LINE_SOFT,
-                 font=(self.FONT, 8)).pack(side="right", padx=(10, 12))
+        self._hint_label = tk.Label(foot, text="Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save",
+                                    bg=C_PANEL, fg=C_HINT, font=(self.FONT, 8))
+        self._hint_label.pack(side="right", padx=(10, 12))
         self.lbl_dirty = tk.Label(foot, text="", bg=C_PANEL, fg=C_MAGENTA,
                                   font=(self.FONT, 10, "bold"))
         self.lbl_dirty.pack(side="right", padx=(10, 0))
+        # The change count is the always-visible half of the change ledger: the drawer behind it
+        # lists every pending edit, so "what have I touched?" never needs a save first.
+        self.lbl_changes = tk.Label(foot, text="", bg=C_PANEL, fg=C_ACCENT,
+                                    font=(self.FONT, 9, "bold"), cursor="hand2")
+        self.lbl_changes.pack(side="right", padx=(10, 0))
+        self.lbl_changes.bind("<Button-1>", lambda e: self.open_changes())
 
         self.bind("<Control-comma>", lambda e: self.open_settings())
         self.bind("<Control-s>", self.on_save_key)
@@ -468,7 +689,7 @@ class Editor(tk.Tk):
     # ---------------------------------------------------------------- chrome
     def _build_header(self):
         header = tk.Frame(self, bg=C_BG)
-        header.pack(fill="x", padx=16, pady=(10, 8))
+        header.pack(fill="x", padx=12, pady=(10, 8))
         self._header = header
         top = tk.Frame(header, bg=C_BG)
         top.pack(fill="x")
@@ -486,7 +707,8 @@ class Editor(tk.Tk):
         # search: a dim hint label lies over the entry while it is empty and unfocused; the
         # hint is not entry text, so the search variable itself stays clean
         self.q = tk.StringVar()
-        box = tk.Frame(top, bg=C_PANEL2, highlightthickness=1, highlightbackground=C_LINE)
+        self._search_box = box = tk.Frame(top, bg=C_PANEL2, highlightthickness=1,
+                                          highlightbackground=C_LINE)
         box.pack(side="left", fill="x", expand=True, padx=(16, 12))
         self.search_entry = ent = tk.Entry(box, textvariable=self.q, bg=C_PANEL2, fg=C_FG,
                                            insertbackground=C_FG, relief="flat", bd=0)
@@ -494,7 +716,7 @@ class Editor(tk.Tk):
         ent.bind("<Return>", lambda e: self.open_first(self.q.get()))
         ent.bind("<FocusIn>", self._search_focus_in)
         ent.bind("<FocusOut>", self._search_focus_out)
-        tk.Label(box, text="Ctrl+F", bg=C_PANEL2, fg=C_LINE_SOFT,
+        tk.Label(box, text="Ctrl+F", bg=C_PANEL2, fg=C_HINT,
                  font=(self.FONT, 8)).pack(side="right", padx=(0, 8))
         self._search_focused = False
         self._search_hint = tk.Label(box, text="Search players, clubs, IDs…", bg=C_PANEL2,
@@ -509,9 +731,17 @@ class Editor(tk.Tk):
         under XWayland, so the hint used to reappear over the caret and read as a glitch."""
         self._search_focused = True
         self._search_hint.place_forget()
+        try:
+            self._search_box.configure(highlightbackground=C_ACCENT, highlightcolor=C_ACCENT)
+        except (AttributeError, tk.TclError):
+            pass
 
     def _search_focus_out(self, *_):
         self._search_focused = False
+        try:
+            self._search_box.configure(highlightbackground=C_LINE)
+        except (AttributeError, tk.TclError):
+            pass
         self._show_search_hint()
 
     def _show_search_hint(self, *_):
@@ -538,6 +768,13 @@ class Editor(tk.Tk):
                             bd=0, padx=12, pady=3, cursor="hand2")
         menu = tk.Menu(btn, tearoff=0, bg=C_PANEL2, fg=C_FG,
                        activebackground=C_ACCENT, activeforeground=C_INK, bd=0)
+        menu.add_command(label="Save to game", accelerator="Ctrl+S",
+                         command=self._later(self.save))
+        menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self._later(self.undo))
+        menu.add_command(label="Redo", accelerator="Ctrl+Y", command=self._later(self.redo))
+        menu.add_command(label="Discard all unsaved changes…",
+                         command=self._later(self.discard_changes))
+        menu.add_separator()
         menu.add_command(label="Settings…", accelerator="Ctrl+,",
                          command=self._later(self.open_settings))
         menu.add_command(label="Open backups folder",
@@ -581,7 +818,8 @@ class Editor(tk.Tk):
         self._bar_groups = None
         defs = [("Save to game", "Save.TButton", self.save),
                 ("Undo", "Ghost.TButton", self.undo),
-                ("Revert", "Ghost.TButton", self.on_select_refresh),
+                ("Redo", "Ghost.TButton", self.redo),
+                ("Discard", "Ghost.TButton", self.discard_changes),
                 ("≡  Menu", "Ghost.TButton", None)]
 
         def build_rows(groups):
@@ -601,15 +839,19 @@ class Editor(tk.Tk):
                     self._bar_buttons.append(button)
                 self._bar_rows.append(frame)
 
-        def layout_bar(_=None):
-            """Rows are re-split to whatever fits, so no button is ever clipped away."""
-            space = self._header.winfo_width()
+        def layout_bar(evt=None):
+            """Rows are re-split to whatever fits, so no button is ever clipped away.
+
+            The width comes from the event: during a resize `winfo_width()` can still report
+            the previous size, which is how the menu button ended up on a fifth row.
+            """
+            space = evt.width if evt is not None and evt.width > 1 else self._header.winfo_width()
             if space <= 1:
                 space = int(700 * self.ui)                 # the header is not mapped yet
             # the bar shares the row with the brand: split for the width the bar gets once the
             # brand has drawn, and never below one button's worth
             brand = self._title.winfo_reqwidth() + self._subtitle.winfo_reqwidth()
-            space = max(int(165 * self.ui), space - brand - int(16 * self.ui))
+            space = max(int(196 * self.ui), space - brand - int(16 * self.ui))
             widths = [b.winfo_reqwidth() + 6 for b in self._bar_buttons] or \
                      [int((len(text) + 3) * 8 * self.ui) for text, _s, _c in defs]
             groups, row, used = [], [], 0
@@ -635,29 +877,49 @@ class Editor(tk.Tk):
         """Two form columns beside the list; they stack into one when the window is narrow."""
         self._one_page_body = body
         self._one_page_mode = None
+        self._one_page_wide = True
         self._one_page_job = None
         body.bind("<Configure>", self._maybe_fold_one_page)
         self._layout_one_page(body, wide=True)
+        # the first <Configure> arrives before the window has its real width, so the fold is
+        # decided again once the window is mapped; otherwise a wide window could open stacked
+        self._fold_job = self.after(150, self._recheck_fold)
+
+    def _recheck_fold(self):
+        self._fold_job = None
+        body = getattr(self, "_one_page_body", None)
+        if body is None or not body.winfo_exists():
+            return
+        width = body.winfo_width()
+        if width > 100:
+            self._maybe_fold_one_page(type("E", (), {"width": width})())
 
     def _maybe_fold_one_page(self, evt):
         """Rebuild the body when the window crosses a size the columns still fit at.
 
         The rebuild is where the compact grids pick their column counts, so a window that is
-        too small for the wide layout gets the stacked one instead of clipped fields.
+        too small for the wide layout gets the stacked one instead of clipped fields. An
+        unmapped body reports a handful of pixels; that is not a layout decision.
         """
-        wide = evt.width >= 1120 * self.ui
-        mode = (wide, *self._detail_columns(evt.width, wide).values())
+        width = evt.width
+        if width < 200:
+            return
+        wide = width >= 1120 * self.ui
+        mode = (wide, *self._detail_columns(width, wide).values())
         if mode == self._one_page_mode:
             return
-        self._one_page_mode = mode
         if self._one_page_job is not None:
             self.after_cancel(self._one_page_job)
         self._one_page_job = self.after(120, self._finish_fold)
 
     def _finish_fold(self):
         self._one_page_job = None
-        mode = self._one_page_mode
-        self._layout_one_page(self._one_page_body, wide=mode is None or mode[0])
+        body = self._one_page_body
+        width = body.winfo_width()
+        if width < 200:                      # still not sized: leave the layout alone
+            return
+        wide = width >= 1120 * self.ui
+        self._layout_one_page(body, wide=wide)
 
     def _detail_columns(self, body_w, wide):
         """How many cells per row each form grid fits, for a body `body_w` px wide.
@@ -677,14 +939,18 @@ class Editor(tk.Tk):
         def fit(pane, most, cell):
             return max(1, min(most, int(pane / (cell * self.ui))))
         return {
-            "details": fit(mid_w, 3, 272),
-            "contract": fit(mid_w, 3, 260),
+            "details": fit(mid_w, 3, 262),
+            "contract": fit(mid_w, 3, 250),
             "positions": fit(mid_w, 5, 128),
-            "abilities": fit(mid_w, 3, 165),
-            "skills": fit(right_w, 4, 140),
+            "abilities": fit(mid_w, 3, 150),
+            "skills": fit(right_w, 4, 118),
         }
 
-    def _layout_one_page(self, body, wide):
+    def _layout_one_page(self, body, wide, width=None, height=None):
+        """Build (or rebuild) the body. `width`/`height` plan a layout for a size the window
+        may not currently have — the tests use that to check the design size on a desktop
+        whose window manager tiles the window to its own size."""
+        self._one_page_wide = wide
         for child in body.winfo_children():
             child.destroy()
         for c in range(3):                     # the wide layout's column weights survived the fold
@@ -694,21 +960,27 @@ class Editor(tk.Tk):
         # the list keeps the width its own columns ask for; the form panes get what is left
         self.update_idletasks()
         self._list_w = max(int(236 * self.ui), left.winfo_reqwidth())
-        cols = self._detail_columns(body.winfo_width(), wide)
+        body_w = width or body.winfo_width()
+        body_h = height or body.winfo_height()
+        cols = self._detail_columns(body_w, wide)
+        self._plan = {"width": body_w, "height": body_h, "wide": wide}
         if wide:
-            body_w = body.winfo_width() or int(1460 * self.ui)
-            avail = max(360, body_w - self._list_w - 28)
-            mid_w = max(int(300 * self.ui), int(avail * 0.55) - 14)
-            right_w = max(int(300 * self.ui), avail - mid_w - 28)
+            # the right column (radar, 48 skill chips, club) and the middle one (card, 25
+            # ability rows, positions, details) are both measured; 45/55 with 8px gutters is
+            # the split the design size fits both at
+            avail = max(360, body_w - self._list_w - 16)
+            right_w = max(int(300 * self.ui), int(avail * 0.45))
+            mid_w = max(int(300 * self.ui), avail - right_w - 8)
+            self._plan.update(mid=mid_w, right=right_w)
             body.columnconfigure(0, minsize=self._list_w)
             body.columnconfigure(1, minsize=mid_w, weight=55)
             body.columnconfigure(2, minsize=right_w, weight=45)
             body.rowconfigure(0, weight=1)
             left.grid(row=0, column=0, sticky="nsew")
             mid = tk.Frame(body, bg=C_BG)
-            mid.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+            mid.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
             right = tk.Frame(body, bg=C_BG)
-            right.grid(row=0, column=2, sticky="nsew", padx=(14, 0))
+            right.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
             center = self._scroll_pane(mid)
             self._build_player_card(center)
             self._build_attributes(center, with_radar=False, cols=cols["abilities"])
@@ -725,7 +997,7 @@ class Editor(tk.Tk):
             body.rowconfigure(0, weight=1)
             left.grid(row=0, column=0, sticky="nsew")
             detail = tk.Frame(body, bg=C_BG)
-            detail.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+            detail.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
             col = self._scroll_pane(detail)
             self._build_player_card(col)
             self._build_attributes(col, cols=cols["abilities"])
@@ -734,6 +1006,7 @@ class Editor(tk.Tk):
             self._build_career(col, cols["contract"])
             self._build_skills(col, cols=cols["skills"])
             self._build_club(col)
+        self._one_page_mode = (wide, *self._detail_columns(body_w, wide).values())
         if getattr(self, "statusbar", None) is not None:    # a relayout, not the first build
             self.populate(self.q.get())
             if self.index is not None:
@@ -779,25 +1052,41 @@ class Editor(tk.Tk):
         self.cb_pos.bind("<<ComboboxSelected>>", lambda e: self.populate(self.q.get()))
 
         self.changed_only = tk.BooleanVar(value=False)
-        ttk.Checkbutton(left, text="Changed only", variable=self.changed_only,
-                        style="TCheckbutton",
-                        command=lambda: self.populate(self.q.get())).pack(anchor="w", pady=(0, 4))
+        self.pill_changed = CheckPill(left, "Changed only", self._label_font, self.changed_only,
+                                      command=lambda: self.populate(self.q.get()))
+        self.pill_changed.pack(anchor="w", pady=(0, 3))
 
         self.free_agents_only = tk.BooleanVar(value=False)
-        ttk.Checkbutton(left, text="Free agents only", variable=self.free_agents_only,
-                        style="TCheckbutton",
-                        command=lambda: self.populate(self.q.get())).pack(anchor="w", pady=(0, 4))
+        self.pill_free = CheckPill(left, "Free agents only", self._label_font, self.free_agents_only,
+                                   command=lambda: self.populate(self.q.get()))
+        self.pill_free.pack(anchor="w", pady=(0, 3))
+
+        # The two result kinds are tabs rather than a hidden mode switch: a club search keeps
+        # its players on the Players tab and its clubs on the Clubs tab, with counts.
+        tabs = tk.Frame(left, bg=C_BG)
+        tabs.pack(fill="x", pady=(2, 4))
+        self.tab_players = tk.Label(tabs, text="Players", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                    cursor="hand2", font=self.F_LABEL)
+        self.tab_players.pack(side="left", padx=(0, 4))
+        self.tab_players.bind("<Button-1>", lambda e: self.set_view_mode("players"))
+        self.tab_clubs = tk.Label(tabs, text="Clubs", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                  cursor="hand2", font=self.F_LABEL)
+        self.tab_clubs.pack(side="left")
+        self.tab_clubs.bind("<Button-1>", lambda e: self.set_view_mode("clubs"))
 
         cols = ("id", "name", "club", "pos", "ovr", "age")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="extended")
-        for c, t, w, anchor in (("id", "ID", 42, "e"), ("name", "Name", 100, "w"),
-                                ("club", "Club", 80, "w"), ("pos", "Pos", 30, "center"),
+        for c, t, w, anchor in (("id", "ID", 40, "e"), ("name", "Name", 84, "w"),
+                                ("club", "Club", 70, "w"), ("pos", "Pos", 30, "center"),
                                 ("ovr", "OVR", 30, "center"), ("age", "Age", 26, "center")):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=int(w * self.ui), anchor=anchor, stretch=(c == "name"))
         # no scrollbar: the wheel, arrows and PageUp/PageDown move the list, and the status
         # line already says how many rows there are
         self.tree.pack(side="left", fill="both", expand=True)
+        # the indicator overlays the tree's right edge, so a list that fits costs no width
+        self.list_scroll = SlimScroll(left, self.tree.yview)
+        self.tree.configure(yscrollcommand=self.list_scroll.set)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         self.tree.bind("<Return>", lambda e: self.on_select())
 
@@ -818,8 +1107,8 @@ class Editor(tk.Tk):
                     w.bind("<FocusOut>", self._clear_selection, add="+")
                 elif isinstance(w, ttk.Treeview):
                     w.configure(cursor="arrow")
-                elif isinstance(w, tk.Canvas) and w.cget("cursor") == "sb_h_double_arrow":
-                    continue                      # the ability bars are drag handles
+                elif isinstance(w, tk.Canvas) and str(w.cget("cursor")).startswith("sb_"):
+                    continue                      # the ability bars and the list thumb are drag handles
                 elif isinstance(w, (ttk.Button, tk.Canvas, ttk.Scrollbar)):
                     w.configure(cursor="hand2")
                 else:
@@ -896,68 +1185,147 @@ class Editor(tk.Tk):
         label.master.bind("<Configure>", fit, add="+")
         return label
 
-    def _section(self, parent, text):
-        f = tk.LabelFrame(parent, text=" " + text.upper() + " ", bg=C_BG, fg=C_ACCENT,
-                          bd=0, font=(self.FONT, 9, "bold"), padx=7, pady=4)
-        f.pack(fill="x", pady=(0, 6))
-        return f
+    def _section(self, parent, text, key=None, hint=None):
+        """A collapsible form section; returns the body frame callers pack their grid into.
+
+        The label used to be the LabelFrame's border text — wide parenthetical titles clipped in
+        a narrow pane and nothing could be folded away, so a 130-field form was one scroll. The
+        title now carries a chevron, the hint moved beside it in quiet type, and the body (the
+        grid) can fold. `key` names the section for the folded-state memory and the change count.
+        """
+        collapsed = key is not None and key in (self.cfg.get("collapsed") or [])
+        sec = Section(parent, text, hint=hint, collapsed=collapsed,
+                      fonts=(self.F_SECTION, self.F_TINY),
+                      on_toggle=lambda s: self._remember_section(key, s))
+        sec.pack(fill="x", pady=(0, 3))
+        sec.section_key = key
+        if key is not None:
+            self._section_counts[key] = sec.count_label
+        return sec.body
+
+    def _remember_section(self, key, sec):
+        """Persist which sections are folded, so a reopened window looks like it was left."""
+        if key is None:
+            return
+        folded = [k for k in (self.cfg.get("collapsed") or []) if k != key]
+        if sec.folded:
+            folded.append(key)
+        self.cfg["collapsed"] = folded
+        try:
+            settings.save(self.cfg)
+        except OSError:
+            pass
 
     # ---- identity
     def _build_player_card(self, parent):
-        """The player card: photo, name, meta line, value chips and the big OVR."""
-        head = self._section(parent, "Player")
+        """The player card: photo, name, meta line, value chips, OVR and the two name slots."""
+        head = self._section(parent, "Player", key="player")
         top = tk.Frame(head, bg=C_BG)
         top.pack(fill="x", pady=(0, 2))
         side = int(PHOTO_SIDE * self.ui)
-        slot = tk.Frame(top, width=side, height=side, bg=C_PANEL2)
-        slot.pack(side="left", padx=(0, 10))
+        self._photo_slot = slot = tk.Frame(top, width=side, height=side, bg=C_PANEL2)
         slot.pack_propagate(False)
         self.photo = tk.Label(slot, bg=C_PANEL2, bd=0, text="no photo", fg=C_DIM,
-                              font=(self.FONT, 8))
+                              font=self.F_TINY)
         self.photo.pack(fill="both", expand=True)
         self.photo_img = None
+        self._photo_side = side
+        self._sync_photo_slot()
+        # a 128px photo cannot shrink, so on a pane too narrow to hold it the card drops the
+        # photo rather than squashing the face into a 116px slot
+        top.bind("<Configure>", lambda e: self._fit_photo_slot(e.width), add="+")
 
         ovr_box = tk.Frame(top, bg=C_BG)
         ovr_box.pack(side="right", padx=(10, 0))
-        self.ovr_big = tk.Label(ovr_box, text="—", bg=C_BG, fg=C_GREEN,
-                                font=(self.FONT, 26, "bold"))
+        self.ovr_big = tk.Label(ovr_box, text="\u2014", bg=C_BG, fg=C_GREEN,
+                                font=(self.FONT, 30, "bold"))
         self.ovr_big.pack()
-        tk.Label(ovr_box, text="OVR", bg=C_BG, fg=C_DIM, font=(self.FONT, 8)).pack()
+        tk.Label(ovr_box, text="OVR", bg=C_BG, fg=C_DIM, font=self.F_TINY).pack()
 
         col = tk.Frame(top, bg=C_BG)
         col.pack(side="left", fill="both", expand=True)
         self.lbl_hero = tk.Label(col, text="Select a player", bg=C_BG, fg=C_FG,
-                                 font=(self.FONT, 14, "bold"), anchor="w")
-        self.lbl_hero.pack(fill="x", pady=(0, 3))
+                                 font=(self.FONT, 16, "bold"), anchor="w")
+        self.lbl_hero.pack(fill="x", pady=(0, 2))
         self.lbl_sub = tk.Label(col, text="Type a name or ID above, then press Enter",
                                 bg=C_BG, fg=C_DIM, anchor="w", justify="left",
-                                font=(self.FONT, 9))
+                                font=self.F_SMALL)
         self._wrap(self.lbl_sub)
-        self.lbl_sub.pack(fill="x", pady=(0, 5))
+        self.lbl_sub.pack(fill="x", pady=(0, 4))
 
         chips = tk.Frame(col, bg=C_BG)
         chips.pack(fill="x", pady=(0, 5))
         self._card_chips = {}
         for name in ("Style", "Height", "Weight", "Age", "Form"):
-            chip = Pill(chips, "—", self._chip_font)
+            chip = Pill(chips, "\u2014", self._chip_font)
             chip.pack(side="left", padx=(0, 6))
             self._card_chips[name] = chip
 
         grid = tk.Frame(col, bg=C_BG)
         grid.pack(fill="x")
+        self._name_counters = {}
         for i, (label, key) in enumerate((("Full name", "name"), ("Shirt name", "shirt"))):
-            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w").grid(
-                row=i, column=0, sticky="w", pady=1)
+            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w",
+                     font=self.F_LABEL).grid(row=i, column=0, sticky="w", pady=1)
             v = tk.StringVar()
             self.vars[key] = v
-            e = ttk.Entry(grid, textvariable=v, width=40)
+            e = ttk.Entry(grid, textvariable=v, width=34, font=self.F_VALUE)
             e.grid(row=i, column=1, sticky="we", padx=6, pady=1)
             e.bind("<FocusOut>", lambda ev, k=key: self.apply_name(k))
+            counter = tk.Label(grid, text="", bg=C_BG, fg=C_HINT, font=self.F_TINY, width=6,
+                               anchor="e")
+            counter.grid(row=i, column=2, sticky="e")
+            v.trace_add("write", lambda *a, k=key: self._update_name_counter(k))
+            self._name_counters[key] = counter
+            self._field_widgets["Full name" if key == "name" else "Shirt name"] = e
+            self._field_section["Full name" if key == "name" else "Shirt name"] = "player"
         grid.columnconfigure(1, weight=1)
+
+    def _name_field(self, key):
+        return "Full name" if key == "name" else "Shirt name"
+
+    def _update_name_counter(self, key):
+        """Names are capped at 60 bytes in the record; say so instead of silently truncating."""
+        lab = getattr(self, "_name_counters", {}).get(key)
+        if lab is None:
+            return
+        text = self.vars[key].get()
+        size = len(text.encode("utf-8"))
+        lab.configure(text=f"{size}/60", fg=C_WARN if size > 60 else C_HINT)
+
+    def _sync_photo_slot(self):
+        """A 128px empty box is not worth the space when photos are switched off."""
+        slot = getattr(self, "_photo_slot", None)
+        if slot is None:
+            return
+        show = bool(self.cfg.get("photos", True))
+        self._fit_photo_slot(slot.master.winfo_width() or int(600 * self.ui), show=show)
+
+    def _fit_photo_slot(self, row_width, show=None):
+        """Show the photo only when the card row can hold it uncropped."""
+        slot = getattr(self, "_photo_slot", None)
+        if slot is None:
+            return
+        if show is None:
+            show = bool(self.cfg.get("photos", True))
+        need = int(self._photo_side + 10 + 210 * self.ui)   # photo + gap + name/OVR minimum
+        want = show and row_width >= need
+        if want == bool(slot.winfo_manager()):
+            return
+        if want:
+            siblings = [w for w in slot.master.winfo_children() if w is not slot]
+            if siblings:
+                slot.pack(side="left", padx=(0, 10), before=siblings[0])
+            else:
+                slot.pack(side="left", padx=(0, 10))
+        else:
+            slot.pack_forget()
 
     def _build_position_grid(self, parent, cols=5):
         """Position ratings as pill chips; a click cycles none -> can play -> natural."""
-        sec = self._section(parent, "Position ratings  (click to cycle: none · can play · natural)")
+        sec = self._section(parent, "Position ratings", key="positions",
+                            hint="click cycles none \u00b7 can play \u00b7 natural \u00b7 "
+                                 "right-click reverses")
         grid = tk.Frame(sec, bg=C_BG)
         grid.pack(fill="x")
         self._pos_chips = {}
@@ -966,16 +1334,19 @@ class Editor(tk.Tk):
             v = tk.StringVar()
             self.vars["Pos " + label] = v
             chip = Pill(grid, label, self._chip_font,
-                        lambda l=label: self.cycle_position(l))
+                        lambda l=label: self.cycle_position(l),
+                        lambda l=label: self.cycle_position(l, back=True))
             chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
             self._pos_chips[label] = chip
+            self._field_section["Pos " + label] = "positions"
 
-    def cycle_position(self, label):
-        """Click-cycle a position rating chip; applies like the old combobox did."""
+    def cycle_position(self, label, back=False):
+        """Click-cycle a position rating chip; right-click walks the other way."""
         if self.index is None:
             return
         field = "Pos " + label
-        val = (["none", "can play", "natural"].index(self.vars[field].get()) + 1) % 3
+        step = -1 if back else 1
+        val = (["none", "can play", "natural"].index(self.vars[field].get()) + step) % 3
         self.vars[field].set(["none", "can play", "natural"][val])
         self.apply_position(label)
         self._style_position_chip(label)
@@ -985,7 +1356,9 @@ class Editor(tk.Tk):
         if chip is None:
             return
         val = ["none", "can play", "natural"].index(self.vars["Pos " + label].get())
-        chip.set_text(label if val == 0 else f"{label} {val}")
+        # the glyph carries the state as well as the colour: "CB" none, "CB \u00b7" can play,
+        # "CB \u2713" natural — so the three ratings survive a colour-blind palette
+        chip.set_text({0: label, 1: label + " \u00b7", 2: label + " \u2713"}[val])
         if val == 2:
             chip.set_state(fill=C_ACCENT, fg=C_INK, line=C_ACCENT)
         elif val == 1:
@@ -995,54 +1368,73 @@ class Editor(tk.Tk):
 
     def _build_details(self, parent, cols):
         get = {f[0]: f for f in pesdb.PHYSICAL}
-        details = self._section(parent, "Details")
+        details = self._section(parent, "Details", key="details")
         self._field_grid(details, [get["Age"], get["Height (cm)"], get["Weight (kg)"],
                                    get["Nationality"], get["Form"], get["Weak Foot Usage"],
                                    get["Weak Foot Accuracy"], get["Injury Resistance"],
                                    get["Stronger Foot"], get["Registered Position"],
-                                   get["Playing Style"]], cols)
+                                   get["Playing Style"]], cols, section="details")
 
     def _build_career(self, parent, cols):
-        rest = self._section(parent, "Contract · motion · celebration  (dates YYYYMMDD)")
+        # folded by default: twenty controls that are touched once a save, not once a player
+        rest = self._section(parent, "Contract \u00b7 motion \u00b7 celebration", key="career",
+                             hint="dates YYYYMMDD")
         dates = [f for f in pesdb.CAREER if f[0] in ("Contract Until", "Loan Until")]
         others = [f for f in pesdb.CAREER if f[0] not in ("Contract Until", "Loan Until")]
         # one grid, so the date row shares its columns with every row below it
-        self._field_grid(rest, dates + others + list(pesdb.MOTIONS), cols)
+        self._field_grid(rest, dates + others + list(pesdb.MOTIONS), cols, section="career")
 
-    def _field_grid(self, parent, fields, cols):
+    def _country_id(self, name):
+        return (getattr(self, "_country_ids", {}) or {}).get(name)
+
+    def _filter_nationality_values(self, evt, combo):
+        if evt.keysym in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = norm(combo.get().strip())
+        names = self._country_names
+        combo["values"] = ([n for n in names if q in norm(n)][:80] if q else names)
+
+    def _field_grid(self, parent, fields, cols, section=None):
         """Label + widget grid for the form sections (Details and the career block).
 
         Every row is `[label][widget]`; the label column has a fixed width and a uniform
         share of the spare width, so all rows share one pitch and the widgets line up down
         each column. Career fields use one 9-char box size instead of per-field widths.
         """
-        F = (self.FONT, 8)
+        F = self.F_LABEL
         career = {f[0] for f in pesdb.CAREER + pesdb.MOTIONS}
         grid = tk.Frame(parent, bg=C_BG)
         grid.pack(fill="x")
         for n, spec in enumerate(fields):
             label = spec[0]
             r, c = divmod(n, cols)
-            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=19, font=F).grid(
+            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=16, font=F).grid(
                 row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
             key = label
             v = tk.StringVar()
             self.vars[key] = v
             if label == "Stronger Foot":
                 w = ttk.Combobox(grid, textvariable=v, state="readonly", width=7,
-                                 values=("Right", "Left"), font=F)
+                                 values=("Right", "Left"), font=self.F_VALUE)
                 w.bind("<<ComboboxSelected>>", lambda e: self.apply_foot())
             elif label == "Registered Position":
-                w = ttk.Combobox(grid, textvariable=v, state="readonly", width=12,
-                                 values=pesdb.POS_NAMES, font=F)
+                w = ttk.Combobox(grid, textvariable=v, state="readonly", width=10,
+                                 values=pesdb.POS_NAMES, font=self.F_VALUE)
                 w.bind("<<ComboboxSelected>>", lambda e: self.apply_field("Registered Position"))
             elif label == "Playing Style":
-                w = ttk.Combobox(grid, textvariable=v, state="readonly", width=20,
-                                 values=PLAY_STYLES, font=F)
+                w = ttk.Combobox(grid, textvariable=v, state="readonly", width=17,
+                                 values=PLAY_STYLES, font=self.F_VALUE)
                 w.bind("<<ComboboxSelected>>", lambda e: self.apply_style())
+            elif label == "Nationality":
+                # a name, not a 0-511 id: the database already ships every country's name
+                w = ttk.Combobox(grid, textvariable=v, width=14, font=self.F_VALUE,
+                                 values=self._country_names)
+                w.bind("<<ComboboxSelected>>", lambda e: self.apply_field("Nationality"))
+                w.bind("<Return>", lambda e: self.apply_field("Nationality"))
+                w.bind("<KeyRelease>", lambda e, cb=w: self._filter_nationality_values(e, cb))
             elif label in ("Youth Club", "Owner Club"):
                 # a club id: the box shows the club name and takes one by name or id
-                w = ttk.Combobox(grid, textvariable=v, width=20, font=F,
+                w = ttk.Combobox(grid, textvariable=v, width=17, font=self.F_VALUE,
                                  values=self._club_ref_values())
                 w.bind("<<ComboboxSelected>>", lambda e, l=label: self.apply_club_ref(l))
                 w.bind("<Return>", lambda e, l=label: self.apply_club_ref(l))
@@ -1057,8 +1449,6 @@ class Editor(tk.Tk):
                     lo, hi = 100, 227
                 elif label == "Weight (kg)":
                     lo, hi = 30, 157
-                elif label == "Nationality":
-                    lo, hi = 0, 511
                 elif label in ("Contract Until", "Loan Until"):
                     lo, hi = 0, 99999999                 # YYYYMMDD
                 elif label == "Market Value":
@@ -1068,53 +1458,79 @@ class Editor(tk.Tk):
                 else:
                     lo, hi = add, add + (1 << width) - 1      # motion slots, celebrations
                 w = tk.Spinbox(grid, textvariable=v, from_=lo, to=hi,
-                               width=9 if label in career else 5, font=F,
+                               width=9 if label in career else 5, font=self.F_VALUE,
                                command=lambda k=key: self.apply_field(k))
                 w.bind("<FocusOut>", lambda e, k=key: self.apply_field(k))
                 w.bind("<Return>", lambda e, k=key: self.apply_field(k))
             w.grid(row=r, column=c * 2 + 1, sticky="w", pady=1, padx=(0, 8))
+            self._field_widgets[label] = w
+            if section is not None:
+                self._field_section[label] = section
         # no column weights: label and widget sit tight together, so the pitch stays even;
         # spare width stays at the right edge instead of opening gaps mid-form
 
     # ---- attributes
     def _build_attributes(self, parent, with_radar=True, cols=2):
-        F = (self.FONT, 8)
-        sec = self._section(parent, "Abilities  (40 – 99)")
+        """Abilities: label, number, and a bar wide enough to aim at.
+
+        The bar used to be a 30x11 canvas — 59 values across 29 pixels, so one pixel was two
+        ability points and a mis-click moved a player's speed. It now spans the row, the
+        number stays exact, and a ghost tick marks where the player started.
+        """
+        sec = self._section(parent, "Abilities", key="abilities", hint="40 \u2013 99")
         grid = tk.Frame(sec, bg=C_BG)
         grid.pack(fill="x")
         for n, (label, bit, width, add) in enumerate(pesdb.ATTRS):
             r, c = divmod(n, cols)
             tk.Label(grid, text=ATTR_SHORT.get(label, label), bg=C_BG, fg=C_DIM,
-                     anchor="w", width=12, font=F).grid(row=r, column=c * 3, sticky="w", pady=1)
+                     anchor="w", width=11, font=self.F_LABEL).grid(
+                row=r, column=c * 3, sticky="w", pady=1)
             v = tk.StringVar()
             self.vars[label] = v
-            sp = tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=3, font=F,
+            sp = tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=3, font=self.F_VALUE,
                             command=lambda k=label: self.apply_field(k))
             sp.bind("<FocusOut>", lambda e, k=label: self.apply_field(k))
             sp.bind("<Return>", lambda e, k=label: self.apply_field(k))
-            sp.grid(row=r, column=c * 3 + 1, sticky="w", padx=(0, 3))
-            bar = tk.Canvas(grid, width=30, height=11, bg=C_PANEL2, highlightthickness=0,
+            sp.grid(row=r, column=c * 3 + 1, sticky="w", padx=(0, 6))
+            bar = tk.Canvas(grid, width=44, height=int(18 * self.ui), bg=C_BAR,
+                            highlightthickness=1, highlightbackground=C_LINE,
                             cursor="sb_h_double_arrow")
-            bar.grid(row=r, column=c * 3 + 2, sticky="w", padx=(0, 10))
+            bar.grid(row=r, column=c * 3 + 2, sticky="we", padx=(0, 6), pady=1)
             bar.bind("<Button-1>", lambda e, l=label: self.drag_bar(l, e))
             bar.bind("<B1-Motion>", lambda e, l=label: self.drag_bar(l, e))
+            bar.bind("<Button-3>", lambda e, l=label: self.reset_field(l))
             self.vars[label + "::bar"] = bar
+            self._field_widgets[label] = sp
+            self._field_section[label] = "abilities"
+        for c in range(cols):
+            grid.columnconfigure(c * 3 + 2, weight=1)
 
         if with_radar:
             self._build_radar_pane(parent)
 
     def _build_radar_pane(self, parent):
-        prof = self._section(parent, "Ability profile  (group averages)")
-        self.radar = tk.Canvas(prof, height=int(180 * self.ui), bg=C_BG, highlightthickness=0)
+        prof = self._section(parent, "Ability profile", key="profile", hint="group averages")
+        self.radar = tk.Canvas(prof, height=int(205 * self.ui), bg=C_BG, highlightthickness=0)
         self.radar.pack(fill="x")
         self.radar.bind("<Configure>", lambda e: self.draw_radar())
 
     # ---- skills
     def _build_skills(self, parent, cols=2):
-        """Skills as pill chips; a click toggles, styled like the position chips."""
-        sec = self._section(parent, "Skills")
+        """Skills as pill chips with a filter and a count: 48 names is too many to scan."""
+        sec = self._section(parent, "Skills", key="skills", hint="click to toggle")
+        row = tk.Frame(sec, bg=C_BG)
+        row.pack(fill="x")
+        tk.Label(row, text="Filter", bg=C_BG, fg=C_DIM, font=self.F_LABEL).pack(side="left")
+        self.skill_filter = tk.StringVar()
+        entry = ttk.Entry(row, textvariable=self.skill_filter, width=14, font=self.F_LABEL)
+        entry.pack(side="left", padx=6)
+        entry.bind("<KeyRelease>", self._filter_skills)
+        self._skill_count = tk.Label(row, text="", bg=C_BG, fg=C_HINT, font=self.F_TINY)
+        self._skill_count.pack(side="right")
         grid = tk.Frame(sec, bg=C_BG)
-        grid.pack(fill="x")
+        grid.pack(fill="x", pady=(3, 0))
+        self._skill_grid = grid
+        self._skill_cols = cols
         self._skill_chips = {}
         for n, (label, bit) in enumerate(pesdb.SKILLS):
             r, c = divmod(n, cols)
@@ -1123,9 +1539,40 @@ class Editor(tk.Tk):
             chip = Pill(grid, label, self._chip_font,
                         lambda l=label: self.toggle_skill(l))
             chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
+            chip.bind("<Button-3>", lambda e, l=label: self.toggle_skill(l))
             self._skill_chips[label] = chip
+            self._field_section["Skill " + label] = "skills"
+        self._update_skill_count()
 
-    def toggle_skill(self, label):
+    def _filter_skills(self, evt=None):
+        if evt is not None and getattr(evt, "keysym", "") in (
+                "Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = norm(self.skill_filter.get().strip())
+        for chip in self._skill_chips.values():
+            chip.grid_remove()
+        shown = 0
+        for label, _bit in pesdb.SKILLS:
+            if q and q not in norm(label):
+                continue
+            r, c = divmod(shown, self._skill_cols)
+            self._skill_chips[label].grid(row=r, column=c, sticky="w", padx=(0, 4), pady=1)
+            shown += 1
+        self._shown_skills = shown
+        self._update_skill_count()
+
+    def _update_skill_count(self):
+        lab = getattr(self, "_skill_count", None)
+        if lab is None:
+            return
+        chosen = sum(1 for label, _b in pesdb.SKILLS if self.vars["Skill " + label].get())
+        shown = getattr(self, "_shown_skills", len(pesdb.SKILLS))
+        text = f"{chosen} / {len(pesdb.SKILLS)} chosen"
+        if shown != len(pesdb.SKILLS):
+            text += f" \u00b7 {shown} shown"
+        lab.configure(text=text)
+
+    def toggle_skill(self, label, back=None):
         """Click-toggle a skill chip; applies like the checkbox it replaced."""
         if self.index is None:
             return
@@ -1139,28 +1586,54 @@ class Editor(tk.Tk):
         if chip is None:
             return
         on = bool(self.vars["Skill " + label].get())
-        chip.set_state(fg=C_ACCENT if on else C_DIM,
-                       line=C_ACCENT if on else C_LINE)
+        # filled means on: a shape difference, not just an accent outline
+        if on:
+            chip.set_state(fill=C_ACCENT, fg=C_INK, line=C_ACCENT)
+        else:
+            chip.set_state(fill=C_PANEL2, fg=C_DIM, line=C_LINE)
+        self._update_skill_count()
+
+    @staticmethod
+    def _ovr_colour(rating):
+        """A rating has a tier at a glance: 90+ gold, 80+ green, 70+ plain, below that dim."""
+        if rating >= 90:
+            return C_ACCENT
+        if rating >= 80:
+            return C_GREEN
+        if rating >= 70:
+            return C_FG
+        return C_DIM
 
     def ovr(self, i):
-        """Reference rating for one player record (see pesdb.OVR_MODEL)."""
-        return pesdb.overall(lambda label: self.table.get(i, label),
-                             self.table.get(i, "Registered Position"))
+        """Reference rating for one player record (see pesdb.OVR_MODEL), cached per record."""
+        cache = self._ovr_cache
+        if i in cache:
+            return cache[i]
+        rating = pesdb.overall(lambda label: self.table.get(i, label),
+                               self.table.get(i, "Registered Position"))
+        cache[i] = rating
+        return rating
 
     # ---- club / contract
     def _build_club(self, parent):
-        F = (self.FONT, 8)
-        sec = self._section(parent, "Current club")
-        self.lbl_club = tk.Label(sec, text="—", bg=C_BG, fg=C_FG, anchor="w",
-                                 font=(self.FONT, 10, "bold"))
-        self.lbl_club.pack(fill="x", pady=(0, 3))
+        """The club block. Everything below the club line edits Team.bin / PlayerAssignment.bin,
+        not the player — the badge says so, because the form around it edits a player."""
+        F = self.F_LABEL
+        sec = self._section(parent, "Current club", key="club", hint="edits the club record")
+        self.lbl_club = tk.Label(sec, text="\u2014", bg=C_BG, fg=C_FG, anchor="w",
+                                 font=(self.FONT, 11, "bold"))
+        self.lbl_club.pack(fill="x")
+        self.lbl_club_scope = tk.Label(sec, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                       font=self.F_TINY, justify="left")
+        self.lbl_club_scope.pack(fill="x", pady=(0, 3))
+        self._wrap(self.lbl_club_scope, 120)
 
         row = tk.Frame(sec, bg=C_BG)
         row.pack(fill="x", pady=(0, 2))
-        tk.Label(row, text="Move to club", bg=C_BG, fg=C_DIM, width=12, anchor="w",
+        tk.Label(row, text="Move to club", bg=C_BG, fg=C_DIM, width=11, anchor="w",
                  font=F).pack(side="left")
         self.club_target = tk.StringVar()
-        self.cb_target = ttk.Combobox(row, textvariable=self.club_target, width=26, font=F,
+        self.cb_target = ttk.Combobox(row, textvariable=self.club_target, width=18, font=F,
                                       values=sorted({n for n in self.clubs.values() if n}))
         self.cb_target.pack(side="left", fill="x", expand=True, padx=6)
         self.cb_target.bind("<KeyRelease>", self._filter_target_values)
@@ -1170,53 +1643,57 @@ class Editor(tk.Tk):
 
         link = tk.Frame(sec, bg=C_BG)
         link.pack(fill="x", pady=(0, 2))
-        tk.Label(link, text="Coach", bg=C_BG, fg=C_DIM, width=12, anchor="w",
+        tk.Label(link, text="Coach", bg=C_BG, fg=C_DIM, width=11, anchor="w",
                  font=F).pack(side="left")
         self.coach_var = tk.StringVar()
-        self.cb_coach = ttk.Combobox(link, textvariable=self.coach_var, width=26, font=F,
+        self.cb_coach = ttk.Combobox(link, textvariable=self.coach_var, width=18, font=F,
                                      values=self._coach_choices())
         self.cb_coach.pack(side="left", fill="x", expand=True, padx=6)
+        self.cb_coach.bind("<KeyRelease>", self._filter_coach_values)
         self.cb_coach.bind("<Return>", lambda e: self.apply_club_coach())
         ttk.Button(link, text="Set", style="Ghost.TButton",
                    command=self.apply_club_coach).pack(side="left")
 
         field = tk.Frame(sec, bg=C_BG)
         field.pack(fill="x", pady=(0, 2))
-        tk.Label(field, text="Stadium", bg=C_BG, fg=C_DIM, width=12, anchor="w",
+        tk.Label(field, text="Stadium", bg=C_BG, fg=C_DIM, width=11, anchor="w",
                  font=F).pack(side="left")
         self.stadium_var = tk.StringVar()
-        self.cb_stadium = ttk.Combobox(field, textvariable=self.stadium_var, width=26, font=F,
+        self.cb_stadium = ttk.Combobox(field, textvariable=self.stadium_var, width=18, font=F,
                                        values=[f"{sid}  {name}"
                                                for sid, name in sorted(self.stadium_names.items())])
         self.cb_stadium.pack(side="left", fill="x", expand=True, padx=6)
+        self.cb_stadium.bind("<KeyRelease>", self._filter_stadium_values)
         self.cb_stadium.bind("<Return>", lambda e: self.apply_stadium())
         ttk.Button(field, text="Set", style="Ghost.TButton",
                    command=self.apply_stadium).pack(side="left")
 
         number = tk.Frame(sec, bg=C_BG)
         number.pack(fill="x", pady=(0, 2))
-        tk.Label(number, text="Squad no.", bg=C_BG, fg=C_DIM, width=12, anchor="w",
+        tk.Label(number, text="Squad no.", bg=C_BG, fg=C_DIM, width=11, anchor="w",
                  font=F).pack(side="left")
         self.shirt_var = tk.StringVar()
-        self.shirt_spin = tk.Spinbox(number, textvariable=self.shirt_var, from_=1, to=99, width=5,
-                                      font=F, command=self.apply_shirt_number)
+        self.shirt_spin = tk.Spinbox(number, textvariable=self.shirt_var, from_=1, to=99,
+                                      width=4, font=self.F_VALUE,
+                                      command=self.apply_shirt_number)
         self.shirt_spin.pack(side="left", padx=6)
         self.shirt_spin.bind("<Return>", lambda e: self.apply_shirt_number())
         self.shirt_spin.bind("<FocusOut>", lambda e: self.apply_shirt_number())
-        tk.Label(number, text="the number this player wears in this club", bg=C_BG, fg=C_DIM,
-                 font=(self.FONT, 8)).pack(side="left", padx=6)
+        tk.Label(number, text="worn in this club", bg=C_BG, fg=C_HINT,
+                 font=self.F_TINY).pack(side="left", padx=4)
 
-        sec2 = self._section(parent, "Club name in the database")
+        sec2 = self._section(parent, "Club name in the database", key="clubname",
+                             hint="Team.bin")
         self.team_vars = {}
         for label in ("English", "Database", "Short"):
             r = tk.Frame(sec2, bg=C_BG)
             r.pack(fill="x")
-            tk.Label(r, text=label, bg=C_BG, fg=C_DIM, width=12, anchor="w",
+            tk.Label(r, text=label, bg=C_BG, fg=C_DIM, width=11, anchor="w",
                      font=F).pack(side="left")
             if label == "Database":
                 # which data_s*.cpk the loads and saves go to, not a name slot
                 self.db_var = tk.StringVar(value=self._short_path(self.cpk_path))
-                self.cb_db = ttk.Combobox(r, textvariable=self.db_var, width=28, font=F,
+                self.cb_db = ttk.Combobox(r, textvariable=self.db_var, width=24, font=F,
                                           state="readonly", postcommand=self._refresh_databases)
                 self.cb_db.pack(side="left", fill="x", expand=True, padx=6)
                 self.cb_db.bind("<<ComboboxSelected>>",
@@ -1225,19 +1702,37 @@ class Editor(tk.Tk):
                 continue
             v = tk.StringVar()
             self.team_vars[label] = v
-            ttk.Entry(r, textvariable=v, width=28, font=F).pack(side="left", fill="x",
-                                                                   expand=True, padx=6)
+            ent = ttk.Entry(r, textvariable=v, width=24, font=F)
+            ent.pack(side="left", fill="x", expand=True, padx=6)
+            self._field_widgets["Club name " + label] = ent
+            self._field_section["Club name " + label] = "clubname"
             if label == "Short":                    # the button rides the last row, saving one
-                ttk.Button(r, text="Apply club name", style="Ghost.TButton",
+                ttk.Button(r, text="Apply", style="Ghost.TButton",
                            command=self.apply_team_name).pack(side="left")
+        self._field_section["Club name"] = "clubname"
         note = "Transfers and club names are written to Team.bin + PlayerAssignment.bin on save."
         if self.edit_saves:
             note += ("\nAn in-game edit save overrides this database: "
                      + ", ".join(os.path.basename(p) for p in self.edit_saves))
-        note_lbl = tk.Label(parent, text=note, bg=C_BG, fg=C_WARN if self.edit_saves else C_DIM,
-                            anchor="w", justify="left", font=(self.FONT, 8))
+        note_lbl = tk.Label(parent, text=note, bg=C_BG, fg=C_WARN if self.edit_saves else C_HINT,
+                            anchor="w", justify="left", font=self.F_TINY)
         note_lbl.pack(fill="x", pady=(0, 2))
         self._wrap(note_lbl)
+
+    def _filter_coach_values(self, evt):
+        """Type-ahead for the coach box: 980 names is a scrolling exercise otherwise."""
+        if getattr(evt, "keysym", "") in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = norm(self.coach_var.get().strip())
+        values = self._coach_choices()
+        self.cb_coach["values"] = [v for v in values if q in norm(v)] if q else values
+
+    def _filter_stadium_values(self, evt):
+        if getattr(evt, "keysym", "") in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = norm(self.stadium_var.get().strip())
+        values = [f"{sid}  {name}" for sid, name in sorted(self.stadium_names.items())]
+        self.cb_stadium["values"] = [v for v in values if q in norm(v)] if q else values
 
     # ---- career club-id fields (Youth Club / Owner Club)
     def _club_ref_values(self):
@@ -1298,11 +1793,23 @@ class Editor(tk.Tk):
         if idx is None or cid is None or cid not in self.coaches:
             self.status("pick a coach from the list")
             return
-        if self.team_table.coach_id(idx) == cid:
+        old_cid = self.team_table.coach_id(idx)
+        if old_cid == cid:
             return
         self.team_table.set_coach(idx, cid)
+        team_id = self.team_table.tid(idx)
+        self._note_change(("Team", team_id, "Coach"), self.clubs.get(team_id, f"team {team_id}"),
+                          "Coach", self.coaches.get(old_cid, old_cid), self.coaches.get(cid, cid),
+                          lambda i=idx, v=old_cid: self._set_team_coach(i, v))
         self._mark_table_dirty("Team")
-        self.status(f"{self.team_table.name(idx)} coached by {self.coaches[cid]} — save to write it")
+        self.status(f"{self.team_table.name(idx)} coached by {self.coaches[cid]} — save to write it",
+                    "ok")
+
+    def _set_team_coach(self, idx, cid):
+        self.team_table.set_coach(idx, cid)
+        self._mark_table_dirty("Team")
+        if getattr(self, "team_index_current", None) == idx:
+            self.coach_var.set(f"{cid}  {self.coaches.get(cid, '\u2014')}")
 
     def apply_stadium(self):
         idx = getattr(self, "team_index_current", None)
@@ -1310,11 +1817,24 @@ class Editor(tk.Tk):
         if idx is None or sid is None or sid not in self.stadium_names:
             self.status("pick a stadium from the list")
             return
-        if self.team_table.stadium_id(idx) == sid:
+        old_sid = self.team_table.stadium_id(idx)
+        if old_sid == sid:
             return
         self.team_table.set_stadium(idx, sid)
+        team_id = self.team_table.tid(idx)
+        self._note_change(("Team", team_id, "Stadium"), self.clubs.get(team_id, f"team {team_id}"),
+                          "Stadium", self.stadium_names.get(old_sid, old_sid),
+                          self.stadium_names.get(sid, sid),
+                          lambda i=idx, v=old_sid: self._set_team_stadium(i, v))
         self._mark_table_dirty("Team")
-        self.status(f"{self.team_table.name(idx)} → {self.stadium_names[sid]} — save to write it")
+        self.status(f"{self.team_table.name(idx)} → {self.stadium_names[sid]} — save to write it",
+                    "ok")
+
+    def _set_team_stadium(self, idx, sid):
+        self.team_table.set_stadium(idx, sid)
+        self._mark_table_dirty("Team")
+        if getattr(self, "team_index_current", None) == idx:
+            self.stadium_var.set(f"{sid}  {self.stadium_names.get(sid, '\u2014')}")
 
     def apply_shirt_number(self):
         rows = getattr(self, "shirt_rows", [])
@@ -1325,13 +1845,30 @@ class Editor(tk.Tk):
             number = max(1, min(99, int(self.shirt_var.get())))
         except ValueError:
             return
-        if {self.assign.shirt_number(j) for j in rows} == {number}:
+        old_numbers = {self.assign.shirt_number(j) for j in rows}
+        if old_numbers == {number}:
             return
+        old = sorted(old_numbers)[0] if len(old_numbers) == 1 else "mixed"
         for j in rows:
             self.assign.set_shirt_number(j, number)
         self.shirt_var.set(str(number))
+        pid = self.table.pid(self.index) if self.index is not None else None
+        if pid is not None:
+            self._note_change(("PlayerAssignment", pid, "Squad no."),
+                              self.table.name(self.index), "Squad no.", old, number,
+                              lambda r=list(rows), v=old: self._set_shirt_rows(r, v))
         self._mark_table_dirty("PlayerAssignment")
-        self.status(f"squad number {number} written to {len(rows)} club row(s) — save to apply")
+        self.status(f"squad number {number} written to {len(rows)} club row(s) — save to apply",
+                    "ok")
+
+    def _set_shirt_rows(self, rows, number):
+        if not isinstance(number, int):
+            return
+        for j in rows:
+            self.assign.set_shirt_number(j, number)
+        self._mark_table_dirty("PlayerAssignment")
+        if self.index is not None:
+            self.shirt_var.set(str(number))
 
     def open_coaches(self):
         win = getattr(self, "_coach_win", None)
@@ -1355,10 +1892,16 @@ class Editor(tk.Tk):
         club_rows = [j for j in rows if self.assign.team(j) > pesdb.NATIONAL_MAX]
         self.assign_rows_current = club_rows
         team_id = self.assign.team(club_rows[0]) if club_rows else None
-        name = self.clubs.get(team_id, "—") if team_id else "(no club row)"
-        self.lbl_club.configure(
-            text=f"{name}   ·   team id {team_id if team_id else '—'}   ·   "
-                 f"{len(club_rows)} club row(s), {len(rows)} total")
+        name = self.clubs.get(team_id, "\u2014") if team_id else "(no club row)"
+        self.lbl_club.configure(text=name)
+        if team_id:
+            squad = self.club_counts.get(team_id, 0)
+            scope = (f"Coach, stadium and squad number belong to this club and every one of "
+                     f"its {squad} players, not to the player above.  team id {team_id} · "
+                     f"{len(club_rows)} club row(s), {len(rows)} total")
+        else:
+            scope = "This player has no club row — a transfer creates one."
+        self.lbl_club_scope.configure(text=scope)
         self.club_target.set("")
         idx = self.team_index.get(team_id)
         for label, offset, length in CLUB_NAME_SLOTS:
@@ -1475,11 +2018,28 @@ class Editor(tk.Tk):
         elif previous is None:
             self.club_counts[team_id] = self.club_counts.get(team_id, 0) + 1
         self.assign_rows_current = rows
+        pid = self.table.pid(self.index)
+        self._note_change(("PlayerAssignment", pid, "Club"), self.table.name(self.index),
+                          "Club", self.clubs.get(previous, previous) if previous else "(none)",
+                          self.clubs.get(team_id, team_id),
+                          lambda j=rows[0], t=previous: self._set_assignment_team(j, t))
         self._refresh_row()
         self._mark_table_dirty("PlayerAssignment")
-        self.load_club(self.index, self.table.pid(self.index))
+        self.load_club(self.index, pid)
         self.populate(self.q.get())
-        self.status(f"moved to {self.clubs.get(team_id, team_id)} ({note}) — save to write it")
+        self.status(f"moved to {self.clubs.get(team_id, team_id)} ({note}) — save to write it",
+                    "ok")
+
+    def _set_assignment_team(self, row, team_id):
+        if team_id is None:
+            return
+        self.assign.set_team(row, team_id)
+        self._mark_table_dirty("PlayerAssignment")
+        if self.index is not None:
+            pid = self.table.pid(self.index)
+            self.player_team[pid] = team_id
+            self._refresh_row()
+            self.load_club(self.index, pid)
 
     def apply_team_name(self):
         idx = getattr(self, "team_index_current", None)
@@ -1487,21 +2047,38 @@ class Editor(tk.Tk):
             self.status("no club row selected — nothing to rename")
             return
         changed = False
+        team_id = self.team_table.tid(idx)
         for label, offset, length in CLUB_NAME_SLOTS:
             value = self.team_vars[label].get()
-            if value == self.team_table.slot(idx, offset, length):
+            old = self.team_table.slot(idx, offset, length)
+            if value == old:
                 continue
             self.team_table.set_slot(idx, offset, length, value)
+            self._note_change(("Team", team_id, "Club name " + label),
+                              self.clubs.get(team_id, f"team {team_id}"), label + " name",
+                              old, value,
+                              lambda i=idx, o=offset, l=length, v=old:
+                              self._set_team_slot(i, o, l, v))
             changed = True
         if not changed:
             return
-        team_id = self.team_table.tid(idx)
         self.clubs[team_id] = self.team_table.name(idx)
         self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
         self.cb_club["values"] = self._club_names
         self._mark_table_dirty("Team")
         self.populate(self.q.get())
-        self.status(f"renamed team {team_id} — save to write it")
+        self.status(f"renamed team {team_id} — save to write it", "ok")
+
+    def _set_team_slot(self, idx, offset, length, value):
+        self.team_table.set_slot(idx, offset, length, value)
+        team_id = self.team_table.tid(idx)
+        self.clubs[team_id] = self.team_table.name(idx)
+        self._mark_table_dirty("Team")
+        if getattr(self, "team_index_current", None) == idx:
+            for label, off, ln in CLUB_NAME_SLOTS:
+                if off == offset:
+                    self.team_vars[label].set(value)
+        self.populate(self.q.get())
 
     # ---------------------------------------------------------------- data
     def _debounced(self):
@@ -1617,13 +2194,33 @@ class Editor(tk.Tk):
                          if t >= 100 and self.club_matches(want, n)}
 
     def populate(self, query, select_first=False):
+        """Fill the list. Both result kinds are counted, and the Players/Clubs tabs say how many.
+
+        A club name used to hijack the whole list: typing "arsenal" replaced every player row
+        with club rows and there was no way to see the players again without retyping. Now the
+        players that match the club stay listed, the club rows are one click away, and the
+        counts on the tabs make the choice visible.
+        """
         q = query.strip().lower()
-        if q and not q.isdigit() and any(self.club_matches(q, n)
-                                         for t, n in self.clubs.items() if t >= 100):
-            self.mode = "clubs"
-            return self._populate_clubs(q, select_first)
+        club_rows = []
+        if q and not q.isdigit():
+            targets = self.alias_targets(q)
+            club_rows = sorted(((tid, name) for tid, name in self.clubs.items()
+                                if tid >= 100 and self.club_matches(q, name)),
+                               key=lambda r: (not any(t in norm(r[1]) for t in targets), norm(r[1])))
+        rows = self._match_players(q)
+        self._mode_counts = {"players": len(rows), "clubs": len(club_rows)}
+        if self.view_mode.get() == "clubs" and not club_rows:
+            self.view_mode.set("players")
+        if not rows and club_rows:
+            self.view_mode.set("clubs")          # nothing to show as players: use the clubs
+        self._update_mode_tabs()
+        if self.view_mode.get() == "clubs":
+            return self._render_clubs(club_rows, select_first)
+        return self._render_players(rows, select_first)
+
+    def _match_players(self, q):
         self.mode = "players"
-        self._player_headings()
         teams = self._club_teams()
         nation = self.country_filter.get().strip().lower()
         rows = []
@@ -1661,6 +2258,28 @@ class Editor(tk.Tk):
             rows = named + [r for r in rows if not r[3]]
         elif key is not None:
             rows.sort(key=lambda r: r[key], reverse=self.sort_desc)
+        return rows
+
+    def set_view_mode(self, mode):
+        self.view_mode.set(mode)
+        self.populate(self.q.get())
+
+    def _update_mode_tabs(self):
+        counts = getattr(self, "_mode_counts", {"players": 0, "clubs": 0})
+        for mode, lab in (("players", getattr(self, "tab_players", None)),
+                          ("clubs", getattr(self, "tab_clubs", None))):
+            if lab is None:
+                continue
+            active = self.view_mode.get() == mode
+            lab.configure(text=f"{mode.title()}  {counts.get(mode, 0):,}",
+                          fg=C_ACCENT if active else C_DIM,
+                          bg=C_SEL if active else C_PANEL2)
+
+    def _render_players(self, rows, select_first=False):
+        self.mode = "players"
+        self._player_headings()
+        teams = self._club_teams()
+        nation = self.country_filter.get().strip().lower()
         limit = 800
         shown = min(len(rows), limit)
         self.tree.delete(*self.tree.get_children())
@@ -1668,15 +2287,23 @@ class Editor(tk.Tk):
             i, pid, name, club, pos, _pos_i, age, _cl = r
             self.tree.insert("", "end", iid=str(i),
                              values=(pid, name, club, pos, self.ovr(i), age))
-        self._select_first(select_first, shown)
+        # keep the player the form is showing selected when the filter did not remove them;
+        # otherwise say so rather than silently editing a record that is no longer listed
+        self._open_player_hidden = False
+        if self.index is not None and self.tree.exists(str(self.index)):
+            self.tree.selection_set(str(self.index))
+            self.tree.see(str(self.index))
+        else:
+            self._open_player_hidden = self.index is not None
+            self._select_first(select_first, shown)
         if not rows:
             if teams is not None and not teams:
-                self.status(f"no club matches {self.club_filter.get().strip()!r}")
+                self.status(f"no club matches {self.club_filter.get().strip()!r}", "warn")
             elif teams:
                 self.status(f"no match in {self.club_filter.get().strip()} — clear the Club box "
-                            "or widen the search")
+                            "or widen the search", "warn")
             else:
-                self.status("no match — try a shorter name, a shirt name, a club, or an ID")
+                self.status("no match — try a shorter name, a shirt name, a club, or an ID", "warn")
             return
         hint = "" if self.tree.selection() else (
             f" · Enter opens the first of {shown:,}" if shown > 1 else "")
@@ -1689,28 +2316,30 @@ class Editor(tk.Tk):
             scope += " · free agents"
         if self.changed_only.get():
             scope += " · changed only"
+        other = self._mode_counts.get("clubs", 0)
+        also = f" · {other:,} club{'s' if other != 1 else ''} match — see the Clubs tab" if other else ""
+        if getattr(self, "_open_player_hidden", False):
+            also += " · the open player is not in this filter"
         self.status(search_summary(shown, len(rows))
-                    + hint + scope + f" · {len(self.table.records):,} players in table")
+                    + hint + scope + also + f" · {len(self.table.records):,} players in table")
 
     # ---- clubs view
-    def _populate_clubs(self, q, select_first=False):
+    def _render_clubs(self, rows, select_first=False):
         """Search results as clubs: one row per matching club, click to open its squad."""
+        self.mode = "clubs"
         self._club_headings()
-        targets = self.alias_targets(q)          # nickname hits first, then plain substrings
-        rows = sorted(((tid, name) for tid, name in self.clubs.items()
-                       if tid >= 100 and self.club_matches(q, name)),
-                      key=lambda r: (not any(t in norm(r[1]) for t in targets), norm(r[1])))
         self.tree.delete(*self.tree.get_children())
         for tid, name in rows:
             self.tree.insert("", "end", iid=f"club:{tid}",
                              values=(tid, name, f"{self.club_counts.get(tid, 0)} players", "", "", ""))
         shown = len(rows)
         if not shown:
-            self.status(f"no club matches {q!r}")
+            self.status("no club matches — try part of the name, or a nickname", "warn")
             return
         if select_first:
             return self.open_club(rows[0][0])
-        self.status(f"{shown} club{'s' if shown != 1 else ''} match {q!r} — click one to open its squad")
+        self.status(f"{shown} club{'s' if shown != 1 else ''} match — click one to open its squad"
+                    " · the Players tab has the players whose club matches")
 
     def open_club(self, tid):
         name = self.clubs.get(tid, "")
@@ -1758,17 +2387,52 @@ class Editor(tk.Tk):
         self.index = int(sel[0])
         self.load_form()
 
+    def discard_changes(self, ask=True):
+        """Throw away every pending edit and reload the tables from disk.
+
+        The header button used to be called "Revert", which read like "undo my last edit" while
+        it actually reloaded every table — a whole session of work could disappear on one click.
+        """
+        if not self.dirty_tables:
+            self.status("nothing to discard — there are no unsaved changes")
+            return
+        tables = ", ".join(sorted(n + ".bin" for n in self.dirty_tables))
+        if ask and not messagebox.askokcancel(
+                "Discard unsaved changes",
+                f"{len(self._changes)} pending change(s) in {tables} will be thrown away.\n\n"
+                "The tables are reloaded from disk; nothing is written or deleted there.",
+                parent=self, default="cancel"):
+            return
+        self.reload(f"discarded unsaved changes in {tables} — reloaded from disk")
+
     def on_select_refresh(self):
-        if self.index is not None:
-            # reload every table from disk, then this record
-            ensure_vanilla(self.cpk_path)
-            self.tables = load_tables(self.cpk_path)
-            self.reindex()
-            self._edited_pids.clear()
-            self.load_form()
-            self.dirty = False
-            self.lbl_dirty.configure(text="")
-            self.status("reverted unsaved changes to the loaded tables")
+        """Reload the tables and this record (the old "Revert" entry point)."""
+        self.discard_changes(ask=False)
+
+    def show_player(self, pid):
+        """Open one player by id: clear a filter that hides them and select the row."""
+        index = self.index_by_pid.get(pid)
+        if index is None:
+            self.status(f"no player with id {pid} in this database", "warn")
+            return
+        for name in ("club_filter", "country_filter", "position_filter"):
+            var = getattr(self, name, None)
+            if var is not None and var.get():
+                var.set("")
+        self.changed_only.set(False)
+        self.free_agents_only.set(False)
+        self.q.set("")
+        self.populate("")
+        if self.tree.exists(str(index)):
+            self.tree.selection_set(str(index))
+            self.tree.see(str(index))
+        self.index = index
+        self.load_form()
+
+    def show_club(self, tid):
+        """Open a club's squad in the list and its record in the details pane."""
+        self.q.set("")
+        self.open_club(tid)
 
     def load_portrait(self, pid):
         """Show the player's face. One 17 KB fetch per player ever, cached under STATE_DIR."""
@@ -1833,7 +2497,7 @@ class Editor(tk.Tk):
 
     def destroy(self):
         for attr in ("_portrait_job", "_radar_job", "_after", "_club_after",
-                     "_resize_repaint_job", "_one_page_job"):
+                     "_resize_repaint_job", "_one_page_job", "_fold_job"):
             job = getattr(self, attr, None)
             if job:
                 setattr(self, attr, None)
@@ -1891,7 +2555,8 @@ class Editor(tk.Tk):
         self.lbl_sub.configure(text=f"ID {pid}   ·   {club}   ·   "
                                    f"{pesdb.country_name(t.get(i, 'Nationality')) or '—'}   ·   "
                                    f"{natural}   ·   {foot}")
-        self.ovr_big.configure(text=str(self.ovr(i)))
+        rating = self.ovr(i)
+        self.ovr_big.configure(text=str(rating), fg=self._ovr_colour(rating))
         style_i = t.get(i, "Playing Style")
         for name, text in (("Style", PLAY_STYLES[style_i] if style_i < len(PLAY_STYLES)
                             else str(style_i)),
@@ -1923,6 +2588,8 @@ class Editor(tk.Tk):
                 v.set(PLAY_STYLES[val] if val < len(PLAY_STYLES) else str(val))
             elif label == "Stronger Foot":
                 v.set("Left" if val else "Right")
+            elif label == "Nationality":
+                v.set(pesdb.country_name(val) or str(val))
             else:
                 v.set(str(val))
         for label, bit, width, add in pesdb.MOTIONS:
@@ -1938,11 +2605,17 @@ class Editor(tk.Tk):
         for label, bit, width, add in pesdb.ATTRS:
             val = t.get(i, label)
             self.vars[label].set(str(val))
-            self._draw_bar(self.vars[label + "::bar"], val)
+            entry = self._changes.get(("Player", pid, label))
+            self._draw_bar(self.vars[label + "::bar"], val,
+                           base=entry["base"] if entry is not None else None)
         for label, bit in pesdb.SKILLS:
             self.vars["Skill " + label].set(t.get(i, "Skill " + label))
             self._style_skill_chip(label)
         self._clear_selection()
+        self._update_skill_count()
+        for key, counter in getattr(self, "_name_counters", {}).items():
+            self._update_name_counter(key)
+        self._refresh_field_markers()
         self.draw_radar(i)
 
     # ---------------------------------------------------------------- edits
@@ -1953,20 +2626,213 @@ class Editor(tk.Tk):
     def _mark_table_dirty(self, name):
         self.dirty_tables.add(name)
         self._mark_dirty()
+        self._sync_history_buttons()
+
+    # ------------------------------------------------------------ change ledger
+    # Every pending edit lands here, keyed by (table, record id, field), so the UI can answer
+    # "what have I changed?" without diffing 26k records. `base` is the value before this
+    # session's first edit, which is what a revert restores and what the ability bar's ghost
+    # tick marks; an edit that returns to `base` removes its entry.
+    def _note_change(self, key, who, label, old, new, revert):
+        table = key[0]
+        entry = self._changes.get(key)
+        base = entry["base"] if entry is not None else old
+        if new == base:
+            self._changes.pop(key, None)
+        elif old != new or entry is not None:
+            self._changes[key] = {"key": key, "table": table, "who": who, "label": label,
+                                  "base": base, "new": new, "old": old, "revert": revert}
+        self._update_changes_badge()
+        self._mark_field_changed(key)
+
+    def _drop_changes(self):
+        """Forget every pending edit (after a save, or after discarding them)."""
+        self._changes.clear()
+        for widget in getattr(self, "_field_widgets", {}).values():
+            self._tint_field(widget, False)
+        self._update_changes_badge()
+
+    def _update_changes_badge(self):
+        lbl = getattr(self, "lbl_changes", None)
+        n = len(self._changes)
+        if lbl is not None:
+            lbl.configure(text="" if not n else f"{n} change{'s' if n != 1 else ''}")
+        # a section header carries its own count, so a collapsed block still says it has edits
+        field_section = getattr(self, "_field_section", {})
+        for sec, lab in getattr(self, "_section_counts", {}).items():
+            count = sum(1 for e in self._changes.values()
+                        if field_section.get(e["key"][2]) == sec)
+            lab.configure(text=f"{count} changed" if count else "")
+
+    def _tint_field(self, widget, dirty):
+        try:
+            if isinstance(widget, ttk.Entry):
+                widget.configure(style="Dirty.TEntry" if dirty else "TEntry")
+            elif isinstance(widget, ttk.Combobox):
+                widget.configure(style="Dirty.TCombobox" if dirty else "TCombobox")
+            else:
+                widget.configure(bg=C_DIRTY if dirty else C_PANEL2)
+        except tk.TclError:
+            pass
+
+    def _mark_field_changed(self, key, force_clean=False):
+        """Tint the field a pending edit belongs to — only while its player is on screen."""
+        table, ident, field = key
+        widget = getattr(self, "_field_widgets", {}).get(field)
+        if widget is None or self.index is None:
+            return
+        if table != "Player" or ident != self.table.pid(self.index):
+            return
+        self._tint_field(widget, not force_clean and key in self._changes)
+
+    def _refresh_field_markers(self):
+        """After loading a player, show exactly which of their fields have pending edits."""
+        for field in getattr(self, "_field_widgets", {}):
+            pid = self.table.pid(self.index) if self.index is not None else None
+            self._mark_field_changed(("Player", pid, field))
+
+    def _reconcile_dirty(self):
+        """A save or a revert leaves only the tables the ledger still has edits for."""
+        self.dirty_tables &= {e["table"] for e in self._changes.values()}
+        if not self.dirty_tables:
+            self.dirty = False
+            self.lbl_dirty.configure(text="")
+        self._sync_history_buttons()
+
+    def _sync_history_buttons(self):
+        for btn in getattr(self, "_bar_buttons", []):
+            try:
+                text = btn.cget("text")
+            except tk.TclError:
+                continue
+            if text == "Undo":
+                btn.state(["!disabled"] if self._undo else ["disabled"])
+            elif text == "Redo":
+                btn.state(["!disabled"] if self._redo else ["disabled"])
+
+    def open_changes(self):
+        """The change drawer: every pending edit, with a jump and a revert per row."""
+        if not self._changes:
+            self.status("nothing changed yet — edits show up here as you make them")
+            return
+        win = getattr(self, "_changes_win", None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+        win = self._changes_win = tk.Toplevel(self)
+        win.title(f"Changes — {len(self._changes)} pending")
+        win.configure(bg=C_BG)
+        win.transient(self)
+        win.geometry(f"{int(760 * self.ui)}x{int(440 * self.ui)}")
+
+        head = tk.Frame(win, bg=C_BG)
+        head.pack(fill="x", padx=14, pady=(12, 6))
+        tk.Label(head, text="UNSAVED CHANGES", bg=C_BG, fg=C_ACCENT,
+                 font=(self.FONT, 11, "bold")).pack(side="left")
+        tk.Label(head, text="double-click a row to open the record", bg=C_BG, fg=C_HINT,
+                 font=(self.FONT, 8)).pack(side="left", padx=10)
+
+        body = tk.Frame(win, bg=C_BG)
+        body.pack(fill="both", expand=True, padx=14)
+        cols = ("table", "who", "field", "was", "now")
+        tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="extended")
+        for col, text, width, anchor in (("table", "Table", 120, "w"),
+                                         ("who", "Record", 220, "w"),
+                                         ("field", "Field", 160, "w"),
+                                         ("was", "Was", 60, "e"), ("now", "Now", 60, "e")):
+            tree.heading(col, text=text)
+            tree.column(col, width=int(width * self.ui), anchor=anchor,
+                        stretch=(col in ("who", "field")))
+        tree.pack(side="left", fill="both", expand=True)
+        bar = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        bar.pack(side="left", fill="y")
+        tree.configure(yscrollcommand=bar.set)
+        self._changes_tree = tree
+        for key, e in sorted(self._changes.items(),
+                             key=lambda kv: (kv[1]["table"], str(kv[1]["who"]))):
+            tree.insert("", "end", iid=str(len(tree.get_children())), values=(
+                e["table"], e["who"], e["label"],
+                "-" if e["base"] is None else e["base"],
+                "-" if e["new"] is None else e["new"]))
+        self._changes_order = [k for k, _ in sorted(self._changes.items(),
+                                                   key=lambda kv: (kv[1]["table"],
+                                                                   str(kv[1]["who"])))]
+
+        def chosen():
+            return [self._changes_order[int(i)] for i in tree.selection()
+                    if int(i) < len(self._changes_order)]
+
+        def revert_selected():
+            keys = chosen()
+            skipped = 0
+            for key in keys:
+                entry = self._changes.get(key)
+                if entry is None:
+                    continue
+                if entry.get("revert") is None:
+                    skipped += 1
+                    continue
+                entry["revert"]()
+                self._mark_field_changed(key, force_clean=True)
+            self._reconcile_dirty()
+            done = len(keys) - skipped
+            self.status(f"reverted {done} change{'s' if done != 1 else ''}"
+                        + (f" · {skipped} import row(s) only revert with Discard all" if skipped else "")
+                        if keys else "select a row to revert", "ok")
+            win.destroy()
+            if self.index is not None:
+                self.load_form()
+
+        def go_to():
+            keys = chosen()
+            if not keys:
+                return
+            table, ident, _field = keys[0]
+            win.destroy()
+            if table in ("Player", "PlayerAssignment"):
+                self.show_player(ident)
+            elif table == "Team":
+                self.show_club(ident)
+            elif table == "Coach":
+                self.open_coaches()
+
+        tree.bind("<Double-1>", lambda e: go_to())
+        buttons = tk.Frame(win, bg=C_BG)
+        buttons.pack(fill="x", padx=14, pady=12)
+        ttk.Button(buttons, text="Revert selected", style="Ghost.TButton",
+                   command=revert_selected).pack(side="left")
+        ttk.Button(buttons, text="Revert all", style="Ghost.TButton",
+                   command=lambda: (self.discard_changes(ask=False), win.destroy())
+                   ).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Save now", style="Save.TButton",
+                   command=self.save).pack(side="right")
+        ttk.Button(buttons, text="Close", style="Ghost.TButton",
+                   command=win.destroy).pack(side="right", padx=8)
+        self._apply_cursors()
 
     # ------------------------------------------------------------- undo / redo
     def _push_undo(self, undo, redo):
         """Record one reversible edit; history is bounded so a session cannot grow forever."""
         self._undo.append((undo, redo))
         del self._undo[:-200]
+        self._redo.clear()             # a new edit forks the history: redo would be a lie
+        self._sync_history_buttons()
 
     def _set_player_field(self, index, label, value):
-        """The single write path for a player value: table, form, bar, radar, row."""
+        """The single write path for a player value: table, form, bar, radar, row, ledger."""
+        old = self.table.get(index, label)
+        pid = self.table.pid(index)
         self.table.set(index, label, value)
-        self._edited_pids.add(self.table.pid(index))
+        self._ovr_cache.pop(index, None)          # an ability moved: its OVR is stale
+        self._edited_pids.add(pid)
+        if old != value:
+            self._note_change(("Player", pid, label), self.table.name(index) or f"#{pid}",
+                              label, old, value,
+                              lambda i=index, l=label, v=old: self._set_player_field(i, l, v))
         if self.index == index:
             if label in ("Youth Club", "Owner Club"):
                 self.vars[label].set(self._club_ref_text(value))
+            elif label == "Nationality":
+                self.vars[label].set(pesdb.country_name(value) or str(value))
             elif label.startswith("Pos "):
                 self.vars[label].set(["none", "can play", "natural"][value])
             else:
@@ -1990,7 +2856,9 @@ class Editor(tk.Tk):
         undo, redo = self._undo.pop()
         undo()
         self._redo.append((undo, redo))
-        self.status("undone")
+        self._sync_history_buttons()
+        self._reconcile_dirty()
+        self.status("undone", "ok")
 
     def redo(self):
         if not self._redo:
@@ -1999,7 +2867,9 @@ class Editor(tk.Tk):
         undo, redo = self._redo.pop()
         redo()
         self._undo.append((undo, redo))
-        self.status("redone")
+        self._sync_history_buttons()
+        self._reconcile_dirty()
+        self.status("redone", "ok")
 
     def draw_radar(self, i=None):
         """Spider chart of the six ability groups; the shape eases to each new player/value."""
@@ -2076,18 +2946,38 @@ class Editor(tk.Tk):
     def drag_bar(self, label, evt):
         """Click or drag an ability bar to set it: left edge 40, right edge 99."""
         bar = self.vars[label + "::bar"]
-        val = bar_value(evt.x, int(bar.cget("width")))
+        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        val = bar_value(evt.x, width)
         if str(val) != self.vars[label].get():
             self.vars[label].set(str(val))
             self.apply_field(label)
 
-    def _draw_bar(self, bar, val):
-        """Redraw one ability bar; the fill spans the canvas, not a fixed 90 px."""
+    def _draw_bar(self, bar, val, base=None):
+        """Redraw one ability bar: track, tiered fill, and a ghost tick at the value it started with."""
         bar.delete("all")
+        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        height = int(bar.cget("height"))
+        bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
         frac = max(0.0, min(1.0, (val - 40) / 59))
-        bar.create_rectangle(0, 0, int(bar.cget("width")) * frac, int(bar.cget("height")),
+        bar.create_rectangle(0, 0, max(1, int(width * frac)), height,
                              fill=C_ACCENT if val >= 80 else
-                             (C_ACCENT_LO if val >= 65 else C_LINE_SOFT), width=0)
+                             (C_ACCENT_LO if val >= 65 else C_BAR_LOW), width=0)
+        if base is not None and base != val:
+            x = max(1, min(width - 2, int(width * max(0.0, min(1.0, (base - 40) / 59)))))
+            bar.create_line(x, 0, x, height, fill=C_GHOST, width=2)
+
+    def reset_field(self, label):
+        """Right-click an ability bar: put that one field back to its pre-edit value."""
+        if self.index is None:
+            return
+        entry = self._changes.get(("Player", self.table.pid(self.index), label))
+        if entry is None:
+            self.status(f"{label} has not been changed", "warn")
+            return
+        old = self.vars[label].get()
+        self.vars[label].set(str(entry["base"]))
+        self.apply_field(label)
+        self.status(f"{label} back to {entry['base']} (was {old})", "ok")
 
     @staticmethod
     def _field_range(label):
@@ -2102,9 +2992,16 @@ class Editor(tk.Tk):
         if self.index is None:
             return
         raw = self.vars[label].get().strip()
+        if label == "Nationality" and not raw.isdigit():
+            cid = self._country_id(raw)
+            if cid is None:
+                self.status(f"no country called {raw!r} — pick one from the list", "warn")
+                return
+            raw = str(cid)
         try:
             val = int(float(raw))
         except ValueError:
+            self.status(f"{label} needs a number", "warn")
             return
         lo, hi = self._field_range(label)
         val = max(lo, min(hi, val))
@@ -2179,26 +3076,45 @@ class Editor(tk.Tk):
             return
         i = self.index
 
+        field = self._name_field(key)
+
         def write(text):
+            old = self.table.name(i) if key == "name" else self.table.shirt(i)
             if key == "name":
                 self.table.set_name(i, full=text, shirt=self.table.shirt(i))
             else:
                 self.table.set_name(i, full=self.table.name(i), shirt=text)
             self.vars[key].set(text)
+            self._update_name_counter(key)
             self._refresh_row()
             if self.index == i:
                 self._refresh_card(i)
             self._mark_table_dirty("Player")
             self._edited_pids.add(self.table.pid(i))
+            self._note_change(("Player", self.table.pid(i), field),
+                              self.table.name(i) or f"#{self.table.pid(i)}", field,
+                              old, text, lambda t=old: write(t))
 
         write(val)
         self._push_undo(lambda: write(cur), lambda: write(val))
 
+    def _selected_players(self):
+        """Record indexes selected in the list, ignoring club rows (which have no record)."""
+        out = []
+        for item in self.tree.selection():
+            if str(item).startswith("club:"):
+                continue
+            try:
+                out.append(int(item))
+            except ValueError:
+                continue
+        return out
+
     def bulk_apply(self, label, op, amount):
         """Set or shift one numeric field on every selected player, as one undo step."""
-        items = [int(i) for i in self.tree.selection()]
+        items = self._selected_players()
         if not items or label not in self.NUMERIC_FIELDS:
-            self.status("select players and a numeric field first")
+            self.status("select players and a numeric field first", "warn")
             return 0
         lo, hi = self._field_range(label)
         olds = {i: self.table.get(i, label) for i in items}
@@ -2210,7 +3126,9 @@ class Editor(tk.Tk):
             lambda: [self._set_player_field(i, label,
                                             max(lo, min(hi, amount if op == "set" else olds[i] + amount)))
                      for i in olds])
-        self.status(f"{op} {amount:+d} {label} on {len(items)} players — save to write it")
+        what = f"set {label} to {max(lo, min(hi, amount))}" if op == "set" \
+            else f"{op} {amount:+d} {label}"
+        self.status(f"{what} on {len(items)} player(s) — save to write it", "ok")
         return len(items)
 
     def bulk_dialog(self):
@@ -2248,9 +3166,9 @@ class Editor(tk.Tk):
                 for label, _bit, _w, _add in pesdb.ATTRS]
 
     def compare_dialog(self):
-        sel = [int(i) for i in self.tree.selection()]
+        sel = self._selected_players()
         if len(sel) != 2:
-            self.status("select exactly two players (ctrl-click), then Compare")
+            self.status("select exactly two players (ctrl-click), then Compare", "warn")
             return None
         a, b = sel
         dlg = tk.Toplevel(self)
@@ -2293,10 +3211,15 @@ class Editor(tk.Tk):
             messagebox.showerror("Import failed", str(exc), parent=self)
             return 0
         self._mark_table_dirty("Player")
+        self._ovr_cache.clear()
+        seq = getattr(self, "_import_seq", 0) + 1
+        self._import_seq = seq
+        self._note_change(("Player", f"import{seq}", "Roster CSV"), f"{touched:,} rows",
+                          "Roster import", "\u2014", "\u2014", None)
         if self.index is not None:          # no player on screen: nothing to redraw
             self.load_form()
         self.status(f"imported {touched:,} rows — save to write it · "
-                    "\"Changed only\" stays empty after an import")
+                    "\"Changed only\" stays empty after an import", "warn")
         return touched
 
     def _export_dialog(self):
@@ -2344,23 +3267,112 @@ class Editor(tk.Tk):
             return False
         return out.returncode == 0
 
+    def _duplicate_squad_numbers(self):
+        """Squad numbers shared inside one club — the mistake a bulk shirt edit makes."""
+        if "PlayerAssignment" not in self.dirty_tables:
+            return []
+        seen = {}
+        for j in range(len(self.assign.records)):
+            team = self.assign.team(j)
+            if team <= pesdb.NATIONAL_MAX:
+                continue
+            seen.setdefault((team, self.assign.shirt_number(j)), []).append(self.assign.pid(j))
+        out = []
+        for (team, number), pids in sorted(seen.items()):
+            if len(pids) < 2:
+                continue
+            names = [self.table.name(self.index_by_pid[p]) for p in pids
+                     if p in self.index_by_pid]
+            more = "" if len(pids) <= 3 else f" +{len(pids) - 3} more"
+            out.append(f"{self.clubs.get(team, team)}: {len(pids)} players share number "
+                       f"{number} — {', '.join(names[:3])}{more}")
+        return out[:5]
+
+    def _preflight_summary(self):
+        """What the write will contain, and what is wrong with doing it now."""
+        counts = {}
+        for entry in self._changes.values():
+            counts[entry["table"]] = counts.get(entry["table"], 0) + 1
+        warnings = []
+        if self.game_running():
+            warnings.append("The game is running. Writing now can be ignored by it or leave "
+                            "the CPK half-written — close it first.")
+        if self.edit_saves:
+            warnings.append("An in-game EDIT save is present and overrides this database on "
+                            "load: " + ", ".join(os.path.basename(p) for p in self.edit_saves))
+        warnings.extend(self._duplicate_squad_numbers())
+        return counts, warnings
+
+    def _preflight(self):
+        """Review sheet before writing. Returns True to go ahead.
+
+        The old flow was a yes/no messagebox naming the .bin files; it could not show how many
+        edits were waiting, where the backup would land, or the two things that actually bite
+        (the game running, and an in-game EDIT save shadowing the database).
+        """
+        counts, warnings = self._preflight_summary()
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Write to the game database")
+        dlg.configure(bg=C_BG)
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        body = tk.Frame(dlg, bg=C_BG, padx=18, pady=14)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="WRITE TO THE GAME", bg=C_BG, fg=C_ACCENT,
+                 font=(self.FONT, 12, "bold")).pack(anchor="w")
+        tk.Label(body, text=os.path.basename(self.cpk_path) + "   ·   " + self._short_path(
+            self.cpk_path), bg=C_BG, fg=C_DIM, font=self.F_SMALL).pack(anchor="w", pady=(2, 10))
+
+        for name in ("Player", "Team", "PlayerAssignment", "Coach", "PlayerAppearance"):
+            if name not in self.dirty_tables:
+                continue
+            row = tk.Frame(body, bg=C_BG)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=f"{name}.bin", bg=C_BG, fg=C_FG, width=20, anchor="w",
+                     font=self.F_SMALL).pack(side="left")
+            tk.Label(row, text=f"{counts.get(name, 0)} change(s)", bg=C_BG, fg=C_ACCENT,
+                     width=14, anchor="w", font=self.F_SMALL).pack(side="left")
+            tk.Label(row, text=f"{len(self.tables[name].records):,} rows now", bg=C_BG,
+                     fg=C_DIM, font=self.F_SMALL).pack(side="left")
+
+        tk.Label(body, text=f"Backup: {self._short_path(self.backups_dir)}", bg=C_BG, fg=C_HINT,
+                 font=self.F_TINY).pack(anchor="w", pady=(10, 0))
+        if warnings:
+            tk.Label(body, text="BEFORE YOU WRITE", bg=C_BG, fg=C_WARN,
+                     font=(self.FONT, 9, "bold")).pack(anchor="w", pady=(10, 2))
+            for text in warnings:
+                tk.Label(body, text="• " + text, bg=C_BG, fg=C_WARN, justify="left",
+                         wraplength=int(460 * self.ui), font=self.F_SMALL).pack(anchor="w")
+        choice = {"go": False}
+
+        def go():
+            choice["go"] = True
+            dlg.destroy()
+
+        buttons = tk.Frame(body, bg=C_BG)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Write to game", style="Save.TButton",
+                   command=go).pack(side="right")
+        ttk.Button(buttons, text="Cancel", style="Ghost.TButton",
+                   command=dlg.destroy).pack(side="right", padx=8)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.bind("<Return>", lambda e: go())
+        self._apply_cursors()
+        dlg.grab_set()
+        self.wait_window(dlg)
+        return choice["go"]
+
     def save(self):
         if not self.dirty_tables:
-            self.status("nothing to save")
+            self.status("nothing to save — no edits are pending")
             return
-        if self.game_running() and not messagebox.askokcancel(
-                "The game is running",
-                "SP Football Life 2027 is open. Writing the database while it runs can be "
-                "ignored by the game or, worse, leave the CPK half-written.\n\n"
-                "Close the game and save again — or continue at your own risk.",
-                parent=self, default="cancel"):
+        if self.cfg["confirm_save"] and not self._preflight():
+            self.status("save cancelled — nothing was written", "warn")
             return
-        what = ", ".join(sorted(n + ".bin" for n in self.dirty_tables))
-        if self.cfg["confirm_save"] and not messagebox.askokcancel(
-                "Save to game",
-                f"Write {what} into {os.path.basename(self.cpk_path)}?\n\n"
-                "The CPK is backed up first. Changes load next time the game starts.",
-                parent=self):
+        if not self.cfg["confirm_save"] and (self.game_running() or self.edit_saves) \
+                and not self._preflight():
+            self.status("save cancelled — nothing was written", "warn")
             return
         try:
             written = self.write_override()
@@ -2379,9 +3391,10 @@ class Editor(tk.Tk):
         self.dirty = False
         self.dirty_tables.clear()
         self.lbl_dirty.configure(text="")
+        self._drop_changes()
         summary = " · ".join(f"{name} {size:,} B → {n:,} rows" for name, size, n in written)
         self.status(f"wrote {summary} ({'ok' if ok else 'MISMATCH'})"
-                    " · applies next time the game starts")
+                    " · applies next time the game starts", "ok" if ok else "error")
 
     def _park_if_asked(self):
         """PESFORGE_PARK=<workspace> (set by the launcher): open there without pulling the view over."""
@@ -2431,17 +3444,37 @@ class Editor(tk.Tk):
                 "You have changes that were not written to the game file.\n\nClose anyway?",
                 parent=self, default="cancel"):
             return
+        self._remember_geometry()
         self.destroy()
+
+    def _remember_geometry(self):
+        """Remember the window size, so a session reopens at the size it was left."""
+        if not self.winfo_exists():
+            return
+        size = f"{self.winfo_width()}x{self.winfo_height()}"
+        if size == str(self.cfg.get("window")):
+            return
+        self.cfg["window"] = size
+        try:
+            settings.save(self.cfg)
+        except OSError:
+            pass
 
     def reload(self, note=None):
         ensure_vanilla(self.cpk_path)
         self.tables = load_tables(self.cpk_path)
         self.reindex()
         self._edited_pids.clear()
+        self._drop_changes()
+        self._undo.clear()
+        self._redo.clear()
+        self.dirty_tables.clear()
         self.populate(self.q.get())
         self.dirty = False
         self.lbl_dirty.configure(text="")
-        self.status(note or "reloaded the current database (override if present, else the CPK copy)")
+        self._sync_history_buttons()
+        self.status(note or "reloaded the current database (override if present, else the CPK copy)",
+                    "ok")
 
     def restore_vanilla(self):
         """Put the shipped CPK back (snapshot taken before the first patch)."""
@@ -2487,6 +3520,7 @@ class Editor(tk.Tk):
         keep = tk.StringVar(value=str(self.cfg["max_backups"]))
         confirm = tk.BooleanVar(value=self.cfg["confirm_save"])
         photos = tk.BooleanVar(value=self.cfg.get("photos", True))
+        chosen_theme = tk.StringVar(value=dict(theme.CHOICES).get(THEME, "Amber"))
 
         body = tk.Frame(dlg, bg=C_BG, padx=18, pady=16)
         body.pack(fill="both", expand=True)
@@ -2521,9 +3555,17 @@ class Editor(tk.Tk):
                         variable=photos, style="TCheckbutton").grid(row=6, column=0, columnspan=2,
                                                                     sticky="w", pady=(6, 0))
 
+        tk.Label(body, text="Theme", bg=C_BG, fg=C_DIM, anchor="w").grid(
+            row=7, column=0, sticky="w", pady=(10, 0))
+        ttk.Combobox(body, textvariable=chosen_theme, state="readonly", width=14,
+                     values=[label for _key, label in theme.CHOICES],
+                     font=self.F_LABEL).grid(row=7, column=1, sticky="w", padx=8, pady=(10, 0))
+        tk.Label(body, text="applies next launch", bg=C_BG, fg=C_HINT,
+                 font=self.F_TINY).grid(row=7, column=2, sticky="w")
+
         err = tk.Label(body, text="", bg=C_BG, fg=C_MAGENTA, anchor="w",
                        font=(self.FONT, 9))
-        err.grid(row=7, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        err.grid(row=8, column=0, columnspan=3, sticky="we", pady=(8, 0))
 
         def commit():
             gd = os.path.expanduser(game.get().strip())
@@ -2537,9 +3579,11 @@ class Editor(tk.Tk):
             except ValueError:
                 err.configure(text="Keep backups must be a number")
                 return
+            picked = next((key for key, label in theme.CHOICES
+                           if label == chosen_theme.get()), THEME)
             self.cfg.update(game_dir=gd, backups_dir=backups.get().strip(),
                             max_backups=max_backups, confirm_save=bool(confirm.get()),
-                            photos=bool(photos.get()))
+                            photos=bool(photos.get()), theme=picked)
             settings.save(self.cfg)
             self.game_dir = settings.game_dir(self.cfg)
             self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
@@ -2555,6 +3599,7 @@ class Editor(tk.Tk):
             self.country_filter.set("")
             self.index = None
             self.populate(self.q.get())
+            self._sync_photo_slot()
             if pid is not None:              # a just-enabled photo setting shows at once
                 self.load_portrait(pid)
             kept = settings.prune_backups(self.backups_dir, self.cfg["max_backups"])
@@ -2563,10 +3608,12 @@ class Editor(tk.Tk):
                 note += " · SPFL_DIR is set and still wins over the game folder"
             if kept:
                 note += f" · pruned {kept} old backup(s)"
-            self.status(f"{note} · {len(self.table.records):,} players")
+            if picked != THEME:
+                note += f" · theme {dict(theme.CHOICES)[picked]} applies next launch"
+            self.status(f"{note} · {len(self.table.records):,} players", "ok")
 
         buttons = tk.Frame(body, bg=C_BG)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        buttons.grid(row=9, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(buttons, text="Cancel", style="Ghost.TButton",
                    command=dlg.destroy).pack(side="right")
         ttk.Button(buttons, text="Save", style="Save.TButton",
@@ -2576,40 +3623,60 @@ class Editor(tk.Tk):
         self._apply_cursors()
         dlg.focus_set()
 
-    def status(self, msg):
-        self.statusbar.configure(text=msg)
+    def status(self, msg, level="info"):
+        """Footer message with a severity: info is quiet, ok/warn/error colour the line.
+
+        The old single colour meant "no club matches …" (a real dead end) looked exactly like
+        "reloaded the database" (routine), which is the kind of thing people stop reading.
+        """
+        colours = {"info": C_DIM, "ok": C_GREEN, "warn": C_WARN, "error": C_MAGENTA}
+        self.statusbar.configure(text=msg, fg=colours.get(level, C_DIM))
 
 
 class CoachWindow(tk.Toplevel):
-    """Every coach in Coach.bin: name, Japanese name, nationality, adaptability, club."""
+    """Every coach in Coach.bin: name, Japanese name, nationality, adaptability, club.
+
+    Changes go through the app's change ledger like every other edit, and the nationality is a
+    country name from the same list the player form uses — it used to be a 0-511 spinbox, the
+    last place in the app where you had to know a database id.
+    """
+
+    FIELDS = ("Name", "Japanese name", "Nationality", "Adaptability")
 
     def __init__(self, app):
         super().__init__(app)
         self.app = app
         self.index = None
-        self.title("Coaches — Coach.bin")
+        self._country_ids = app._country_ids
+        self._country_names = app._country_names
+        self.title("Coaches \u2014 Coach.bin")
         self.configure(bg=C_BG)
         ui = app.ui
-        self.geometry(f"{int(860 * ui)}x{int(680 * ui)}")
+        self.geometry(f"{int(880 * ui)}x{int(700 * ui)}")
+        self.minsize(int(520 * ui), int(420 * ui))
         self.transient(app)
 
         top = tk.Frame(self, bg=C_BG)
-        top.pack(fill="x", padx=12, pady=(12, 6))
-        tk.Label(top, text="Search", bg=C_BG, fg=C_DIM).pack(side="left")
+        top.pack(fill="x", padx=14, pady=(14, 6))
+        tk.Label(top, text="Search", bg=C_BG, fg=C_DIM, font=app.F_LABEL).pack(side="left")
         self.q = tk.StringVar()
-        ent = ttk.Entry(top, textvariable=self.q)
+        ent = ttk.Entry(top, textvariable=self.q, font=app.F_VALUE)
         ent.pack(side="left", fill="x", expand=True, padx=8)
         ent.bind("<KeyRelease>", lambda _e: self.fill())
+        self.count = tk.Label(top, text="", bg=C_BG, fg=C_HINT, font=app.F_TINY)
+        self.count.pack(side="left")
 
         body = tk.Frame(self, bg=C_BG)
-        body.pack(fill="both", expand=True, padx=12)
+        body.pack(fill="both", expand=True, padx=14)
         self.tree = ttk.Treeview(body, columns=("id", "name", "country", "club", "adapt"),
                                  show="headings", selectmode="browse")
-        for col, width, text in (("id", 64, "ID"), ("name", 230, "Name"),
-                                 ("country", 130, "Nationality"), ("club", 190, "Club"),
-                                 ("adapt", 60, "Adapt")):
+        for col, width, text, anchor in (("id", 64, "ID", "e"), ("name", 230, "Name", "w"),
+                                         ("country", 130, "Nationality", "w"),
+                                         ("club", 190, "Club", "w"),
+                                         ("adapt", 60, "Adapt", "e")):
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=int(width * ui), anchor="w")
+            self.tree.column(col, width=int(width * ui), anchor=anchor,
+                             stretch=(col in ("name", "club")))
         self.tree.pack(side="left", fill="both", expand=True)
         bar = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         bar.pack(side="left", fill="y")
@@ -2622,32 +3689,47 @@ class CoachWindow(tk.Toplevel):
             self.club_of.setdefault(app.team_table.coach_id(i), app.team_table.name(i))
 
         form = tk.Frame(self, bg=C_BG)
-        form.pack(fill="x", padx=12, pady=(12, 0))
+        form.pack(fill="x", padx=14, pady=(14, 0))
         self.vars = {}
-        for n, label in enumerate(("Name", "Japanese name", "Nationality", "Adaptability")):
-            tk.Label(form, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=14).grid(
-                row=n // 2, column=(n % 2) * 2, sticky="w", pady=3)
+        for n, label in enumerate(self.FIELDS):
+            tk.Label(form, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=14,
+                     font=app.F_LABEL).grid(row=n // 2, column=(n % 2) * 2, sticky="w", pady=3)
             v = tk.StringVar()
             self.vars[label] = v
             if label == "Adaptability":
-                w = tk.Spinbox(form, textvariable=v, from_=40, to=99, width=8)
+                w = tk.Spinbox(form, textvariable=v, from_=40, to=99, width=6,
+                               font=app.F_VALUE)
             elif label == "Nationality":
-                w = tk.Spinbox(form, textvariable=v, from_=0, to=511, width=8)
+                w = ttk.Combobox(form, textvariable=v, values=self._country_names, width=20,
+                                 font=app.F_VALUE)
+                w.bind("<KeyRelease>", self._filter_countries)
             else:
-                w = ttk.Entry(form, textvariable=v, width=30)
+                w = ttk.Entry(form, textvariable=v, width=30, font=app.F_VALUE)
             w.grid(row=n // 2, column=(n % 2) * 2 + 1, sticky="w", padx=(0, 18), pady=3)
+            self._field = w if label == "Name" else getattr(self, "_field", w)
         self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
-                             font=(app.FONT, 9))
-        self.note.pack(fill="x", padx=12, pady=(6, 0))
+                             font=app.F_LABEL)
+        self.note.pack(fill="x", padx=14, pady=(8, 0))
         ttk.Button(self, text="Apply to coach", style="Save.TButton",
-                   command=self.apply).pack(anchor="e", padx=12, pady=12)
+                   command=self.apply).pack(anchor="e", padx=14, pady=12)
 
         self.fill()
+
+    def _filter_countries(self, evt):
+        if getattr(evt, "keysym", "") in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = norm(self.vars["Nationality"].get().strip())
+        boxes = [w for w in self.winfo_children() for w in w.winfo_children()
+                 if isinstance(w, ttk.Combobox)]
+        for box in boxes:
+            box["values"] = ([n for n in self._country_names if q in norm(n)][:80] if q
+                             else self._country_names)
 
     def fill(self):
         needle = self.q.get().strip().lower()
         self.tree.delete(*self.tree.get_children())
         t = self.app.coach_table
+        shown = 0
         for i in range(len(t.records)):
             name = t.name(i)
             club = self.club_of.get(t.cid(i), "")
@@ -2656,6 +3738,8 @@ class CoachWindow(tk.Toplevel):
             self.tree.insert("", "end", iid=str(i), values=(
                 t.cid(i), name, pesdb.country_name(t.country(i)) or t.country(i),
                 club, t.adaptability(i)))
+            shown += 1
+        self.count.configure(text=f"{shown:,} of {len(t.records):,} coaches")
 
     def pick(self, _e=None):
         sel = self.tree.selection()
@@ -2665,48 +3749,108 @@ class CoachWindow(tk.Toplevel):
         self.index = int(sel[0])
         self.vars["Name"].set(t.name(self.index))
         self.vars["Japanese name"].set(t.japanese(self.index))
-        self.vars["Nationality"].set(str(t.country(self.index)))
+        self.vars["Nationality"].set(pesdb.country_name(t.country(self.index)) or "")
         self.vars["Adaptability"].set(str(t.adaptability(self.index)))
+
+    def write(self, field, value):
+        """Write one field of the selected coach and refresh the row (used by revert too)."""
+        t = self.app.coach_table
+        if self.index is None:
+            return
+        if field == "Name":
+            t.set_name(self.index, value)
+        elif field == "Japanese name":
+            t.set_japanese(self.index, value)
+        elif field == "Nationality":
+            t.set_country(self.index, int(value))
+        elif field == "Adaptability":
+            t.set_adaptability(self.index, int(value))
+        self.app._mark_table_dirty("Coach")
+        if self.tree.exists(str(self.index)):
+            values = list(self.tree.item(str(self.index), "values"))
+            values[1] = t.name(self.index)
+            values[2] = pesdb.country_name(t.country(self.index)) or t.country(self.index)
+            values[4] = t.adaptability(self.index)
+            self.tree.item(str(self.index), values=values)
 
     def apply(self):
         if self.index is None:
             self.note.configure(text="pick a coach in the list first")
             return
         t = self.app.coach_table
+        raw_country = self.vars["Nationality"].get().strip()
+        country = self._country_ids.get(raw_country)
+        if country is None and raw_country.isdigit():
+            country = max(0, min(511, int(raw_country)))
+        if country is None:
+            self.note.configure(text=f"no country called {raw_country!r} — pick one from the list")
+            return
         try:
-            country = max(0, min(511, int(self.vars["Nationality"].get())))
             adapt = max(40, min(99, int(self.vars["Adaptability"].get())))
         except ValueError:
-            self.note.configure(text="nationality and adaptability are numbers")
+            self.note.configure(text="adaptability is a number (40-99)")
             return
-        t.set_name(self.index, self.vars["Name"].get())
-        t.set_japanese(self.index, self.vars["Japanese name"].get())
-        t.set_country(self.index, country)
-        t.set_adaptability(self.index, adapt)
-        self.app._mark_table_dirty("Coach")
-        values = list(self.tree.item(str(self.index), "values"))
-        values[1] = t.name(self.index)
-        values[2] = pesdb.country_name(t.country(self.index)) or t.country(self.index)
-        values[4] = t.adaptability(self.index)
-        self.tree.item(str(self.index), values=values)
-        self.note.configure(text=f"coach {t.cid(self.index)} saved — Save to game writes Coach.bin")
+        wanted = {"Name": self.vars["Name"].get(),
+                  "Japanese name": self.vars["Japanese name"].get(),
+                  "Nationality": country,
+                  "Adaptability": adapt}
+        current = {"Name": t.name(self.index),
+                   "Japanese name": t.japanese(self.index),
+                   "Nationality": t.country(self.index),
+                   "Adaptability": t.adaptability(self.index)}
+        cid = t.cid(self.index)
+        changed = 0
+        for field, value in wanted.items():
+            old = current[field]
+            if old == value:
+                continue
+            self.write(field, value)
+            show = (lambda v, f=field: pesdb.country_name(v) or v) if field == "Nationality" \
+                else (lambda v: v)
+            self.app._note_change(("Coach", cid, field), t.name(self.index) or f"coach {cid}",
+                                  field, show(old), show(value),
+                                  lambda f=field, v=old: self.write(f, v))
+            changed += 1
+        self.note.configure(
+            text=(f"{changed} field(s) changed on coach {cid} — Save to game writes Coach.bin"
+                  if changed else "nothing to apply — the coach is unchanged"))
 
 
 class AppearanceWindow(tk.Toplevel):
-    """The selected player's appearance record: PlayerAppearance.bin, one 60-byte row each."""
+    """The selected player's appearance record: PlayerAppearance.bin, one 60-byte row each.
+
+    The list is still grouped by head/eyes/hair/kit (and still addressable by field name), but
+    a field is now edited with a slider that knows its own range, and the row is marked once it
+    has a pending change — 117 raw numbers under one spinbox was the least usable screen left.
+    """
 
     def __init__(self, app):
         super().__init__(app)
         self.app = app
         self.index = app.index
-        self.title(f"Appearance — {app.table.name(self.index)}")
+        self._fields = {}
+        self.title(f"Appearance \u2014 {app.table.name(self.index)}")
         self.configure(bg=C_BG)
         ui = app.ui
-        self.geometry(f"{int(600 * ui)}x{int(760 * ui)}")
+        self.geometry(f"{int(720 * ui)}x{int(760 * ui)}")
+        self.minsize(int(520 * ui), int(420 * ui))
         self.transient(app)
 
+        head = tk.Frame(self, bg=C_BG)
+        head.pack(fill="x", padx=14, pady=(14, 4))
+        tk.Label(head, text="APPEARANCE", bg=C_BG, fg=C_ACCENT,
+                 font=(app.FONT, 12, "bold")).pack(side="left")
+        tk.Label(head, text=f"{app.table.name(self.index)}  \u00b7  id {app.table.pid(self.index)}",
+                 bg=C_BG, fg=C_DIM, font=app.F_LABEL).pack(side="left", padx=10)
+        tk.Label(head, text="filter", bg=C_BG, fg=C_HINT,
+                 font=app.F_TINY).pack(side="left", padx=(14, 4))
+        self.filter = tk.StringVar()
+        ent = ttk.Entry(head, textvariable=self.filter, width=16, font=app.F_LABEL)
+        ent.pack(side="left")
+        ent.bind("<KeyRelease>", lambda _e: self.filter_rows())
+
         body = tk.Frame(self, bg=C_BG)
-        body.pack(fill="both", expand=True, padx=12, pady=12)
+        body.pack(fill="both", expand=True, padx=14, pady=6)
         self.tree = ttk.Treeview(body, columns=("value",), selectmode="browse")
         self.tree.heading("#0", text="Field")
         self.tree.heading("value", text="Value")
@@ -2719,34 +3863,98 @@ class AppearanceWindow(tk.Toplevel):
         self.tree.bind("<<TreeviewSelect>>", self.pick)
 
         form = tk.Frame(self, bg=C_BG)
-        form.pack(fill="x", padx=12)
-        tk.Label(form, text="Value", bg=C_BG, fg=C_DIM).pack(side="left")
+        form.pack(fill="x", padx=14, pady=(6, 0))
+        self.field_label = tk.Label(form, text="pick a field", bg=C_BG, fg=C_FG, anchor="w",
+                                    font=(app.FONT, 11, "bold"))
+        self.field_label.pack(fill="x")
+        self.range_label = tk.Label(form, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                    font=app.F_TINY)
+        self.range_label.pack(fill="x")
+        slide_row = tk.Frame(form, bg=C_BG)
+        slide_row.pack(fill="x", pady=(4, 2))
+        self.scale = tk.Scale(slide_row, from_=0, to=1, orient="horizontal", showvalue=False,
+                              bg=C_BG, fg=C_DIM, troughcolor=C_PANEL2, bd=0, relief="flat",
+                              highlightthickness=0, activebackground=C_ACCENT,
+                              command=self._slide, length=int(420 * ui))
+        self.scale.pack(side="left", fill="x", expand=True)
         self.value = tk.StringVar()
-        self.spin = tk.Spinbox(form, textvariable=self.value, width=8, command=self.apply)
+        self.spin = tk.Spinbox(slide_row, textvariable=self.value, width=6,
+                               font=app.F_VALUE, command=self.apply)
         self.spin.pack(side="left", padx=8)
         self.spin.bind("<Return>", lambda _e: self.apply())
-        ttk.Button(form, text="Apply to player", style="Save.TButton",
+        ttk.Button(slide_row, text="Apply", style="Ghost.TButton",
                    command=self.apply).pack(side="left")
+        ttk.Button(slide_row, text="Reset field", style="Ghost.TButton",
+                   command=self.reset).pack(side="left", padx=6)
+
         self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
-                             font=(app.FONT, 9))
-        self.note.pack(fill="x", padx=12, pady=(6, 12))
+                             font=app.F_LABEL)
+        self.note.pack(fill="x", padx=14, pady=(6, 4))
+        tk.Label(self, text="Appearance rows follow Player.bin order, one row per player.",
+                 bg=C_BG, fg=C_HINT, font=app.F_TINY, anchor="w").pack(fill="x", padx=14)
+        ttk.Button(self, text="Close", style="Ghost.TButton",
+                   command=self.destroy).pack(anchor="e", padx=14, pady=10)
         self.fill()
 
+    # ---- rows
     def fill(self):
         t = self.app.appearance_table
-        for group, labels in pesdb.APPEARANCE_GROUPS:
-            gid = self.tree.insert("", "end", text=group, values=("",), open=False)
+        for n, (group, labels) in enumerate(pesdb.APPEARANCE_GROUPS):
+            gid = self.tree.insert("", "end", text=group, values=("",), open=(n == 0))
             for label in labels:
-                self.tree.insert(gid, "end", iid=label, text=label,
-                                 values=(t.get(self.index, label),))
+                value = t.get(self.index, label)
+                self.tree.insert(gid, "end", iid=label, text=label, values=(value,))
+                self._fields[label] = gid
+        self._mark_changed()
 
+    def filter_rows(self):
+        q = norm(self.filter.get().strip())
+        for group, labels in pesdb.APPEARANCE_GROUPS:
+            shown = [l for l in labels if not q or q in norm(l)]
+            for label in labels:
+                parent = self.tree.parent(label)
+                if label in shown:
+                    self.tree.move(label, parent, "end")
+                else:
+                    self.tree.detach(label)
+
+    def _mark_changed(self):
+        """A pending change tints the row, and the group stays open so it is findable."""
+        changed = {e["key"][2] for e in self.app._changes.values()
+                   if e["table"] == "PlayerAppearance" and e["key"][1] == self.index}
+        for label, group in self._fields.items():
+            tags = ("changed",) if label in changed else ()
+            self.tree.item(label, tags=tags)
+        self.tree.tag_configure("changed", foreground=C_ACCENT)
+        for group in {g for g in self._fields.values()}:
+            self.tree.item(group, open=True)
+
+    # ---- editing
     def pick(self, _e=None):
         sel = self.tree.selection()
         if not sel or sel[0] not in pesdb.APPEARANCE_BY_LABEL:
             return
-        _bit, width, add = pesdb.APPEARANCE_BY_LABEL[sel[0]]
-        self.spin.configure(from_=add, to=add + (1 << width) - 1)
-        self.value.set(str(self.app.appearance_table.get(self.index, sel[0])))
+        label = sel[0]
+        _bit, width, add = pesdb.APPEARANCE_BY_LABEL[label]
+        lo, hi = add, add + (1 << width) - 1
+        self.scale.configure(from_=lo, to=hi)
+        value = self.app.appearance_table.get(self.index, label)
+        self.value.set(str(value))
+        self.scale.set(value)
+        self.field_label.configure(text=label)
+        self.range_label.configure(text=f"range {lo} \u2013 {hi}"
+                                        + ("  \u00b7  changed this session"
+                                           if self._is_changed(label) else ""))
+
+    def _is_changed(self, label):
+        return ("PlayerAppearance", self.index, label) in self.app._changes
+
+    def _slide(self, raw):
+        """The slider feeds the value box; the write still goes through apply()."""
+        try:
+            self.value.set(str(int(float(raw))))
+        except ValueError:
+            return
 
     def apply(self):
         sel = self.tree.selection()
@@ -2755,15 +3963,51 @@ class AppearanceWindow(tk.Toplevel):
             return
         label = sel[0]
         _bit, width, add = pesdb.APPEARANCE_BY_LABEL[label]
+        lo, hi = add, add + (1 << width) - 1
         try:
-            value = max(add, min(add + (1 << width) - 1, int(self.value.get())))
+            value = max(lo, min(hi, int(float(self.value.get()))))
         except ValueError:
             self.note.configure(text="a whole number, please")
             return
+        table = self.app.appearance_table
+        old = table.get(self.index, label)
+        if old == value:
+            self.note.configure(text=f"{label} is already {value}")
+            return
+        table.set(self.index, label, value)
+        self.app._mark_table_dirty("PlayerAppearance")
+        self.app._note_change(("PlayerAppearance", self.index, label),
+                              self.app.table.name(self.index), label, old, value,
+                              lambda v=old, l=label: self._write(l, v))
+        self.tree.item(label, values=(value,))
+        self.value.set(str(value))
+        self.scale.set(value)
+        self._mark_changed()
+        self.range_label.configure(text=f"range {lo} \u2013 {hi}  \u00b7  changed this session")
+        self.note.configure(text=f"{label} = {value} — Save to game writes PlayerAppearance.bin")
+
+    def _write(self, label, value):
         self.app.appearance_table.set(self.index, label, value)
         self.app._mark_table_dirty("PlayerAppearance")
-        self.tree.item(label, values=(value,))
-        self.note.configure(text=f"{label} = {value} — Save to game writes PlayerAppearance.bin")
+        if self.tree.exists(label):
+            self.tree.item(label, values=(value,))
+        if self.winfo_exists():
+            self._mark_changed()
+
+    def reset(self):
+        sel = self.tree.selection()
+        if not sel or sel[0] not in pesdb.APPEARANCE_BY_LABEL:
+            return
+        label = sel[0]
+        entry = self.app._changes.get(("PlayerAppearance", self.index, label))
+        if entry is None:
+            self.note.configure(text=f"{label} has not been changed")
+            return
+        self._write(label, entry["base"])
+        self.value.set(str(self.app.appearance_table.get(self.index, label)))
+        self.scale.set(self.app.appearance_table.get(self.index, label))
+        self._mark_changed()
+        self.note.configure(text=f"{label} back to {entry['base']}")
 
 
 def check():

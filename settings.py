@@ -43,6 +43,9 @@ DEFAULTS = {
     "max_backups": 50,          # 0 keeps everything
     "confirm_save": True,
     "photos": True,             # fetch the player's face from pesmaster on first view
+    "theme": "amber",           # palette name from theme.CHOICES
+    "window": "",               # "1518x956" remembered from the last session
+    "collapsed": ["career", "clubname"],   # sections that start folded (rarely touched)
 }
 
 
