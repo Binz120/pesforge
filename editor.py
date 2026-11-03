@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 import tkinter as tk
+import tkinter.font as tkfont
 import unicodedata
 from tkinter import ttk, messagebox, filedialog
 
@@ -101,6 +102,65 @@ C_LINE_SOFT = "#6b5128"    # dim spoke on the radar's outer ring
 C_GREEN = "#7fd08b"
 C_MAGENTA = "#dd6f9f"
 C_WARN = "#e05d5d"
+
+
+class Pill(tk.Canvas):
+    """A chip drawn as a rounded "island" — Tk cannot round a widget's corners.
+
+    A canvas rather than a Label: the text is one item and the background is a smoothed
+    polygon whose corner radius is half the height, which is the pill shape the mockup
+    uses for every chip family (`.chip{border-radius:999px}`).
+    """
+
+    def __init__(self, parent, text, font, click=None):
+        super().__init__(parent, bg=C_BG, bd=0, highlightthickness=0, cursor="hand2")
+        self._text = text
+        self._font = font
+        self._click = click
+        self._fill, self._fg, self._line = C_PANEL2, C_DIM, C_LINE
+        self._redraw()
+        if click is not None:
+            self.bind("<Button-1>", self._fire)
+
+    def _fire(self, _event=None):
+        if self._click is not None:
+            self._click()
+
+    def get_text(self):
+        return self._text
+
+    def set_text(self, text):
+        if text != self._text:
+            self._text = text
+            self._redraw()
+
+    def set_state(self, fill=None, fg=None, line=None):
+        """Repaint the chip; None keeps the current colour."""
+        if fill is not None:
+            self._fill = fill
+        if fg is not None:
+            self._fg = fg
+        if line is not None:
+            self._line = line
+        self._redraw()
+
+    def _redraw(self):
+        w = self._font.measure(self._text) + 18
+        h = self._font.metrics("linespace") + 6
+        r = min(h / 2, w / 2)
+        self.configure(width=w, height=h)
+        self.delete("all")
+        # points marching along both semicircular ends: Tk's smoothing only approximates a
+        # curve between control points, so two corner points round a pill into a plain box
+        pts = []
+        for deg in (270, 248, 225, 202, 180, 158, 135, 112, 90):      # left end, top to bottom
+            a = math.radians(deg)
+            pts += [r + r * math.cos(a), r + r * math.sin(a)]
+        for deg in (90, 68, 45, 22, 0, -22, -45, -68, -90):           # right end, bottom to top
+            a = math.radians(deg)
+            pts += [w - r + r * math.cos(a), r + r * math.sin(a)]
+        self.create_polygon(pts, fill=self._fill, outline=self._line, width=1, smooth=True)
+        self.create_text(w / 2, h / 2 + 1, text=self._text, fill=self._fg, font=self._font)
 
 
 # Nicknames the database does not spell out. Typing the alias lists the clubs whose name
@@ -221,6 +281,7 @@ class Editor(tk.Tk):
 
         self.cfg = settings.load()
         self.FONT = _pick_font()
+        self._chip_font = tkfont.Font(root=self, family=self.FONT, size=8)   # pill chips measure
         configured = self.cfg["game_dir"]
         self.game_dir = settings.game_dir(self.cfg)      # searches the disk if that folder is gone
         self.auto_found = configured != self.game_dir
@@ -431,10 +492,11 @@ class Editor(tk.Tk):
                                            insertbackground=C_FG, relief="flat", bd=0)
         ent.pack(side="left", fill="x", expand=True, padx=10, pady=5)
         ent.bind("<Return>", lambda e: self.open_first(self.q.get()))
-        ent.bind("<FocusIn>", lambda e: self._search_hint.place_forget())
-        ent.bind("<FocusOut>", lambda e: self._show_search_hint())
+        ent.bind("<FocusIn>", self._search_focus_in)
+        ent.bind("<FocusOut>", self._search_focus_out)
         tk.Label(box, text="Ctrl+F", bg=C_PANEL2, fg=C_LINE_SOFT,
                  font=(self.FONT, 8)).pack(side="right", padx=(0, 8))
+        self._search_focused = False
         self._search_hint = tk.Label(box, text="Search players, clubs, IDs…", bg=C_PANEL2,
                                      fg=C_DIM, cursor="xterm")
         self._search_hint.bind("<Button-1>", lambda e: ent.focus_set())
@@ -442,12 +504,19 @@ class Editor(tk.Tk):
         self._after = None
         self._show_search_hint()
 
+    def _search_focus_in(self, *_):
+        """The hint is driven by the entry's own focus events: `focus_get()` is None for Tk
+        under XWayland, so the hint used to reappear over the caret and read as a glitch."""
+        self._search_focused = True
+        self._search_hint.place_forget()
+
+    def _search_focus_out(self, *_):
+        self._search_focused = False
+        self._show_search_hint()
+
     def _show_search_hint(self, *_):
-        entry = getattr(self, "search_entry", None)
-        if entry is None:
-            return
-        if not self.q.get() and self.focus_get() is not entry:
-            self._search_hint.place(in_=entry, x=2, rely=0.5, anchor="w")
+        if not self.q.get() and not self._search_focused:
+            self._search_hint.place(in_=self.search_entry, x=2, rely=0.5, anchor="w")
         else:
             self._search_hint.place_forget()
 
@@ -676,7 +745,7 @@ class Editor(tk.Tk):
         filt.pack(fill="x", pady=(0, 8))
         tk.Label(filt, text="Club", bg=C_BG, fg=C_DIM, width=7, anchor="w").pack(side="left")
         self.club_filter = tk.StringVar(value="")   # empty = every club
-        self._club_names = sorted({n for n in self.clubs.values() if n})
+        self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
         self.cb_club = ttk.Combobox(filt, textvariable=self.club_filter, width=30,
                                     values=self._club_names)
         self.cb_club.pack(side="left", fill="x", expand=True, padx=8)
@@ -870,9 +939,7 @@ class Editor(tk.Tk):
         chips.pack(fill="x", pady=(0, 5))
         self._card_chips = {}
         for name in ("Style", "Height", "Weight", "Age", "Form"):
-            chip = tk.Label(chips, text="—", bg=C_PANEL2, fg=C_DIM, padx=8, pady=1,
-                            highlightthickness=1, highlightbackground=C_LINE,
-                            font=(self.FONT, 8))
+            chip = Pill(chips, "—", self._chip_font)
             chip.pack(side="left", padx=(0, 6))
             self._card_chips[name] = chip
 
@@ -889,8 +956,7 @@ class Editor(tk.Tk):
         grid.columnconfigure(1, weight=1)
 
     def _build_position_grid(self, parent, cols=5):
-        """Position ratings as chips; a click cycles none -> can play -> natural."""
-        F = (self.FONT, 8)
+        """Position ratings as pill chips; a click cycles none -> can play -> natural."""
         sec = self._section(parent, "Position ratings  (click to cycle: none · can play · natural)")
         grid = tk.Frame(sec, bg=C_BG)
         grid.pack(fill="x")
@@ -899,11 +965,9 @@ class Editor(tk.Tk):
             r, c = divmod(n, cols)
             v = tk.StringVar()
             self.vars["Pos " + label] = v
-            chip = tk.Label(grid, text=label, bg=C_PANEL2, fg=C_DIM, padx=10, pady=2,
-                            highlightthickness=1, highlightbackground=C_LINE,
-                            font=F, cursor="hand2")
-            chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=2)
-            chip.bind("<Button-1>", lambda e, l=label: self.cycle_position(l))
+            chip = Pill(grid, label, self._chip_font,
+                        lambda l=label: self.cycle_position(l))
+            chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
             self._pos_chips[label] = chip
 
     def cycle_position(self, label):
@@ -921,13 +985,13 @@ class Editor(tk.Tk):
         if chip is None:
             return
         val = ["none", "can play", "natural"].index(self.vars["Pos " + label].get())
-        chip.configure(text=label if val == 0 else f"{label} {val}")
+        chip.set_text(label if val == 0 else f"{label} {val}")
         if val == 2:
-            chip.configure(bg=C_ACCENT, fg=C_INK, highlightbackground=C_ACCENT)
+            chip.set_state(fill=C_ACCENT, fg=C_INK, line=C_ACCENT)
         elif val == 1:
-            chip.configure(bg=C_PANEL2, fg=C_ACCENT, highlightbackground=C_ACCENT)
+            chip.set_state(fill=C_PANEL2, fg=C_ACCENT, line=C_ACCENT)
         else:
-            chip.configure(bg=C_PANEL2, fg=C_DIM, highlightbackground=C_LINE)
+            chip.set_state(fill=C_PANEL2, fg=C_DIM, line=C_LINE)
 
     def _build_details(self, parent, cols):
         get = {f[0]: f for f in pesdb.PHYSICAL}
@@ -1047,8 +1111,7 @@ class Editor(tk.Tk):
 
     # ---- skills
     def _build_skills(self, parent, cols=2):
-        """Skills as chips; a click toggles, styled like the position chips."""
-        F = (self.FONT, 8)
+        """Skills as pill chips; a click toggles, styled like the position chips."""
         sec = self._section(parent, "Skills")
         grid = tk.Frame(sec, bg=C_BG)
         grid.pack(fill="x")
@@ -1057,11 +1120,9 @@ class Editor(tk.Tk):
             r, c = divmod(n, cols)
             v = tk.IntVar()
             self.vars["Skill " + label] = v
-            chip = tk.Label(grid, text=label, bg=C_PANEL2, fg=C_DIM, padx=8, pady=1,
-                            highlightthickness=1, highlightbackground=C_LINE,
-                            font=F, cursor="hand2")
+            chip = Pill(grid, label, self._chip_font,
+                        lambda l=label: self.toggle_skill(l))
             chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
-            chip.bind("<Button-1>", lambda e, l=label: self.toggle_skill(l))
             self._skill_chips[label] = chip
 
     def toggle_skill(self, label):
@@ -1078,8 +1139,8 @@ class Editor(tk.Tk):
         if chip is None:
             return
         on = bool(self.vars["Skill " + label].get())
-        chip.configure(fg=C_ACCENT if on else C_DIM,
-                       highlightbackground=C_ACCENT if on else C_LINE)
+        chip.set_state(fg=C_ACCENT if on else C_DIM,
+                       line=C_ACCENT if on else C_LINE)
 
     def ovr(self, i):
         """Reference rating for one player record (see pesdb.OVR_MODEL)."""
@@ -1180,8 +1241,12 @@ class Editor(tk.Tk):
 
     # ---- career club-id fields (Youth Club / Owner Club)
     def _club_ref_values(self):
-        """Selector values for the career club-id fields: `id  name`, by id."""
-        return [self._club_ref_text(t) for t in sorted(self.clubs)]
+        """Selector values for the career club-id fields: `id  name`, by id.
+
+        Clubs only — team ids below 100 are national teams, and a club field must never
+        offer a country (the list used to start with `1  Ireland`).
+        """
+        return [self._club_ref_text(t) for t in sorted(self.clubs) if t >= 100]
 
     def _club_ref_text(self, cid):
         """How a club-id field reads: the id with its club name when one is known."""
@@ -1208,7 +1273,8 @@ class Editor(tk.Tk):
         raw = self.vars[label].get().strip()
         cid = self._leading_id(raw)
         if cid is None and raw:
-            cid = next((t for t, n in self.clubs.items() if norm(n) == norm(raw)), None)
+            cid = next((t for t, n in self.clubs.items() if t >= 100 and norm(n) == norm(raw)),
+                       None)
         if cid is None:
             self.status(f"pick a club from the list for {label}")
             return
@@ -1347,7 +1413,7 @@ class Editor(tk.Tk):
         self.edit_saves = settings.edit_save_files()
         self.tables = load_tables(self.cpk_path)
         self.reindex()
-        self._club_names = sorted({n for n in self.clubs.values() if n})
+        self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
         self.cb_club["values"] = self._club_names
         self.club_filter.set("")
         self.country_filter.set("")
@@ -1376,9 +1442,9 @@ class Editor(tk.Tk):
         if not want:
             self.status("type a club name in the Move to club box first")
             return
-        exact = {t for t, n in self.clubs.items() if norm(n) == norm(want)}
+        exact = {t for t, n in self.clubs.items() if t >= 100 and norm(n) == norm(want)}
         ids = sorted(exact) or sorted({t for t, n in self.clubs.items()
-                                       if self.club_matches(want, n)})
+                                       if t >= 100 and self.club_matches(want, n)})
         if not ids:
             self.status(f"no club matches {want!r} — try part of the name, or a nickname")
             return
@@ -1431,7 +1497,7 @@ class Editor(tk.Tk):
             return
         team_id = self.team_table.tid(idx)
         self.clubs[team_id] = self.team_table.name(idx)
-        self._club_names = sorted({n for n in self.clubs.values() if n})
+        self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
         self.cb_club["values"] = self._club_names
         self._mark_table_dirty("Team")
         self.populate(self.q.get())
@@ -1546,12 +1612,14 @@ class Editor(tk.Tk):
         want = self.club_filter.get().strip()
         if not want:
             return None
-        exact = {t for t, n in self.clubs.items() if norm(n) == norm(want)}
-        return exact or {t for t, n in self.clubs.items() if self.club_matches(want, n)}
+        exact = {t for t, n in self.clubs.items() if t >= 100 and norm(n) == norm(want)}
+        return exact or {t for t, n in self.clubs.items()
+                         if t >= 100 and self.club_matches(want, n)}
 
     def populate(self, query, select_first=False):
         q = query.strip().lower()
-        if q and not q.isdigit() and any(self.club_matches(q, n) for n in self.clubs.values()):
+        if q and not q.isdigit() and any(self.club_matches(q, n)
+                                         for t, n in self.clubs.items() if t >= 100):
             self.mode = "clubs"
             return self._populate_clubs(q, select_first)
         self.mode = "players"
@@ -1630,7 +1698,7 @@ class Editor(tk.Tk):
         self._club_headings()
         targets = self.alias_targets(q)          # nickname hits first, then plain substrings
         rows = sorted(((tid, name) for tid, name in self.clubs.items()
-                       if self.club_matches(q, name)),
+                       if tid >= 100 and self.club_matches(q, name)),
                       key=lambda r: (not any(t in norm(r[1]) for t in targets), norm(r[1])))
         self.tree.delete(*self.tree.get_children())
         for tid, name in rows:
@@ -1826,8 +1894,8 @@ class Editor(tk.Tk):
                            ("Weight", f"{t.get(i, 'Weight (kg)')} kg"),
                            ("Age", f"age {t.get(i, 'Age')}"),
                            ("Form", f"form {t.get(i, 'Form')}")):
-            self._card_chips[name].configure(text=text)
-        self._card_chips["Style"].configure(fg=C_ACCENT, highlightbackground=C_ACCENT)
+            self._card_chips[name].set_text(text)
+        self._card_chips["Style"].set_state(fg=C_ACCENT, line=C_ACCENT)
         self.load_club(i, pid)
         self.load_portrait(pid)
         self.tree.set(str(i), "name", t.name(i)) if self.tree.exists(str(i)) else None
@@ -2467,7 +2535,7 @@ class Editor(tk.Tk):
             self.edit_saves = settings.edit_save_files()
             self.tables = load_tables(self.cpk_path)
             self.reindex()
-            self._club_names = sorted({n for n in self.clubs.values() if n})
+            self._club_names = sorted({n for t, n in self.clubs.items() if n and t >= 100})
             self.cb_club["values"] = self._club_names
             self.club_filter.set("")
             self.country_filter.set("")
