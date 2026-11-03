@@ -12,10 +12,33 @@ ST_PERROW, ST_CONST, ST_ZERO = 0x50, 0x30, 0x10
 T_STRING, T_DATA = 0x0A, 0x0B
 
 
+def decrypt_utf(buf, m=0x0000655F, t=0x00004115):
+    """CRI's UTF-table obfuscation: XOR with a 32-bit LCG stream, restarting at the table.
+
+    Some CPKs (PES 2015/2016/2017 vintage) ship their @UTF tables encrypted this way — the
+    plaintext header and TOC are what every later PES CPK carries. The stream is per table:
+    it starts fresh at the table's first byte.
+    """
+    out = bytearray(len(buf))
+    for i, b in enumerate(buf):
+        out[i] = b ^ (m & 0xFF)
+        m = (m * t) & 0xFFFFFFFF
+    return bytes(out)
+
+
 class Utf:
     def __init__(self, data, base=0):
         self.d = data
         self.base = base
+        self.encrypted = False
+        self.raw_base = base
+        if data[base:base + 4] == MAGIC_ENC:
+            # encrypted table: decrypt the header first to learn the size, then the table
+            size = struct.unpack_from('>I', decrypt_utf(data[base:base + 8]), 4)[0]
+            data = decrypt_utf(data[base:base + size])
+            self.d = data
+            self.base = base = 0
+            self.encrypted = True
         if data[base:base + 4] != b'@UTF':
             raise ValueError(f'no @UTF at {base:#x}: {data[base:base+4]!r}')
         self.size = struct.unpack_from('>I', data, base + 4)[0]
@@ -132,10 +155,15 @@ class Cpk:
         while True:
             i = self.d.find(b'TOC ', pos)
             if i < 0:
-                return None
+                break
             if self.d[i + 0x10:i + 0x14] == b'@UTF':
                 return i + 0x10
             pos = i + 4
+        # PES 2015/16/17: the TOC is an encrypted @UTF table directly after the header table,
+        # with no "TOC " magic of its own — the encrypted @UTF scramble is the marker.
+        pos = self.header.raw_base + self.header.size
+        i = self.d.find(MAGIC_ENC, pos)
+        return i if i >= 0 else None
 
     def entries(self):
         for r in self.toc.rows():
