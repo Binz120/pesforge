@@ -824,6 +824,9 @@ class Editor(tk.Tk):
         box.pack(side="left", fill="x", expand=True, padx=(16, 12))
         self.search_entry = ent = tk.Entry(box, textvariable=self.q, bg=C_PANEL2, fg=C_FG,
                                            insertbackground=C_FG, relief="flat", bd=0,
+                                           # the frame draws the border; an Entry's own
+                                           # highlight would draw a second rectangle inside it
+                                           highlightthickness=0,
                                            width=int(26 * self.ui))
         ent.pack(side="left", fill="x", expand=True, padx=10, pady=5)
         ent.bind("<Return>", lambda e: self.open_first(self.q.get()))
