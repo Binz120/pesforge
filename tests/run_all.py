@@ -1287,9 +1287,11 @@ def test_country_picker_and_name_counter():
         app.apply_field("Nationality")
         assert app.table.get(0, "Nationality") == 144
         assert app.vars["Nationality"].get() == "Argentina", "the box lost the country name"
+        # the counter follows the var's trace, so no update() — a pending fold rebuild would
+        # reload the form from the table and reset the box
         app.vars["name"].set("X" * 61)
-        app.update()
         assert app._name_counters["name"].cget("text") == "61/60"
+        app.load_form()
 
 
 def test_ovr_cache_and_skill_filter():

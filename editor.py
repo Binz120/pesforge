@@ -527,6 +527,7 @@ class Editor(tk.Tk):
         self._build_ui()
         self._apply_cursors()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.bind("<Map>", self._on_root_map, add="+")
         self.populate("")
         where = " · database found automatically" if self.auto_found else ""
         shadow = " · in-game EDIT save overrides the database on load" if self.edit_saves else ""
@@ -643,6 +644,13 @@ class Editor(tk.Tk):
         self._build_header()
         body = tk.Frame(self, bg=C_BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        # The list pane is built once and re-gridded, never rebuilt: relaying it out used to
+        # re-scan all 26,395 players and recreate the tree on every fold, which is what made a
+        # resize blank the window for most of a second.
+        self._left = tk.Frame(body, bg=C_BG)
+        self._build_list_pane(self._left)
+        self.update_idletasks()
+        self._list_w = max(int(236 * self.ui), self._left.winfo_reqwidth())
         self._build_body_one_page(body)
 
         foot = tk.Frame(self, bg=C_PANEL)
@@ -676,15 +684,54 @@ class Editor(tk.Tk):
         self._resize_repaint_job = None
         self.bind("<Configure>", self._on_root_resize)
 
-    def _on_root_resize(self, _=None):
+    def _on_root_resize(self, evt=None):
+        """Only the window's own Configure matters.
+
+        A binding on the root is also on every child's bindtags (a child's bindtags carry its
+        toplevel), so without the `evt.widget is self` check this ran once per widget in the
+        window — hundreds of times per relayout, each one cancelling and rescheduling a
+        repaint, which is what made a resize take most of a second.
+        """
+        if evt is not None and evt.widget is not self:
+            return
         if self._resize_repaint_job is not None:
             self.after_cancel(self._resize_repaint_job)
         self._resize_repaint_job = self.after(120, self._force_repaint)
 
+    def _on_root_map(self, evt=None):
+        if evt is not None and evt.widget is not self:
+            return
+        self.after(80, self._force_repaint)
+
     def _force_repaint(self):
+        """Redraw the window after a resize or a rebuilt layout.
+
+        XWayland under Hyprland sometimes never sends the Expose that follows a resize, so the
+        panes stay blank (or keep the previous layout's pixels) until a mouse-over damages them.
+        A generated Expose on the window and on the scroll canvases is the only reliable way to
+        ask Tk to paint them; doing it after the rebuild matters — new widgets mapped while the
+        compositor is settled never get their own event, and that is the stale/overlapping
+        screen this used to show when a window was dragged across the fold width.
+        """
         self._resize_repaint_job = None
-        self.event_generate("<Expose>", x=0, y=0,
-                            width=self.winfo_width(), height=self.winfo_height())
+        try:
+            self.update_idletasks()
+        except tk.TclError:
+            return
+        targets = [self]
+        for pane in getattr(self, "_pane_canvases", []):
+            try:
+                if pane.winfo_exists() and pane.winfo_ismapped():
+                    targets.append(pane)
+            except tk.TclError:
+                continue
+        for widget in targets:
+            try:
+                widget.event_generate("<Expose>", x=0, y=0,
+                                      width=max(1, widget.winfo_width()),
+                                      height=max(1, widget.winfo_height()))
+            except tk.TclError:
+                pass
 
     # ---------------------------------------------------------------- chrome
     def _build_header(self):
@@ -952,11 +999,11 @@ class Editor(tk.Tk):
         whose window manager tiles the window to its own size."""
         self._one_page_wide = wide
         for child in body.winfo_children():
-            child.destroy()
+            if child is not self._left:        # the list survives a relayout
+                child.destroy()
         for c in range(3):                     # the wide layout's column weights survived the fold
             body.columnconfigure(c, weight=0, minsize=0)
-        left = tk.Frame(body, bg=C_BG)
-        self._build_list_pane(left)
+        left = self._left
         # the list keeps the width its own columns ask for; the form panes get what is left
         self.update_idletasks()
         self._list_w = max(int(236 * self.ui), left.winfo_reqwidth())
@@ -1008,9 +1055,12 @@ class Editor(tk.Tk):
             self._build_club(col)
         self._one_page_mode = (wide, *self._detail_columns(body_w, wide).values())
         if getattr(self, "statusbar", None) is not None:    # a relayout, not the first build
-            self.populate(self.q.get())
             if self.index is not None:
                 self.load_form()
+            # the new widgets were mapped after the resize settled: without this the compositor
+            # can keep showing the old layout's pixels over them
+            self.after_idle(self._force_repaint)
+            self.after(80, self._force_repaint)
 
     # ---------------------------------------------------------------- left pane
     def _build_list_pane(self, left):
@@ -1140,6 +1190,8 @@ class Editor(tk.Tk):
         shows; it is the safety net for a window squeezed smaller than the design.
         """
         canvas = tk.Canvas(parent, bg=C_BG, highlightthickness=0)
+        self._pane_canvases = [c for c in getattr(self, "_pane_canvases", [])
+                               if c.winfo_exists()] + [canvas]
         sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=C_BG)
         win = canvas.create_window((0, 0), window=inner, anchor="nw")
@@ -1698,7 +1750,9 @@ class Editor(tk.Tk):
                 self.cb_db.pack(side="left", fill="x", expand=True, padx=6)
                 self.cb_db.bind("<<ComboboxSelected>>",
                                 lambda e: self.switch_database(self.db_var.get()))
-                self._refresh_databases()
+                # the disk is only walked when the dropdown opens or the database changes
+                self.cb_db["values"] = getattr(self, "_db_paths", None) or [
+                    self._short_path(self.cpk_path)]
                 continue
             v = tk.StringVar()
             self.team_vars[label] = v
@@ -1926,7 +1980,8 @@ class Editor(tk.Tk):
         paths = settings.find_databases()
         if self.cpk_path not in paths:
             paths.insert(0, self.cpk_path)
-        self.cb_db["values"] = [self._short_path(p) for p in paths]
+        self._db_paths = [self._short_path(p) for p in paths]
+        self.cb_db["values"] = self._db_paths
 
     @staticmethod
     def _short_path(path):
