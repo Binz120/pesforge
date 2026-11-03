@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# PESForge — portable launcher for the SP Football Life 2027 player editor.
+#
+# Works from any install location and any desktop: Tk draws through X11, or through XWayland
+# on Wayland sessions. Set SPFL_EDITOR_DIR to point at the checkout if it is not found
+# automatically, and SPFL_PYTHON to force a particular interpreter.
+set -uo pipefail
+
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+here=$(dirname "$self")
+
+find_editor() {
+  local candidate
+  for candidate in "${SPFL_EDITOR_DIR:-}" "$here" "$here/.." \
+                   "$HOME/Code/pesforge" "$HOME/pesforge" \
+                   /usr/local/share/pesforge /opt/pesforge; do
+    [ -n "$candidate" ] && [ -f "$candidate/editor.py" ] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
+EDITOR_DIR=$(find_editor) || {
+  echo "pesforge: editor.py not found. Set SPFL_EDITOR_DIR to the folder containing it." >&2
+  exit 1
+}
+
+has_tk() { "$1" -c 'import tkinter' >/dev/null 2>&1; }
+
+try_pythons() {
+  local candidate
+  # The distro interpreter first: it carries the system fontconfig/Tk build.
+  for candidate in "${SPFL_PYTHON:-}" /usr/bin/python3 python3 python; do
+    [ -n "$candidate" ] || continue
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if has_tk "$candidate"; then PY="$candidate"; return 0; fi
+  done
+  return 1
+}
+
+PY=""
+if ! try_pythons; then
+  # Last resort: a private Tk unpacked next to the checkout (needs no root).
+  for lib in "$HOME/.local/opt/tk/usr/lib" /usr/lib; do
+    if [ -f "$lib/libtk8.6.so" ]; then
+      export LD_LIBRARY_PATH="$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      export TK_LIBRARY="$lib/tk8.6"
+      try_pythons && break
+    fi
+  done
+fi
+
+if [ -z "$PY" ]; then
+  echo "pesforge: no Python with tkinter found." >&2
+  echo "  Debian/Ubuntu: sudo apt install python3-tk" >&2
+  echo "  Fedora:        sudo dnf install python3-tkinter" >&2
+  echo "  Arch:          sudo pacman -S tk" >&2
+  echo "  openSUSE:      sudo zypper install python3-tk" >&2
+  exit 1
+fi
+
+# Fill in the session variables only when the desktop has not provided them.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+  [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && export WAYLAND_DISPLAY=wayland-0
+fi
+if [ -z "${DISPLAY:-}" ]; then
+  for d in :0 :1; do
+    [ -S "/tmp/.X11-unix/X${d#:}" ] && { export DISPLAY="$d"; break; }
+  done
+fi
+# Tk's cursor is drawn through X11; a few compositors need an explicit theme for it to show.
+: "${XCURSOR_THEME:=Adwaita}"
+: "${XCURSOR_SIZE:=24}"
+export XCURSOR_THEME XCURSOR_SIZE
+
+: "${PESFORGE_PARK:=3}"      # open on workspace 3 without pulling the view there
+export PESFORGE_PARK
+
+cd "$EDITOR_DIR" || exit 1
+exec "$PY" "$EDITOR_DIR/editor.py" "$@"

@@ -1,0 +1,2375 @@
+{
+ "abilities": {
+  "EFootballAbilities": [
+   {
+    "name": "Offensive Awareness",
+    "prop": "OffensiveAwareness"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Tight Possession",
+    "prop": "TightPossession"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Heading",
+    "prop": "Header"
+   },
+   {
+    "name": "Set Piece Taking",
+    "prop": "SetPieceTaking"
+   },
+   {
+    "name": "Curl",
+    "prop": "Curl"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Acceleration",
+    "prop": "Acceleration"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Jumping",
+    "prop": "Jump"
+   },
+   {
+    "name": "Physical Contact",
+    "prop": "PhysicalContact"
+   },
+   {
+    "name": "Balance",
+    "prop": "Balance"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   },
+   {
+    "name": "Defensive Awareness",
+    "prop": "DefensiveAwareness"
+   },
+   {
+    "name": "Tackling",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Aggression",
+    "prop": "Aggression"
+   },
+   {
+    "name": "Defensive Engagement",
+    "prop": "DefensiveEngagement"
+   },
+   {
+    "name": "GK Awareness",
+    "prop": "GKAwareness"
+   },
+   {
+    "name": "GK Catching",
+    "prop": "GKCatching"
+   },
+   {
+    "name": "GK Parrying",
+    "prop": "GKParrying"
+   },
+   {
+    "name": "GK Reflexes",
+    "prop": "GKReflexes"
+   },
+   {
+    "name": "GK Reach",
+    "prop": "GKReach"
+   }
+  ],
+  "PES2021Abilities": [
+   {
+    "name": "Offensive Awareness",
+    "prop": "OffensiveAwareness"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Tight Possession",
+    "prop": "TightPossession"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Heading",
+    "prop": "Header"
+   },
+   {
+    "name": "Place Kicking",
+    "prop": "PlaceKicking"
+   },
+   {
+    "name": "Curl",
+    "prop": "Curl"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Acceleration",
+    "prop": "Acceleration"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Physical Contact",
+    "prop": "PhysicalContact"
+   },
+   {
+    "name": "Balance",
+    "prop": "Balance"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   },
+   {
+    "name": "Defensive Awareness",
+    "prop": "DefensiveAwareness"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Aggression",
+    "prop": "Aggression"
+   },
+   {
+    "name": "GK Awareness",
+    "prop": "GKAwareness"
+   },
+   {
+    "name": "GK Catching",
+    "prop": "GKCatching"
+   },
+   {
+    "name": "GK Clearing",
+    "prop": "GKClearing"
+   },
+   {
+    "name": "GK Reflexes",
+    "prop": "GKReflexes"
+   },
+   {
+    "name": "GK Reach",
+    "prop": "GKReach"
+   }
+  ],
+  "PES2019Abilities": [
+   {
+    "name": "Attacking Prowess",
+    "prop": "AttackingProwess"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Set Piece Taking",
+    "prop": "SetPieceTaking"
+   },
+   {
+    "name": "Curve",
+    "prop": "Swerve"
+   },
+   {
+    "name": "Header",
+    "prop": "Header"
+   },
+   {
+    "name": "Defensive Prowess",
+    "prop": "DefensiveProwess"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Explosive Power",
+    "prop": "ExplosivePower"
+   },
+   {
+    "name": "Body Control",
+    "prop": "BodyControl"
+   },
+   {
+    "name": "Physical Contact",
+    "prop": "PhysicalContact"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Goalkeeping",
+    "prop": "Goalkeeping"
+   },
+   {
+    "name": "Catching",
+    "prop": "Catching"
+   },
+   {
+    "name": "Clearing",
+    "prop": "Clearing"
+   },
+   {
+    "name": "Reflexes",
+    "prop": "Reflexes"
+   },
+   {
+    "name": "Coverage",
+    "prop": "Coverage"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   }
+  ],
+  "PES2017Abilities": [
+   {
+    "name": "Attacking Prowess",
+    "prop": "AttackingProwess"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Place Kicking",
+    "prop": "PlaceKicking"
+   },
+   {
+    "name": "Swerve",
+    "prop": "Swerve"
+   },
+   {
+    "name": "Header",
+    "prop": "Header"
+   },
+   {
+    "name": "Defensive Prowess",
+    "prop": "DefensiveProwess"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Explosive Power",
+    "prop": "ExplosivePower"
+   },
+   {
+    "name": "Body Control",
+    "prop": "BodyControl"
+   },
+   {
+    "name": "Physical Contact",
+    "prop": "PhysicalContact"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Goalkeeping",
+    "prop": "Goalkeeping"
+   },
+   {
+    "name": "Catching",
+    "prop": "Catching"
+   },
+   {
+    "name": "Clearing",
+    "prop": "Clearing"
+   },
+   {
+    "name": "Reflexes",
+    "prop": "Reflexes"
+   },
+   {
+    "name": "Coverage",
+    "prop": "Coverage"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   }
+  ],
+  "PES2016Abilities": [
+   {
+    "name": "Attacking Prowess",
+    "prop": "AttackingProwess"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Place Kicking",
+    "prop": "PlaceKicking"
+   },
+   {
+    "name": "Swerve",
+    "prop": "Swerve"
+   },
+   {
+    "name": "Header",
+    "prop": "Header"
+   },
+   {
+    "name": "Defensive Prowess",
+    "prop": "DefensiveProwess"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Explosive Power",
+    "prop": "ExplosivePower"
+   },
+   {
+    "name": "Body Balance",
+    "prop": "BodyBalance"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   },
+   {
+    "name": "Goalkeeping",
+    "prop": "Goalkeeping"
+   },
+   {
+    "name": "Catching",
+    "prop": "Catching"
+   },
+   {
+    "name": "Clearing",
+    "prop": "Clearing"
+   },
+   {
+    "name": "Reflexes",
+    "prop": "Reflexes"
+   },
+   {
+    "name": "Coverage",
+    "prop": "Coverage"
+   }
+  ],
+  "PES2015Abilities": [
+   {
+    "name": "Attacking Prowess",
+    "prop": "AttackingProwess"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Place Kicking",
+    "prop": "PlaceKicking"
+   },
+   {
+    "name": "Swerve",
+    "prop": "Swerve"
+   },
+   {
+    "name": "Header",
+    "prop": "Header"
+   },
+   {
+    "name": "Defensive Prowess",
+    "prop": "DefensiveProwess"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Explosive Power",
+    "prop": "ExplosivePower"
+   },
+   {
+    "name": "Body Balance",
+    "prop": "BodyBalance"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   },
+   {
+    "name": "Goalkeeping",
+    "prop": "Goalkeeping"
+   },
+   {
+    "name": "Saving",
+    "prop": "Saving"
+   }
+  ],
+  "PES2015CombinedAbilities": [
+   {
+    "name": "Scoring Instinct",
+    "prop": "ScoringInstinct"
+   },
+   {
+    "name": "Header",
+    "prop": "HeaderAccuracy"
+   },
+   {
+    "name": "Ball Retention",
+    "prop": "BallRetention"
+   },
+   {
+    "name": "Elusiveness",
+    "prop": "Elusiveness"
+   },
+   {
+    "name": "Dribble speed",
+    "prop": "DribbleSpeed"
+   },
+   {
+    "name": "Final Ball",
+    "prop": "FinalBall"
+   },
+   {
+    "name": "Vision",
+    "prop": "Vision"
+   },
+   {
+    "name": "Penetration",
+    "prop": "Penetration"
+   },
+   {
+    "name": "Work Rate",
+    "prop": "WorkRate"
+   },
+   {
+    "name": "Intercepting",
+    "prop": "Intercepting"
+   },
+   {
+    "name": "Physical Strength",
+    "prop": "PhysicalStrength"
+   },
+   {
+    "name": "Covering",
+    "prop": "Covering"
+   },
+   {
+    "name": "Strength in the Air",
+    "prop": "StrengthInTheAir"
+   },
+   {
+    "name": "Long-ball Accuracy",
+    "prop": "LongBallAccuracy"
+   },
+   {
+    "name": "Speed & Agility",
+    "prop": "SpeedAgility"
+   },
+   {
+    "name": "Free Kick",
+    "prop": "FreeKickAccuracy"
+   },
+   {
+    "name": "Corner Kick",
+    "prop": "CornerKickAccuracy"
+   },
+   {
+    "name": "Penalties",
+    "prop": "Penalties"
+   }
+  ],
+  "PES2015CombinedAbilitiesGK": [
+   {
+    "name": "Scoring Instinct",
+    "prop": "ScoringInstinct"
+   },
+   {
+    "name": "Header",
+    "prop": "HeaderAccuracy"
+   },
+   {
+    "name": "Ball Retention",
+    "prop": "BallRetention"
+   },
+   {
+    "name": "Elusiveness",
+    "prop": "Elusiveness"
+   },
+   {
+    "name": "Dribble speed",
+    "prop": "DribbleSpeed"
+   },
+   {
+    "name": "Final Ball",
+    "prop": "FinalBall"
+   },
+   {
+    "name": "Vision",
+    "prop": "Vision"
+   },
+   {
+    "name": "Penetration",
+    "prop": "Penetration"
+   },
+   {
+    "name": "Work Rate",
+    "prop": "WorkRate"
+   },
+   {
+    "name": "Intercepting",
+    "prop": "Intercepting"
+   },
+   {
+    "name": "Physical Strength",
+    "prop": "PhysicalStrength"
+   },
+   {
+    "name": "Covering",
+    "prop": "Covering"
+   },
+   {
+    "name": "Strength in the Air",
+    "prop": "StrengthInTheAir"
+   },
+   {
+    "name": "Long-ball Accuracy",
+    "prop": "LongBallAccuracy"
+   },
+   {
+    "name": "Speed & Agility",
+    "prop": "SpeedAgility"
+   },
+   {
+    "name": "Free Kick",
+    "prop": "FreeKickAccuracy"
+   },
+   {
+    "name": "Corner Kick",
+    "prop": "CornerKickAccuracy"
+   },
+   {
+    "name": "Penalties",
+    "prop": "Penalties"
+   },
+   {
+    "name": "Marauding",
+    "prop": "Marauding"
+   },
+   {
+    "name": "Handling High Balls",
+    "prop": "HandlingHighBalls"
+   },
+   {
+    "name": "1-on-1",
+    "prop": "OneOnOne"
+   },
+   {
+    "name": "Outfield Skills",
+    "prop": "OutfieldSkills"
+   },
+   {
+    "name": "Consistency",
+    "prop": "Consistency"
+   }
+  ],
+  "PES2014CombinedAbilities": [
+   {
+    "name": "Scoring Instinct",
+    "prop": "ScoringInstinct"
+   },
+   {
+    "name": "Header",
+    "prop": "HeaderAccuracy"
+   },
+   {
+    "name": "Ball Retention",
+    "prop": "BallRetention"
+   },
+   {
+    "name": "Elusiveness",
+    "prop": "Elusiveness"
+   },
+   {
+    "name": "Dribble speed",
+    "prop": "DribbleSpeed"
+   },
+   {
+    "name": "Final Ball",
+    "prop": "FinalBall"
+   },
+   {
+    "name": "Vision",
+    "prop": "Vision"
+   },
+   {
+    "name": "Penetration",
+    "prop": "Penetration"
+   },
+   {
+    "name": "Work Rate",
+    "prop": "WorkRate"
+   },
+   {
+    "name": "Intercepting",
+    "prop": "Intercepting"
+   },
+   {
+    "name": "Physical Strength",
+    "prop": "PhysicalStrength"
+   },
+   {
+    "name": "Covering",
+    "prop": "Covering"
+   },
+   {
+    "name": "Strength in the Air",
+    "prop": "StrengthInTheAir"
+   },
+   {
+    "name": "Long-ball Accuracy",
+    "prop": "LongBallAccuracy"
+   },
+   {
+    "name": "Speed & Agility",
+    "prop": "SpeedAgility"
+   },
+   {
+    "name": "Free Kick",
+    "prop": "FreeKickAccuracy"
+   },
+   {
+    "name": "Corner Kick",
+    "prop": "CornerKickAccuracy"
+   },
+   {
+    "name": "Penalties",
+    "prop": "Penalties"
+   }
+  ],
+  "PES2014Abilities": [
+   {
+    "name": "Attacking Prowess",
+    "prop": "AttackingProwess"
+   },
+   {
+    "name": "Ball Control",
+    "prop": "BallControl"
+   },
+   {
+    "name": "Dribbling",
+    "prop": "Dribbling"
+   },
+   {
+    "name": "Low Pass",
+    "prop": "LowPass"
+   },
+   {
+    "name": "Lofted Pass",
+    "prop": "LoftedPass"
+   },
+   {
+    "name": "Finishing",
+    "prop": "Finishing"
+   },
+   {
+    "name": "Place Kicking",
+    "prop": "PlaceKicking"
+   },
+   {
+    "name": "Controlled Spin",
+    "prop": "ControlledSpin"
+   },
+   {
+    "name": "Header",
+    "prop": "Header"
+   },
+   {
+    "name": "Defensive Prowess",
+    "prop": "DefensiveProwess"
+   },
+   {
+    "name": "Ball Winning",
+    "prop": "BallWinning"
+   },
+   {
+    "name": "Kicking Power",
+    "prop": "KickingPower"
+   },
+   {
+    "name": "Speed",
+    "prop": "Speed"
+   },
+   {
+    "name": "Explosive Power",
+    "prop": "ExplosivePower"
+   },
+   {
+    "name": "Body Balance",
+    "prop": "BodyBalance"
+   },
+   {
+    "name": "Jump",
+    "prop": "Jump"
+   },
+   {
+    "name": "Goalkeeping",
+    "prop": "Goalkeeping"
+   },
+   {
+    "name": "Saving",
+    "prop": "Saving"
+   },
+   {
+    "name": "Tenacity",
+    "prop": "Tenacity"
+   },
+   {
+    "name": "Stamina",
+    "prop": "Stamina"
+   }
+  ]
+ },
+ "skills": {
+  "EFootballSkills": [
+   {
+    "id": 1,
+    "name": "Sole Control",
+    "prop": "SoleControl",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "GK Low Punt",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "GK High Punt",
+    "prop": "GKHighPunt",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "GK Penalty Saver",
+    "prop": "GKPenaltySaver",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Penalty Specialist",
+    "prop": "PenaltySpecialist",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Sliding Tackle",
+    "prop": "SlidingTackle",
+    "fallback": "Interception"
+   },
+   {
+    "id": 8,
+    "name": "Rising Shot",
+    "prop": "RisingShot",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Gamesmanship",
+    "prop": "Gamesmanship",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "Heading",
+    "prop": "Heading",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "Long-range Shooting",
+    "prop": "LongRangeShot",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Dipping Shot",
+    "prop": "DippingShot",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Rabona",
+    "prop": "Rabona",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "No Look Pass",
+    "prop": "NoLookPass",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "Aerial Superiority",
+    "prop": "AerialSuperiority",
+    "fallback": "Heading"
+   },
+   {
+    "id": 22,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 23,
+    "name": "Chop Turn",
+    "prop": "ChopTurn",
+    "fallback": null
+   },
+   {
+    "id": 24,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   },
+   {
+    "id": 25,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 26,
+    "name": "Interception",
+    "prop": "Interception",
+    "fallback": null
+   },
+   {
+    "id": 27,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 28,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 29,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 30,
+    "name": "Chip Shot Control",
+    "prop": "ChipShotControl",
+    "fallback": null
+   },
+   {
+    "id": 31,
+    "name": "Heel Trick",
+    "prop": "HeelTrick",
+    "fallback": null
+   },
+   {
+    "id": 32,
+    "name": "Low Lofted Pass",
+    "prop": "LowLoftedPass",
+    "fallback": null
+   },
+   {
+    "id": 33,
+    "name": "Through Passing",
+    "prop": "ThroughPassing",
+    "fallback": null
+   },
+   {
+    "id": 34,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 35,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 36,
+    "name": "Long Range Curler",
+    "prop": "LongRangeCurler",
+    "fallback": null
+   },
+   {
+    "id": 37,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 38,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 39,
+    "name": "Double Touch",
+    "prop": "DoubleTouch",
+    "fallback": null
+   },
+   {
+    "id": 40,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 41,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 42,
+    "name": "Blocker",
+    "prop": "Blocker",
+    "fallback": "AcrobaticClear"
+   },
+   {
+    "id": 43,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 44,
+    "name": "Acrobatic Clearance",
+    "prop": "AcrobaticClearance",
+    "fallback": null
+   },
+   {
+    "id": 45,
+    "name": "Fortress",
+    "prop": "Fortress",
+    "fallback": "FightingSpirit"
+   },
+   {
+    "id": 46,
+    "name": "Phenomenal Finishing",
+    "prop": "PhenomenalFinishing",
+    "fallback": "AcrobaticFinishing"
+   },
+   {
+    "id": 47,
+    "name": "Momentum Dribbling",
+    "prop": "MomentumDribbling",
+    "fallback": "DoubleTouch"
+   },
+   {
+    "id": 48,
+    "name": "Game-Changing Pass",
+    "prop": "GameChangingPass",
+    "fallback": "WeightedPass"
+   },
+   {
+    "id": 49,
+    "name": "Edged Crossing",
+    "prop": "EdgedCrossing",
+    "fallback": "PinpointCrossing"
+   },
+   {
+    "id": 50,
+    "name": "Visionary Pass",
+    "prop": "VisionaryPass",
+    "fallback": "ThroughPassing"
+   },
+   {
+    "id": 51,
+    "name": "Blitz Curler",
+    "prop": "BlitzCurler",
+    "fallback": "LongRangeDrive"
+   },
+   {
+    "id": 52,
+    "name": "Phenomenal Pass",
+    "prop": "PhenomenalPass",
+    "fallback": "ThroughPassing"
+   },
+   {
+    "id": 53,
+    "name": "Bullet Header",
+    "prop": "BulletHeader",
+    "fallback": "Heading"
+   },
+   {
+    "id": 54,
+    "name": "Aerial Fort",
+    "prop": "AerialFort",
+    "fallback": "Heading"
+   },
+   {
+    "id": 55,
+    "name": "Acceleration Burst",
+    "prop": "AccelerationBurst",
+    "fallback": "DoubleTouch"
+   },
+   {
+    "id": 56,
+    "name": "Long Reach Tackle",
+    "prop": "LongReachTackle",
+    "fallback": "Interception"
+   },
+   {
+    "id": 57,
+    "name": "GK Directing Defence",
+    "prop": "GKDirectingDefence",
+    "fallback": "Captaincy"
+   },
+   {
+    "id": 58,
+    "name": "Low Screamer",
+    "prop": "LowScreamer",
+    "fallback": "LongRangeShot"
+   },
+   {
+    "id": 59,
+    "name": "Willpower",
+    "prop": "Willpower",
+    "fallback": "FightingSpirit"
+   },
+   {
+    "id": 60,
+    "name": "GK Spirit Roar",
+    "prop": "GKSpiritRoar",
+    "fallback": "FightingSpirit"
+   },
+   {
+    "id": 61,
+    "name": "Magnetic Feet",
+    "prop": "MagneticFeet",
+    "fallback": "StepOnSkillControl"
+   },
+   {
+    "id": 62,
+    "name": "Attack Trigger",
+    "prop": "AttackTrigger",
+    "fallback": "ThroughPassing"
+   }
+  ],
+  "PES2021Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Double Touch",
+    "prop": "DoubleTouch",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Cross Over Turn",
+    "prop": "CrossOverTurn",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Step On Skill Control",
+    "prop": "StepOnSkillControl",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "Heading",
+    "prop": "Heading",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "Chip Shot Control",
+    "prop": "ChipShotControl",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "Long Range Shot",
+    "prop": "LongRangeShot",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Dipping Shots",
+    "prop": "DippingShot",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Rising Shots",
+    "prop": "RisingShot",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Heel Trick",
+    "prop": "HeelTrick",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "Through Passing",
+    "prop": "ThroughPassing",
+    "fallback": null
+   },
+   {
+    "id": 22,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 23,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 24,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 25,
+    "name": "Rabona",
+    "prop": "Rabona",
+    "fallback": null
+   },
+   {
+    "id": 26,
+    "name": "No Look Pass",
+    "prop": "NoLookPass",
+    "fallback": null
+   },
+   {
+    "id": 27,
+    "name": "Low Lofted Pass",
+    "prop": "LowLoftedPass",
+    "fallback": null
+   },
+   {
+    "id": 28,
+    "name": "GK Low Punt",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 29,
+    "name": "GK High Punt",
+    "prop": "GKHighPunt",
+    "fallback": null
+   },
+   {
+    "id": 30,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 31,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 32,
+    "name": "Penalty Specialist",
+    "prop": "PenaltySpecialist",
+    "fallback": null
+   },
+   {
+    "id": 33,
+    "name": "GK Penalty Saver",
+    "prop": "GKPenaltySaver",
+    "fallback": null
+   },
+   {
+    "id": 34,
+    "name": "Gamesmanship",
+    "prop": "Gamesmanship",
+    "fallback": null
+   },
+   {
+    "id": 35,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 36,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 37,
+    "name": "Interception",
+    "prop": "Interception",
+    "fallback": null
+   },
+   {
+    "id": 38,
+    "name": "Acrobatic Clear",
+    "prop": "AcrobaticClear",
+    "fallback": null
+   },
+   {
+    "id": 39,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 40,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 41,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   }
+  ],
+  "PES2019Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Double Touch",
+    "prop": "DoubleTouch",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Cross Over Turn",
+    "prop": "CrossOverTurn",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Step On Skill Control",
+    "prop": "StepOnSkillControl",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "Heading",
+    "prop": "Heading",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "Chip Shot Control",
+    "prop": "ChipShotControl",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "Long Range Shot",
+    "prop": "LongRangeShot",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Rising Shots",
+    "prop": "RisingShot",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "Heel Trick",
+    "prop": "HeelTrick",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 22,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 23,
+    "name": "Rabona",
+    "prop": "Rabona",
+    "fallback": null
+   },
+   {
+    "id": 24,
+    "name": "No Look Pass",
+    "prop": "NoLookPass",
+    "fallback": null
+   },
+   {
+    "id": 25,
+    "name": "Low Lofted Pass",
+    "prop": "LowLoftedPass",
+    "fallback": null
+   },
+   {
+    "id": 26,
+    "name": "GK Low Punt",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 27,
+    "name": "GK High Punt",
+    "prop": "GKHighPunt",
+    "fallback": null
+   },
+   {
+    "id": 28,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 29,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 30,
+    "name": "Penalty Specialist",
+    "prop": "PenaltySpecialist",
+    "fallback": null
+   },
+   {
+    "id": 31,
+    "name": "GK Penalty Saver",
+    "prop": "GKPenaltySaver",
+    "fallback": null
+   },
+   {
+    "id": 32,
+    "name": "Gamesmanship",
+    "prop": "Gamesmanship",
+    "fallback": null
+   },
+   {
+    "id": 33,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 34,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 35,
+    "name": "Interception",
+    "prop": "Interception",
+    "fallback": null
+   },
+   {
+    "id": 36,
+    "name": "Acrobatic Clear",
+    "prop": "AcrobaticClear",
+    "fallback": null
+   },
+   {
+    "id": 37,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 38,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 39,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   }
+  ],
+  "PES2018Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Heading",
+    "prop": "Heading",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Heel Trick",
+    "prop": "HeelTrick",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "Rabona",
+    "prop": "Rabona",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Low Lofted Pass",
+    "prop": "LowLoftedPass",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "GK Low Punt",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 22,
+    "name": "Gamesmanship",
+    "prop": "Gamesmanship",
+    "fallback": null
+   },
+   {
+    "id": 23,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 24,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 25,
+    "name": "Acrobatic Clear",
+    "prop": "AcrobaticClear",
+    "fallback": null
+   },
+   {
+    "id": 26,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 27,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 28,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   }
+  ],
+  "PES2016Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Heading",
+    "prop": "Heading",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Heel Trick",
+    "prop": "HeelTrick",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "Rabona",
+    "prop": "Rabona",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Low Lofted Pass",
+    "prop": "LowLoftedPass",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "Low Punt Trajectory",
+    "prop": "LowPuntTrajectory",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 22,
+    "name": "Malicia",
+    "prop": "Malicia",
+    "fallback": null
+   },
+   {
+    "id": 23,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 24,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 25,
+    "name": "Acrobatic Clear",
+    "prop": "AcrobaticClear",
+    "fallback": null
+   },
+   {
+    "id": 26,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 27,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 28,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   }
+  ],
+  "PES2015Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Cut Behind & Turn",
+    "prop": "CutBehindAndTurn",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Scotch Move",
+    "prop": "ScotchMove",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Low Punt Trajectory",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 21,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   },
+   {
+    "id": 22,
+    "name": "Fighting Spirit",
+    "prop": "FightingSpirit",
+    "fallback": null
+   }
+  ],
+  "PES2014Skills": [
+   {
+    "id": 1,
+    "name": "Scissors Feint",
+    "prop": "ScissorsFeint",
+    "fallback": null
+   },
+   {
+    "id": 2,
+    "name": "Flip Flap",
+    "prop": "FlipFlap",
+    "fallback": null
+   },
+   {
+    "id": 3,
+    "name": "Marseille Turn",
+    "prop": "MarseilleTurn",
+    "fallback": null
+   },
+   {
+    "id": 4,
+    "name": "Sombrero",
+    "prop": "Sombrero",
+    "fallback": null
+   },
+   {
+    "id": 5,
+    "name": "Precise Touch",
+    "prop": "PreciseTouch",
+    "fallback": null
+   },
+   {
+    "id": 6,
+    "name": "Long Range Drive",
+    "prop": "LongRangeDrive",
+    "fallback": null
+   },
+   {
+    "id": 7,
+    "name": "Knuckle Shot",
+    "prop": "KnuckleShot",
+    "fallback": null
+   },
+   {
+    "id": 8,
+    "name": "Acrobatic Finishing",
+    "prop": "AcrobaticFinishing",
+    "fallback": null
+   },
+   {
+    "id": 9,
+    "name": "First-time Shot",
+    "prop": "FirstTimeShot",
+    "fallback": null
+   },
+   {
+    "id": 10,
+    "name": "One-touch Pass",
+    "prop": "OneTouchPass",
+    "fallback": null
+   },
+   {
+    "id": 11,
+    "name": "Weighted Pass",
+    "prop": "WeightedPass",
+    "fallback": null
+   },
+   {
+    "id": 12,
+    "name": "Pinpoint Crossing",
+    "prop": "PinpointCrossing",
+    "fallback": null
+   },
+   {
+    "id": 13,
+    "name": "Outside Curler",
+    "prop": "OutsideCurler",
+    "fallback": null
+   },
+   {
+    "id": 14,
+    "name": "Low Punt Trajectory",
+    "prop": "GKLowPunt",
+    "fallback": null
+   },
+   {
+    "id": 15,
+    "name": "Long Throw",
+    "prop": "LongThrow",
+    "fallback": null
+   },
+   {
+    "id": 16,
+    "name": "GK Long Throw",
+    "prop": "GKLongThrow",
+    "fallback": null
+   },
+   {
+    "id": 17,
+    "name": "Man Marking",
+    "prop": "ManMarking",
+    "fallback": null
+   },
+   {
+    "id": 18,
+    "name": "Track Back",
+    "prop": "TrackBack",
+    "fallback": null
+   },
+   {
+    "id": 19,
+    "name": "Captaincy",
+    "prop": "Captaincy",
+    "fallback": null
+   },
+   {
+    "id": 20,
+    "name": "Super-sub",
+    "prop": "SuperSub",
+    "fallback": null
+   }
+  ]
+ },
+ "playing_styles": [
+  "None",
+  "GoalPoacher",
+  "DummyRunner",
+  "FoxInTheBox",
+  "ProlificWinger",
+  "ClassicNo10",
+  "HolePlayer",
+  "BoxToBox",
+  "AnchorMan",
+  "TheDestroyer",
+  "ExtraFrontman",
+  "OffensiveFullback",
+  "DefensiveFullback",
+  "TargetMan",
+  "CreativePlaymaker",
+  "BuildUp",
+  "OffensiveGK",
+  "DefensiveGK",
+  "RoamingFlank",
+  "CrossSpecialist",
+  "Orchestrator",
+  "FullbackFinisher",
+  "SolidPlayer",
+  "DeepLyingForward",
+  "TheInstigator"
+ ]
+}
