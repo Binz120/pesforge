@@ -532,7 +532,45 @@ class Editor(tk.Tk):
         where = " · database found automatically" if self.auto_found else ""
         shadow = " · in-game EDIT save overrides the database on load" if self.edit_saves else ""
         self.status(f"{len(self.table.records):,} players loaded from {self.game_dir}{where}{shadow}")
+        self.after(150, self._update_career_note)     # one pass over the table, off the open path
         self._park_if_asked()
+
+    def _career_empties(self):
+        """Career fields that hold nothing in any record of the loaded table.
+
+        The shipped data leaves OwnerClub zero for all 26,395 players (the schema puts it at
+        byte 4; it is not a decoding bug), and Contract/Loan/MarketValue are blank for all but
+        a few dozen. Showing "0 —" made those look broken; the form says which they are instead.
+        """
+        cached = getattr(self, "_career_empty_cache", None)
+        if cached is not None:
+            return cached
+        recs = self.table.records
+        empty = []
+        for label, bit, width, _add in pesdb.CAREER:
+            mask = ((1 << width) - 1) << bit
+            if not any(int.from_bytes(rec, "little") & mask for rec in recs):
+                empty.append(label)
+        self._career_empty_cache = empty
+        return empty
+
+    def _update_career_note(self):
+        note = getattr(self, "career_note", None)
+        if note is None or not note.winfo_exists():
+            return
+        empty = self._career_empties()
+        if not empty:
+            note.configure(text="")
+            return
+        names = ", ".join(empty)
+        text = (f"{names} {'is' if len(empty) == 1 else 'are'} blank in all "
+                f"{len(self.table.records):,} records of this database \u2014 the shipped "
+                "data, not a read error.")
+        if "Owner Club" in empty:
+            text += (" The game keeps per-player ownership in its EDIT save, which PESForge "
+                     "cannot read yet.")
+        text += " Type a club name or id to set one."
+        note.configure(text=text)
 
     # ------------------------------------------------------------------ tables
     def reindex(self):
@@ -564,6 +602,7 @@ class Editor(tk.Tk):
         for tid in self.player_team.values():
             self.club_counts[tid] = self.club_counts.get(tid, 0) + 1
         self.index_by_pid = {self.table.pid(i): i for i in range(len(self.table.records))}
+        self._career_empty_cache = None
         self._country_ids = {name: cid for cid, name in pesdb.COUNTRIES.items() if name}
         self._country_names = sorted(set(pesdb.COUNTRIES.values()))
         self._ovr_cache = {}
@@ -714,6 +753,8 @@ class Editor(tk.Tk):
         screen this used to show when a window was dragged across the fold width.
         """
         self._resize_repaint_job = None
+        if getattr(self, "_closing", False) or not self.winfo_exists():
+            return
         try:
             self.update_idletasks()
         except tk.TclError:
@@ -934,6 +975,8 @@ class Editor(tk.Tk):
 
     def _recheck_fold(self):
         self._fold_job = None
+        if getattr(self, "_closing", False) or not self.winfo_exists():
+            return
         body = getattr(self, "_one_page_body", None)
         if body is None or not body.winfo_exists():
             return
@@ -961,7 +1004,14 @@ class Editor(tk.Tk):
 
     def _finish_fold(self):
         self._one_page_job = None
+        if getattr(self, "_closing", False) or not self.winfo_exists():
+            return
         body = self._one_page_body
+        try:
+            if not body.winfo_exists():
+                return
+        except tk.TclError:
+            return
         width = body.winfo_width()
         if width < 200:                      # still not sized: leave the layout alone
             return
@@ -1433,6 +1483,14 @@ class Editor(tk.Tk):
                              hint="dates YYYYMMDD")
         dates = [f for f in pesdb.CAREER if f[0] in ("Contract Until", "Loan Until")]
         others = [f for f in pesdb.CAREER if f[0] not in ("Contract Until", "Loan Until")]
+        # the "this one is blank" line sits above the grid: the block is at the bottom of the
+        # pane, so a note below it would open off-screen
+        self.career_note = tk.Label(rest, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                    justify="left", font=self.F_TINY)
+        self.career_note.pack(fill="x", pady=(0, 3))
+        self._wrap(self.career_note)
+        # a relayout rebuilds this section; the note's text has to be put back on the new label
+        self.after_idle(self._update_career_note)
         # one grid, so the date row shares its columns with every row below it
         self._field_grid(rest, dates + others + list(pesdb.MOTIONS), cols, section="career")
 
@@ -1800,7 +1858,7 @@ class Editor(tk.Tk):
     def _club_ref_text(self, cid):
         """How a club-id field reads: the id with its club name when one is known."""
         if not cid:
-            return "0  —"
+            return "—"
         return f"{cid}  {self.clubs[cid]}" if cid in self.clubs else str(cid)
 
     def _filter_club_ref_values(self, evt, combo):
@@ -2551,6 +2609,7 @@ class Editor(tk.Tk):
             self._portrait_job = None
 
     def destroy(self):
+        self._closing = True
         for attr in ("_portrait_job", "_radar_job", "_after", "_club_after",
                      "_resize_repaint_job", "_one_page_job", "_fold_job"):
             job = getattr(self, attr, None)
@@ -2878,6 +2937,9 @@ class Editor(tk.Tk):
         pid = self.table.pid(index)
         self.table.set(index, label, value)
         self._ovr_cache.pop(index, None)          # an ability moved: its OVR is stale
+        if label in ("Owner Club", "Youth Club"):  # the "which fields are blank" answer moved
+            self._career_empty_cache = None
+            self._update_career_note()
         self._edited_pids.add(pid)
         if old != value:
             self._note_change(("Player", pid, label), self.table.name(index) or f"#{pid}",

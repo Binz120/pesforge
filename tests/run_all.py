@@ -1095,12 +1095,19 @@ def test_header_chips_and_country_filter():
     """Header search/actions, the card chips and the country type-ahead all work."""
     with gui() as app:
         # search and the action buttons live in the header, not in the list pane
+        app.update_idletasks()          # the header may still be re-wrapping from the map
         for w in (app.search_entry, app._button_bar):
-            r_top = w.winfo_rooty()
-            assert app._header.winfo_rooty() <= r_top, "widget sits above the header"
-            assert r_top + w.winfo_height() <= \
-                app._header.winfo_rooty() + app._header.winfo_height() + 1, \
-                "widget falls below the header"
+            assert str(w).startswith(str(app._header)), "header widget is not in the header"
+        # A tiling compositor can hand the test window a tile shorter than the header itself;
+        # the geometry check only means something when the header got its requested height.
+        if app._header.winfo_height() >= app._header.winfo_reqheight() - 1:
+            for w in (app.search_entry, app._button_bar):
+                r_top = w.winfo_rooty()
+                assert app._header.winfo_rooty() <= r_top, "widget sits above the header"
+                assert r_top + w.winfo_height() <= \
+                    app._header.winfo_rooty() + app._header.winfo_height() + 1, \
+                    f"widget falls below the header: {w} {r_top}+{w.winfo_height()} vs " \
+                    f"{app._header.winfo_rooty()}+{app._header.winfo_height()}"
         names = [b.cget("text") for b in app._bar_buttons]
         for want in ("Save to game", "Undo", "Redo", "Discard", "Menu"):
             assert any(want in n for n in names), f"{want!r} missing from {names}"
@@ -1337,6 +1344,31 @@ def test_window_size_is_remembered():
         app._remember_geometry()
         size = settings.load()["window"]
         assert "x" in size and all(part.isdigit() for part in size.split("x")), size
+
+
+def test_blank_career_fields_are_explained():
+    """A field the shipped data leaves empty says so instead of reading "0 —"."""
+    with gui() as app:
+        app.index = 0
+        app.load_form()
+        app.update()
+        empty = app._career_empties()
+        assert "Owner Club" in empty, f"OwnerClub is blank in the shipped data: {empty}"
+        assert app._club_ref_text(0) == "—", app._club_ref_text(0)
+        app._update_career_note()
+        note = app.career_note.cget("text")
+        assert "Owner Club" in note and "blank" in note, note
+        # the note is rebuilt with the section: a relayout must not leave it empty again
+        app._layout_one_page(app._one_page_body, wide=False, width=800, height=830)
+        for _ in range(4):
+            app.update()
+        assert "Owner Club" in app.career_note.cget("text"), "the note was lost on a relayout"
+        # the field is still editable, and the note follows the table
+        app.vars["Owner Club"].set("Manchester United")
+        app.apply_club_ref("Owner Club")
+        assert app.table.get(0, "Owner Club") == 100
+        assert "Manchester" in app.vars["Owner Club"].get()
+        assert "blank" not in app.career_note.cget("text"), app.career_note.cget("text")
 
 
 def main():
