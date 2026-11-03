@@ -1875,8 +1875,13 @@ class Editor(tk.Tk):
             pesdb.POS_NAMES[pos_i] if pos_i < len(pesdb.POS_NAMES) else "?",
             self.ovr(i), t.get(i, "Age")))
 
-    def load_form(self):
-        i = self.index
+    def _refresh_card(self, i=None):
+        """The card's derived values: hero, meta line, OVR, value chips.
+
+        Every edit path must land here — the chips used to be painted once from load_form,
+        so editing Height left a stale `185 cm` chip above the new value in the field.
+        """
+        i = self.index if i is None else i
         t = self.table
         pid = t.pid(i)
         club = self.clubs.get(self.player_team.get(pid, -1), "—")
@@ -1896,6 +1901,12 @@ class Editor(tk.Tk):
                            ("Form", f"form {t.get(i, 'Form')}")):
             self._card_chips[name].set_text(text)
         self._card_chips["Style"].set_state(fg=C_ACCENT, line=C_ACCENT)
+
+    def load_form(self):
+        i = self.index
+        t = self.table
+        pid = t.pid(i)
+        self._refresh_card(i)
         self.load_club(i, pid)
         self.load_portrait(pid)
         self.tree.set(str(i), "name", t.name(i)) if self.tree.exists(str(i)) else None
@@ -1968,6 +1979,7 @@ class Editor(tk.Tk):
             if bar is not None:
                 self._draw_bar(bar, value)
                 self.draw_radar()
+            self._refresh_card(index)
         self._refresh_row()
         self._mark_table_dirty("Player")
 
@@ -2174,6 +2186,8 @@ class Editor(tk.Tk):
                 self.table.set_name(i, full=self.table.name(i), shirt=text)
             self.vars[key].set(text)
             self._refresh_row()
+            if self.index == i:
+                self._refresh_card(i)
             self._mark_table_dirty("Player")
             self._edited_pids.add(self.table.pid(i))
 
