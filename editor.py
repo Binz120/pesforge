@@ -134,7 +134,8 @@ class Pill(tk.Canvas):
         self._click = click
         self._click_back = click_back
         self._hover = False
-        self._fill, self._fg, self._line = C_PANEL2, C_DIM, C_LINE
+        self._fill, self._fg = C_PANEL2, C_DIM
+        self._line = theme.mix(C_LINE, C_FG, 0.22)   # a border, not a suggestion
         self._redraw()
         if click is not None:
             self.bind("<Button-1>", self._fire)
@@ -181,22 +182,32 @@ class Pill(tk.Canvas):
         self._redraw()
 
     def _redraw(self):
+        """Draw the pill as an exact capsule: two half-discs, a bar, and a stroke on the edge.
+
+        This used to be one smoothed polygon. Tk's smoothing is a B-spline that cuts the
+        corners of its control points, so the rounded ends came out flattened and the fill
+        never reached the outline — the chips read as thin empty outlines instead of solid
+        bubbles. Two filled discs plus a rectangle give a fill that touches the border, and
+        the border is drawn separately as two arcs and two lines so it stays 1 px everywhere.
+        """
         w = self._font.measure(self._text) + 12
         h = self._font.metrics("linespace") + 6
         fill = theme.mix(self._fill, C_FG, 0.07) if self._hover else self._fill
-        r = min(h / 2, w / 2)
+        r = h / 2
         self.configure(width=w, height=h)
         self.delete("all")
-        # points marching along both semicircular ends: Tk's smoothing only approximates a
-        # curve between control points, so two corner points round a pill into a plain box
-        pts = []
-        for deg in (270, 248, 225, 202, 180, 158, 135, 112, 90):      # left end, top to bottom
-            a = math.radians(deg)
-            pts += [r + r * math.cos(a), r + r * math.sin(a)]
-        for deg in (90, 68, 45, 22, 0, -22, -45, -68, -90):           # right end, bottom to top
-            a = math.radians(deg)
-            pts += [w - r + r * math.cos(a), r + r * math.sin(a)]
-        self.create_polygon(pts, fill=fill, outline=self._line, width=1, smooth=True)
+        left = (0.5, 0.5, h - 0.5, h - 0.5)
+        right = (w - h + 0.5, 0.5, w - 0.5, h - 0.5)
+        # fill: the two caps and the bar between them, no outline of their own
+        self.create_oval(*left, fill=fill, outline="")
+        self.create_oval(*right, fill=fill, outline="")
+        self.create_rectangle(r - 1, 0, w - r + 1, h, fill=fill, outline="")
+        # border: left half-circle, right half-circle, top and bottom edges
+        self.create_arc(*left, start=90, extent=180, style="arc", outline=self._line, width=1)
+        self.create_arc(*right, start=270, extent=180, style="arc", outline=self._line, width=1)
+        mid = h / 2
+        self.create_line(mid, 0.5, w - mid, 0.5, fill=self._line, width=1)
+        self.create_line(mid, h - 0.5, w - mid, h - 0.5, fill=self._line, width=1)
         self.create_text(w / 2, h / 2 + 1, text=self._text, fill=self._fg, font=self._font)
 
 
@@ -2679,6 +2690,7 @@ class Editor(tk.Tk):
                            ("Age", f"age {t.get(i, 'Age')}"),
                            ("Form", f"form {t.get(i, 'Form')}")):
             self._card_chips[name].set_text(text)
+            self._card_chips[name].set_state(fg=C_FG)     # a value is brighter than the empty dash
         self._card_chips["Style"].set_state(fg=C_ACCENT, line=C_ACCENT)
 
     def load_form(self):
