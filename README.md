@@ -9,8 +9,8 @@ process. Edits are patched into the game's own database and load the next time t
 - **Players** — 25 abilities (40–99) with value bars; age, height, weight, nationality, form,
   weak foot usage & accuracy, injury resistance, stronger foot; registered position and 13
   position ratings; playing style; 48 skills; full + shirt names; nine celebration/motion slots;
-  and the career block (youth club, owner club, contract until, loan until, market value,
-  national caps, reputation, playing attitude, legend / hand / Ballon d'Or flags).
+  and the career block (youth and owner club picked by club name, contract until, loan until,
+  market value, national caps, reputation, playing attitude, legend / hand / Ballon d'Or flags).
 - **Clubs** — transfers, squad numbers, the club's coach (from the 980-coach list), home stadium
   (from the 37 in the database) and the club's name slots.
 - **Coaches** — all 980 `Coach.bin` records: name, Japanese name, nationality, adaptability,

@@ -574,8 +574,8 @@ class Editor(tk.Tk):
         def fit(pane, most, cell):
             return max(1, min(most, int(pane / (cell * self.ui))))
         return {
-            "details": fit(mid_w, 3, 260),
-            "contract": fit(mid_w, 3, 195),
+            "details": fit(mid_w, 3, 272),
+            "contract": fit(mid_w, 3, 260),
             "positions": fit(mid_w, 5, 128),
             "abilities": fit(mid_w, 3, 165),
             "skills": fit(right_w, 4, 140),
@@ -854,19 +854,26 @@ class Editor(tk.Tk):
         rest = self._section(parent, "Contract · motion · celebration  (dates YYYYMMDD)")
         dates = [f for f in pesdb.CAREER if f[0] in ("Contract Until", "Loan Until")]
         others = [f for f in pesdb.CAREER if f[0] not in ("Contract Until", "Loan Until")]
-        self._field_grid(rest, dates, 2)
-        self._field_grid(rest, others + list(pesdb.MOTIONS), rest_cols)
+        # one grid, so the date row shares its columns with every row below it
+        self._field_grid(rest, dates + others + list(pesdb.MOTIONS), rest_cols)
         rates = self._section(parent, "Position ratings  (0 none · 1 can play · 2 natural)")
         self._position_grid(rates, pos_cols)
 
     def _field_grid(self, parent, fields, cols):
+        """Label + widget grid for the form sections (Details and the career block).
+
+        Every row is `[label][widget]`; the label column has a fixed width and a uniform
+        share of the spare width, so all rows share one pitch and the widgets line up down
+        each column. Career fields use one 9-char box size instead of per-field widths.
+        """
         F = (self.FONT, 8)
+        career = {f[0] for f in pesdb.CAREER + pesdb.MOTIONS}
         grid = tk.Frame(parent, bg=C_BG)
         grid.pack(fill="x")
         for n, spec in enumerate(fields):
             label = spec[0]
             r, c = divmod(n, cols)
-            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", font=F).grid(
+            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=19, font=F).grid(
                 row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
             key = label
             v = tk.StringVar()
@@ -883,6 +890,14 @@ class Editor(tk.Tk):
                 w = ttk.Combobox(grid, textvariable=v, state="readonly", width=20,
                                  values=PLAY_STYLES, font=F)
                 w.bind("<<ComboboxSelected>>", lambda e: self.apply_style())
+            elif label in ("Youth Club", "Owner Club"):
+                # a club id: the box shows the club name and takes one by name or id
+                w = ttk.Combobox(grid, textvariable=v, width=20, font=F,
+                                 values=self._club_ref_values())
+                w.bind("<<ComboboxSelected>>", lambda e, l=label: self.apply_club_ref(l))
+                w.bind("<Return>", lambda e, l=label: self.apply_club_ref(l))
+                w.bind("<KeyRelease>",
+                       lambda e, cb=w: self._filter_club_ref_values(e, cb))
             else:
                 _, _, width, add = spec
                 lo = 0 if add == 0 and label != "Age" else add
@@ -900,35 +915,16 @@ class Editor(tk.Tk):
                     lo, hi = 0, (1 << 24) - 1
                 elif label == "National Caps":
                     lo, hi = 0, 255
-                elif label in ("Youth Club", "Owner Club"):
-                    lo, hi = 0, 2 ** 32 - 1              # a club id, 0 for none
-                elif label == "Stronger Foot":
-                    lo, hi = 0, 1
                 else:
                     lo, hi = add, add + (1 << width) - 1      # motion slots, celebrations
                 w = tk.Spinbox(grid, textvariable=v, from_=lo, to=hi,
-                               width=self._spin_width(label), font=F,
+                               width=9 if label in career else 5, font=F,
                                command=lambda k=key: self.apply_field(k))
                 w.bind("<FocusOut>", lambda e, k=key: self.apply_field(k))
                 w.bind("<Return>", lambda e, k=key: self.apply_field(k))
             w.grid(row=r, column=c * 2 + 1, sticky="w", pady=1, padx=(0, 8))
-        for c in range(cols):
-            grid.columnconfigure(c * 2 + 1, weight=1)
-
-    @staticmethod
-    def _spin_width(label):
-        """Spinbox width in characters: enough for the value, no more.
-
-        The vertical space and the pane width are both tight, and a 10-character box for a
-        0-99 field costs a column that the neighbouring fields could use.
-        """
-        if label in ("Contract Until", "Loan Until"):
-            return 9                       # YYYYMMDD
-        if label in ("Youth Club", "Owner Club"):
-            return 7                       # a club id; the field is 32-bit but ids are short
-        if label == "Market Value":
-            return 8
-        return 5
+        # no column weights: label and widget sit tight together, so the pitch stays even;
+        # spare width stays at the right edge instead of opening gaps mid-form
 
     def _position_grid(self, parent, cols=5):
         F = (self.FONT, 8)
@@ -1008,7 +1004,8 @@ class Editor(tk.Tk):
 
         row = tk.Frame(sec, bg=C_BG)
         row.pack(fill="x", pady=(0, 2))
-        tk.Label(row, text="Move to club", bg=C_BG, fg=C_DIM, font=F).pack(side="left")
+        tk.Label(row, text="Move to club", bg=C_BG, fg=C_DIM, width=12, anchor="w",
+                 font=F).pack(side="left")
         self.club_target = tk.StringVar()
         self.cb_target = ttk.Combobox(row, textvariable=self.club_target, width=26, font=F,
                                       values=sorted({n for n in self.clubs.values() if n}))
@@ -1020,7 +1017,7 @@ class Editor(tk.Tk):
 
         link = tk.Frame(sec, bg=C_BG)
         link.pack(fill="x", pady=(0, 2))
-        tk.Label(link, text="Coach", bg=C_BG, fg=C_DIM, width=9, anchor="w",
+        tk.Label(link, text="Coach", bg=C_BG, fg=C_DIM, width=12, anchor="w",
                  font=F).pack(side="left")
         self.coach_var = tk.StringVar()
         self.cb_coach = ttk.Combobox(link, textvariable=self.coach_var, width=26, font=F,
@@ -1032,7 +1029,7 @@ class Editor(tk.Tk):
 
         field = tk.Frame(sec, bg=C_BG)
         field.pack(fill="x", pady=(0, 2))
-        tk.Label(field, text="Stadium", bg=C_BG, fg=C_DIM, width=9, anchor="w",
+        tk.Label(field, text="Stadium", bg=C_BG, fg=C_DIM, width=12, anchor="w",
                  font=F).pack(side="left")
         self.stadium_var = tk.StringVar()
         self.cb_stadium = ttk.Combobox(field, textvariable=self.stadium_var, width=26, font=F,
@@ -1045,7 +1042,7 @@ class Editor(tk.Tk):
 
         number = tk.Frame(sec, bg=C_BG)
         number.pack(fill="x", pady=(0, 2))
-        tk.Label(number, text="Squad no.", bg=C_BG, fg=C_DIM, width=9, anchor="w",
+        tk.Label(number, text="Squad no.", bg=C_BG, fg=C_DIM, width=12, anchor="w",
                  font=F).pack(side="left")
         self.shirt_var = tk.StringVar()
         self.shirt_spin = tk.Spinbox(number, textvariable=self.shirt_var, from_=1, to=99, width=5,
@@ -1061,7 +1058,7 @@ class Editor(tk.Tk):
         for label in ("English", "Database", "Short"):
             r = tk.Frame(sec2, bg=C_BG)
             r.pack(fill="x")
-            tk.Label(r, text=label, bg=C_BG, fg=C_DIM, width=9, anchor="w",
+            tk.Label(r, text=label, bg=C_BG, fg=C_DIM, width=12, anchor="w",
                      font=F).pack(side="left")
             if label == "Database":
                 # which data_s*.cpk the loads and saves go to, not a name slot
@@ -1088,6 +1085,45 @@ class Editor(tk.Tk):
                             anchor="w", justify="left", font=(self.FONT, 8))
         note_lbl.pack(fill="x", pady=(0, 2))
         self._wrap(note_lbl)
+
+    # ---- career club-id fields (Youth Club / Owner Club)
+    def _club_ref_values(self):
+        """Selector values for the career club-id fields: `id  name`, by id."""
+        return [self._club_ref_text(t) for t in sorted(self.clubs)]
+
+    def _club_ref_text(self, cid):
+        """How a club-id field reads: the id with its club name when one is known."""
+        if not cid:
+            return "0  —"
+        return f"{cid}  {self.clubs[cid]}" if cid in self.clubs else str(cid)
+
+    def _filter_club_ref_values(self, evt, combo):
+        """Type-ahead in a career club-id box: ids and club names both match."""
+        if evt.keysym in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
+            return
+        q = combo.get().strip()
+        values = self._club_ref_values()
+        if q:
+            values = [s for s in values
+                      if s.split("  ", 1)[0].startswith(q)
+                      or self.club_matches(q, s.split("  ", 1)[-1])][:60]
+        combo["values"] = values
+
+    def apply_club_ref(self, label):
+        """Apply a career club-id field: the leading id, else an exact club name."""
+        if self.index is None:
+            return
+        raw = self.vars[label].get().strip()
+        cid = self._leading_id(raw)
+        if cid is None and raw:
+            cid = next((t for t, n in self.clubs.items() if norm(n) == norm(raw)), None)
+        if cid is None:
+            self.status(f"pick a club from the list for {label}")
+            return
+        self.vars[label].set(str(cid))
+        self.apply_field(label)
+        self.vars[label].set(self._club_ref_text(cid))
+        self.status(f"{label}: {self._club_ref_text(cid)}")
 
     def _coach_choices(self):
         return [f"{cid}  {name}" for cid, name in
@@ -1683,7 +1719,10 @@ class Editor(tk.Tk):
         for label, bit, width, add in pesdb.MOTIONS:
             self.vars[label].set(str(t.get(i, label)))
         for label, *_ in pesdb.CAREER:
-            self.vars[label].set(str(t.get(i, label)))
+            if label in ("Youth Club", "Owner Club"):
+                self.vars[label].set(self._club_ref_text(t.get(i, label)))
+            else:
+                self.vars[label].set(str(t.get(i, label)))
         for label, bit in pesdb.POSITIONS:
             self.vars["Pos " + label].set(["none", "can play", "natural"][t.get(i, "Pos " + label)])
         for label, bit, width, add in pesdb.ATTRS:
@@ -1715,7 +1754,10 @@ class Editor(tk.Tk):
         self.table.set(index, label, value)
         self._edited_pids.add(self.table.pid(index))
         if self.index == index:
-            self.vars[label].set(str(value))
+            if label in ("Youth Club", "Owner Club"):
+                self.vars[label].set(self._club_ref_text(value))
+            else:
+                self.vars[label].set(str(value))
             bar = self.vars.get(label + "::bar")
             if bar is not None:
                 self._draw_bar(bar, value)
