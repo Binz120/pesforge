@@ -1376,6 +1376,27 @@ def test_blank_career_fields_are_explained():
         assert "blank" not in app.career_note.cget("text"), app.career_note.cget("text")
 
 
+def test_popup_windows_have_cursors():
+    """A popup window with no cursor loses the pointer entirely under XWayland."""
+    with gui() as app:
+        menu = app.nametowidget(app.menu_btn.cget("menu"))
+        assert str(menu.cget("cursor")), "the menu popup has no cursor"
+        app.open_coaches()
+        win = app._coach_win
+        win.update()
+        assert str(win.cget("cursor")), "the coach window has no cursor"
+        assert str(win.tree.cget("cursor")), "the coach tree has no cursor"
+        win.destroy()
+        app.index = 0
+        app.load_form()
+        app.open_appearance()
+        aware = app._app_win
+        aware.update()
+        assert str(aware.cget("cursor")), "the appearance window has no cursor"
+        assert str(aware.tree.cget("cursor")), "the appearance tree has no cursor"
+        aware.destroy()
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
