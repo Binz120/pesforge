@@ -87,6 +87,11 @@ RADAR_GROUPS = (
     ("Keeping", ("GK Awareness", "GK Catching", "GK Clearing", "GK Reflexes", "GK Reach")),
 )
 
+# Layout breakpoints, in ui-scaled pixels. The three-column shape needs the list plus the two
+# form panes at their measured minimums; building it into anything narrower clips the panes.
+WIDE_MIN = 1360
+COMPACT_MAX = 900
+
 # ---- palette ---------------------------------------------------------------
 # Every colour the window draws comes from theme.py; a palette is ten base colours and the
 # rest is derived there (contrast included). These names are the only colour references the
@@ -662,6 +667,7 @@ class Editor(tk.Tk):
         self.option_add("*TCombobox*Listbox.foreground", C_FG)
         self.option_add("*TCombobox*Listbox.selectBackground", C_SEL)
         self.option_add("*TCombobox*Listbox.selectForeground", C_FG)
+        self.option_add("*Listbox.cursor", "arrow")      # the combobox popdown is a Listbox
         self.option_add("*Spinbox.background", C_PANEL2)
         self.option_add("*Spinbox.foreground", C_FG)
         self.option_add("*Spinbox.insertBackground", C_FG)
@@ -882,8 +888,10 @@ class Editor(tk.Tk):
         btn = tk.Menubutton(parent, text=text, bg=C_PANEL2, fg=C_FG,
                             activebackground=C_HOVER, activeforeground=C_FG,
                             bd=0, padx=12, pady=3, cursor="hand2")
+        # a posted menu is its own window: without a cursor the pointer disappears over it
         menu = tk.Menu(btn, tearoff=0, bg=C_PANEL2, fg=C_FG,
-                       activebackground=C_ACCENT, activeforeground=C_INK, bd=0)
+                       activebackground=C_ACCENT, activeforeground=C_INK, bd=0,
+                       cursor="hand2")
         menu.add_command(label="Save to game", accelerator="Ctrl+S",
                          command=self._later(self.save))
         menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self._later(self.undo))
@@ -1025,8 +1033,8 @@ class Editor(tk.Tk):
         width = evt.width
         if width < 200:
             return
-        wide = width >= 1120 * self.ui
-        compact = width < int(900 * self.ui)
+        wide = width >= WIDE_MIN * self.ui
+        compact = width < COMPACT_MAX * self.ui
         mode = ("wide" if wide else ("compact" if compact else "folded"),
                 *self._detail_columns(width, wide).values())
         if mode == self._one_page_mode:
@@ -1048,8 +1056,8 @@ class Editor(tk.Tk):
         width = body.winfo_width()
         if width < 200:                      # still not sized: leave the layout alone
             return
-        wide = width >= 1120 * self.ui
-        compact = width < int(900 * self.ui)
+        wide = width >= WIDE_MIN * self.ui
+        compact = width < COMPACT_MAX * self.ui
         self._layout_one_page(body, wide=wide, compact=compact)
 
     def _detail_columns(self, body_w, wide):
@@ -1090,15 +1098,24 @@ class Editor(tk.Tk):
         for r in range(3):                     # and compact's row weights survive a fold back
             body.rowconfigure(r, weight=0, minsize=0)
         left = self._left
-        # The list keeps the width its own columns ask for; the form panes get what is left.
-        # The filters are laid out first: compact mode puts the three rows side by side, which
-        # makes the list request the whole window, and measuring before that would hand the
-        # form panes a tiny share of a wide window.
-        self._layout_list_filters(compact=compact)
-        self.update_idletasks()
-        self._list_w = max(int(236 * self.ui), left.winfo_reqwidth())
         body_w = width or body.winfo_width()
         body_h = height or body.winfo_height()
+        # The shape follows the width this layout is built for. A caller's flags can be stale
+        # (a queued fold, a plan for the design size measured in a window that is narrower),
+        # and a wide layout built into a narrow body is exactly what clips panes and hides
+        # controls; the width is the fact, the flag is a hint.
+        if body_w >= 200:
+            compact = body_w < COMPACT_MAX * self.ui
+            wide = body_w >= WIDE_MIN * self.ui
+        # The filters are laid out before the list is measured: compact mode puts the three
+        # rows side by side, which makes the list request the whole window, and measuring
+        # before that would hand the form panes a tiny share of a wide window.
+        self._layout_list_filters(compact=compact)
+        self.update_idletasks()
+        # the list keeps the width its own columns ask for, but never more than leaves one form
+        # pane its minimum: a stale measurement here used to give the panes a few pixels
+        room = max(int(236 * self.ui), body_w - int(560 * self.ui))
+        self._list_w = min(max(int(236 * self.ui), left.winfo_reqwidth()), room)
         cols = self._detail_columns(body_w, wide)
         self._plan = {"width": body_w, "height": body_h, "wide": wide, "compact": compact}
         if compact:
@@ -1180,6 +1197,7 @@ class Editor(tk.Tk):
                 self.load_form()
             # the new widgets were mapped after the resize settled: without this the compositor
             # can keep showing the old layout's pixels over them
+            self._apply_cursors()
             self.after_idle(self._force_repaint)
             self.after(80, self._force_repaint)
 
@@ -1313,17 +1331,22 @@ class Editor(tk.Tk):
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         self.tree.bind("<Return>", lambda e: self.on_select())
 
-    def _apply_cursors(self):
-        """Give every widget an explicit X cursor.
+    def _apply_cursors(self, root=None):
+        """Give every widget an explicit X cursor, for `root` (the main window by default).
 
         Tk does not set one for ttk widgets, and under XWayland/Hyprland a window without an
         explicit cursor can end up with no pointer at all — the mouse position is then invisible
-        over the whole app."""
+        over the whole app. Dialog windows and the menu popup need the same treatment, otherwise
+        the pointer disappears the moment one of them is opened."""
+        root = self if root is None else root
         try:
-            self.configure(cursor="left_ptr")
+            root.configure(cursor="left_ptr")
         except tk.TclError:
-            self.configure(cursor="arrow")
-        for w in self._walk(self):
+            try:
+                root.configure(cursor="arrow")
+            except tk.TclError:
+                return
+        for w in self._walk(root):
             try:
                 if isinstance(w, (ttk.Entry, ttk.Spinbox, tk.Entry, tk.Spinbox)):
                     w.configure(cursor="xterm")
@@ -3045,7 +3068,7 @@ class Editor(tk.Tk):
                    command=self.save).pack(side="right")
         ttk.Button(buttons, text="Close", style="Ghost.TButton",
                    command=win.destroy).pack(side="right", padx=8)
-        self._apply_cursors()
+        self._apply_cursors(win)
 
     # ------------------------------------------------------------- undo / redo
     def _push_undo(self, undo, redo):
@@ -3399,7 +3422,7 @@ class Editor(tk.Tk):
                                                     int(float(amount.get() or 0))),
                                     dlg.destroy())).grid(row=3, column=0, columnspan=2,
                                                          sticky="e", pady=(10, 0))
-        self._apply_cursors()
+        self._apply_cursors(dlg)
 
     def compare_rows(self, a, b):
         """[(ability, value in a, value in b), ...] in the order the Attributes tab shows."""
@@ -3599,7 +3622,7 @@ class Editor(tk.Tk):
                    command=dlg.destroy).pack(side="right", padx=8)
         dlg.bind("<Escape>", lambda e: dlg.destroy())
         dlg.bind("<Return>", lambda e: go())
-        self._apply_cursors()
+        self._apply_cursors(dlg)
         dlg.grab_set()
         self.wait_window(dlg)
         return choice["go"]
@@ -3861,7 +3884,7 @@ class Editor(tk.Tk):
                    command=commit).pack(side="right", padx=8)
         dlg.bind("<Return>", lambda e: commit())
         dlg.bind("<Escape>", lambda e: dlg.destroy())
-        self._apply_cursors()
+        self._apply_cursors(dlg)
         dlg.focus_set()
 
     def status(self, msg, level="info"):
@@ -3955,6 +3978,7 @@ class CoachWindow(tk.Toplevel):
                    command=self.apply).pack(anchor="e", padx=14, pady=12)
 
         self.fill()
+        app._apply_cursors(self)          # its own window: no cursor means no pointer here
 
     def _filter_countries(self, evt):
         if getattr(evt, "keysym", "") in ("Return", "KP_Enter", "Up", "Down", "Escape", "Tab"):
@@ -4136,6 +4160,7 @@ class AppearanceWindow(tk.Toplevel):
         ttk.Button(self, text="Close", style="Ghost.TButton",
                    command=self.destroy).pack(anchor="e", padx=14, pady=10)
         self.fill()
+        app._apply_cursors(self)          # its own window: no cursor means no pointer here
 
     # ---- rows
     def fill(self):
