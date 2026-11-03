@@ -75,9 +75,11 @@ The window is sized for a 1460×920 setup: the player list, the player form and 
 radar/skills/club column side by side. The header carries the search box — type a name, shirt
 name, club or ID and press Enter to open the first match — beside **Save to game**, **Undo**,
 **Redo**, **Discard** and the menu. The footer keeps the status line, the pending-change count
-(click it to open the change drawer) and the keyboard hints. A narrower window folds to a stacked
-layout instead of clipping fields, and the form grids pick their own column counts from the pane
-widths they are given.
+(click it to open the change drawer) and the keyboard hints. The shape follows the window width:
+three columns from 1360 px, the list beside a single form column between 900 and 1360, and below
+that the list sits above the form with a draggable splitter — a tiling window manager can hand the
+app any size, so nothing is ever clipped to make a layout fit. The form grids pick their own
+column counts from the pane widths they are given.
 
 **Sections fold.** Player, Abilities, Position ratings, Details, Contract · motion · celebration,
 Ability profile, Skills, Current club and Club name are collapsible: click a section title. The
@@ -128,9 +130,14 @@ nationality (a country name, picked from the same list as the player form) and a
 a filter, a slider that knows the field's own range, and a *Reset field* button. Changed rows are
 marked in the list.
 
-Menu entries: **Settings…** (`Ctrl+,`), open backups folder, **Reload database**, **Restore
-vanilla**, export/import roster CSV, **Bulk edit selected…**, **Compare selected players…**,
-**Coaches…**, **Appearance of the selected player…**, **About**, plus Undo/Redo/Discard at the top.
+**Theme** switches the palette (Amber, Crimson, Ice, Pitch) immediately, from the menu or from
+Settings: the colours are re-bound and the widgets rebuilt, keeping the loaded tables, the search
+query, the selection and pending edits.
+
+Menu entries: **Settings…** (`Ctrl+,`), **Theme**, open backups folder, **Reload database**,
+**Restore vanilla**, export/import roster CSV, **Bulk edit selected…**, **Compare selected
+players…**, **Coaches…**, **Appearance of the selected player…**, **About**, plus
+Undo/Redo/Discard at the top.
 
 Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the search box ·
 `Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field ·
@@ -145,7 +152,7 @@ Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the s
 | Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
 | Ask before writing the game file | Show the review sheet before a save is written |
 | Load player photos from pesmaster (online) | Fetch each player's face the first time it is shown; off = fully offline, and the card drops the empty photo box |
-| Theme | Amber, Crimson, Ice or Pitch (the four palettes in `docs/mockups`); applied at the next launch |
+| Theme | Amber, Crimson, Ice or Pitch; applied immediately (also in the menu) |
 
 Saved to `~/.config/pesforge/config.json` and applied immediately. The window size and the folded
 sections are remembered there too. The CLI reads the same file for the game folder and backup cap.

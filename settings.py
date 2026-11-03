@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 
-VERSION = "1.0"
+VERSION = "1.1"
 APP_NAME = "PESForge"
 
 CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
