@@ -1483,11 +1483,24 @@ class Editor(tk.Tk):
         canvas.bind_all("<Button-5>", lambda e: canvas.winfo_ismapped() and canvas.yview_scroll(2, "units"))
         return inner
 
-    def _wrap(self, label, minimum=160):
-        """Keep a long line inside its pane: Tk labels clip instead of wrapping on their own."""
+    def _wrap(self, label, minimum=160, cap=None):
+        """Keep a long line inside its pane: Tk labels clip instead of wrapping on their own.
+
+        `cap` bounds the wrap width. Wrapping only to the parent's width feeds back into it —
+        the label asks for the parent's width, the section then requests that width, and a note
+        that was wrapped for a wide pane keeps the section too wide for the narrow one (that is
+        how the club block ended up 683 px wide inside a 502 px pane). A cap breaks the loop, and
+        an initial value means a layout measured before the first Configure is never sized by
+        the full sentence.
+        """
         def fit(evt, lab=label):
-            lab.configure(wraplength=max(minimum, evt.width - 10))
+            width = max(minimum, evt.width - 10)
+            lab.configure(wraplength=min(cap, width) if cap else width)
         label.master.bind("<Configure>", fit, add="+")
+        try:
+            label.configure(wraplength=min(cap, minimum) if cap else minimum)
+        except tk.TclError:
+            pass
         return label
 
     def _section(self, parent, text, key=None, hint=None):
@@ -1555,7 +1568,7 @@ class Editor(tk.Tk):
         self.lbl_sub = tk.Label(col, text="Type a name or ID above, then press Enter",
                                 bg=C_BG, fg=C_DIM, anchor="w", justify="left",
                                 font=self.F_SMALL)
-        self._wrap(self.lbl_sub)
+        self._wrap(self.lbl_sub, cap=460)
         self.lbl_sub.pack(fill="x", pady=(0, 4))
 
         chips = tk.Frame(col, bg=C_BG)
@@ -1691,7 +1704,7 @@ class Editor(tk.Tk):
         self.career_note = tk.Label(rest, text="", bg=C_BG, fg=C_HINT, anchor="w",
                                     justify="left", font=self.F_TINY)
         self.career_note.pack(fill="x", pady=(0, 3))
-        self._wrap(self.career_note)
+        self._wrap(self.career_note, cap=340)
         # a relayout rebuilds this section; the note's text has to be put back on the new label
         self.after_idle(self._update_career_note)
         # one grid, so the date row shares its columns with every row below it
@@ -1939,7 +1952,7 @@ class Editor(tk.Tk):
         self.lbl_club_scope = tk.Label(sec, text="", bg=C_BG, fg=C_HINT, anchor="w",
                                        font=self.F_TINY, justify="left")
         self.lbl_club_scope.pack(fill="x", pady=(0, 3))
-        self._wrap(self.lbl_club_scope, 120)
+        self._wrap(self.lbl_club_scope, 120, cap=300)
 
         row = tk.Frame(sec, bg=C_BG)
         row.pack(fill="x", pady=(0, 2))
@@ -2032,7 +2045,7 @@ class Editor(tk.Tk):
         note_lbl = tk.Label(parent, text=note, bg=C_BG, fg=C_WARN if self.edit_saves else C_HINT,
                             anchor="w", justify="left", font=self.F_TINY)
         note_lbl.pack(fill="x", pady=(0, 2))
-        self._wrap(note_lbl)
+        self._wrap(note_lbl, cap=340)
 
     def _filter_coach_values(self, evt):
         """Type-ahead for the coach box: 980 names is a scrolling exercise otherwise."""
