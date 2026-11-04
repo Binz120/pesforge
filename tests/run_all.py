@@ -1399,6 +1399,12 @@ def test_popup_windows_have_cursors():
         assert str(aware.cget("cursor")), "the appearance window has no cursor"
         assert str(aware.tree.cget("cursor")), "the appearance tree has no cursor"
         aware.destroy()
+        app.open_pes2015()
+        pes = app._pes2015_win
+        pes.update()
+        assert str(pes.cget("cursor")), "the PES 2015 window has no cursor"
+        assert str(pes.tree.cget("cursor")), "the PES 2015 list has no cursor"
+        pes.destroy()
 
 
 # ---------------------------------------------------------------- PES 2015
@@ -1606,6 +1612,66 @@ def test_import_database_validates_foreign_files():
             assert "PES 2015" in str(exc), exc          # the refusal names the vintage
         else:
             raise AssertionError("a PES 2015 CPK passed as a PES 2021 database")
+
+
+def test_pes2015_window_edits_a_sandbox():
+    """The PES 2015 window: loads a sandbox install, edits every copy of a player, saves, reverts."""
+    box = pes2015_box()
+    import editor
+    saved_state, saved_vanilla = editor.STATE_DIR, editor.VANILLA
+    editor.STATE_DIR = os.path.join(box, "state")
+    editor.VANILLA = os.path.join(editor.STATE_DIR, "Player.vanilla.bin")
+    saved_dir = os.environ.get("PES2015_DIR")
+    os.environ["PES2015_DIR"] = os.path.join(box, "game")
+    try:
+        with gui() as app:
+            app.cfg["confirm_save"] = False          # no dialogs in a test
+            menu = app.nametowidget(app.menu_btn.cget("menu"))
+            import tkinter as tk
+            labels = []
+            for n in range(menu.index("end") + 1):
+                try:
+                    labels.append(menu.entrycget(n, "label"))
+                except tk.TclError:
+                    pass                             # separators carry no -label
+            assert "PES 2015 database…" in labels, labels
+            app.open_pes2015()
+            win = app._pes2015_win
+            win.update()
+            assert win.dir == os.path.join(box, "game"), win.dir
+            assert len(win.copies) > 12000, len(win.copies)
+            multi = next(pid for pid, copies in win.copies.items() if len(copies) > 1)
+            win.tree.selection_set(str(multi))
+            win.pick()
+            win.stat_vars["Speed"].set("41")
+            win.name_vars["Shirt Name"].set("TESTSHIRT")
+            win.apply()
+            assert multi in win.dirty, "apply did not mark the player"
+            win.save()
+            assert not win.dirty, "save left edits pending"
+            for path, stem, _t, _i in win.copies[multi]:     # every copy landed on disk
+                fresh = editor.pes2015.Cpk2015(path).read_table(stem)
+                row = next(k for k in range(len(fresh)) if fresh.pid(k) == multi)
+                assert fresh.get(row, "Speed") == 41, (stem, fresh.get(row, "Speed"))
+                assert fresh.shirt(row) == "TESTSHIRT", (stem, fresh.shirt(row))
+            kept = editor.pes2015.Cpk2015(os.path.join(box, "game", "Data", "dt10.cpk"))
+            assert len(kept.read_table("Player")) == 10091
+            win.tree.selection_set(str(multi))               # Revert drops an unsaved edit
+            win.pick()
+            win.stat_vars["Speed"].set("42")
+            win.apply()
+            assert multi in win.dirty
+            win.revert()
+            assert not win.dirty, "revert left edits pending"
+            _p, _s, table, i = win.display[multi]
+            assert table.get(i, "Speed") == 41, "revert did not reload from disk"
+            win.destroy()
+    finally:
+        editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
+        if saved_dir is None:
+            os.environ.pop("PES2015_DIR", None)
+        else:
+            os.environ["PES2015_DIR"] = saved_dir
 
 
 def main():

@@ -135,9 +135,9 @@ Settings: the colours are re-bound and the widgets rebuilt, keeping the loaded t
 query, the selection and pending edits.
 
 Menu entries: **Settings…** (`Ctrl+,`), **Theme**, open backups folder, **Reload database**,
-**Import database…**, **Restore vanilla**, export/import roster CSV, **Bulk edit selected…**,
-**Compare selected players…**, **Coaches…**, **Appearance of the selected player…**, **About**,
-plus Undo/Redo/Discard at the top.
+**Import database…**, **PES 2015 database…**, **Restore vanilla**, export/import roster CSV,
+**Bulk edit selected…**, **Compare selected players…**, **Coaches…**, **Appearance of the
+selected player…**, **About**, plus Undo/Redo/Discard at the top.
 
 Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the search box ·
 `Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field ·
@@ -211,8 +211,16 @@ dropped.
 ## PES 2015 (dt10.cpk + dt80 data packs)
 
 Retail PES 2015 is a different vintage — 180-byte player records, three name slots, nineteen
-abilities, a CRI-encrypted TOC — so it gets its own reader/writer and its own CLI. The GUI
-stays on SP Football Life; PES 2015 is edited headlessly:
+abilities, a CRI-encrypted TOC — so it gets its own reader/writer. Edit it two ways:
+
+- **In the app**: Menu → **PES 2015 database…** opens a small editor window — search the
+  12k+ players, set the 19 abilities, the primary position and the three names, then **Save to
+  game**. An edit lands in every copy of the player (base `Player.bin` and each numbered update
+  slot, in `dt10.cpk` and in the mounted data pack), region backups land in
+  `<state>/backups/pes2015`, and the save note lists exactly which tables were written. The
+  window finds the install itself and asks for the folder once if it cannot. Close PES 2015
+  while a save writes.
+- **Headless**:
 
 ```
 pesforge2015 --tables                        # what an edit would reach, with row counts
@@ -231,8 +239,9 @@ The install folder is found automatically (Wine prefixes, `wineprefixes/*`, Stea
 
 **What an edit reaches.** The player tables live in `Data/dt10.cpk` (base) and in the data pack
 `download/DpFileList.bin` names — `dt80_100E.cpk` on this install — each holding `Player.bin`
-plus numbered update slots (`Player1..6.bin`). A `--set` lands in *every* copy of the player
-across those tables, so the change shows whichever file the game reads on boot.
+plus numbered update slots (`Player1..6.bin`). A `--set` (CLI) or **Save to game** (window)
+lands in *every* copy of the player across those tables, so the change shows whichever file the
+game reads on boot.
 
 **Saves are reversible.** Before touching a CPK, the regions about to change — the TOC, the
 header table and the old payload — are saved under `<state>/backups/pes2015/`; `--restore`

@@ -1004,6 +1004,7 @@ class Editor(tk.Tk):
         menu.add_separator()
         menu.add_command(label="Reload database", command=self._later(self.reload))
         menu.add_command(label="Import database…", command=self._later(self.import_database))
+        menu.add_command(label="PES 2015 database…", command=self._later(self.open_pes2015))
         menu.add_command(label="Restore vanilla", command=self._later(self.restore_vanilla))
         menu.add_separator()
         menu.add_command(label="Export roster CSV…", command=self._later(self._export_dialog))
@@ -2255,6 +2256,14 @@ class Editor(tk.Tk):
         if win is not None and win.winfo_exists():
             win.destroy()
         self._app_win = AppearanceWindow(self)
+
+    def open_pes2015(self):
+        win = getattr(self, "_pes2015_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            win.focus_set()
+            return
+        self._pes2015_win = Pes2015Window(self)
 
     def load_club(self, i, pid):
         rows = self.assign_by_pid.get(pid, [])
@@ -4045,6 +4054,361 @@ class Editor(tk.Tk):
         """
         colours = {"info": C_DIM, "ok": C_GREEN, "warn": C_WARN, "error": C_MAGENTA}
         self.statusbar.configure(text=msg, fg=colours.get(level, C_DIM))
+
+
+class Pes2015Window(tk.Toplevel):
+    """PES 2015's player tables — a second, small editor for the 180-byte records.
+
+    The main window speaks PES 2021 (312-byte records, ~97 fields); retail PES 2015 stores 19
+    abilities, the primary position and three name slots, so it gets its own window. An applied
+    edit lands in EVERY copy of the player — base Player.bin and each numbered update slot, in
+    dt10.cpk and in the mounted data pack — because the slots override by id and a base-only
+    edit can be shadowed. Save writes through pes2015.Cpk2015.patch() and keeps the same region
+    backups the CLI uses (state/backups/pes2015, restorable byte for byte).
+    """
+
+    ABILITIES = tuple(pes2015.ABILITIES)          # the game's own field order
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        ui = app.ui
+        self.title("PES 2015 — player tables")
+        self.configure(bg=C_BG)
+        self.geometry(f"{int(1080 * ui)}x{int(720 * ui)}")
+        self.minsize(int(640 * ui), int(480 * ui))
+        self.transient(app)
+        self.dirty = set()                         # pids applied to memory, not yet written
+        self.applied = {}                          # pid -> {label: value}, for the save verify
+        self.copies = {}                           # pid -> [(cpk, stem, table, row), ...]
+        self.display = {}                          # pid -> the copy the form shows
+        self.paths = []
+        self.pid = None
+        self.dir = self._game_dir()
+        self._build()
+        app._apply_cursors(self)                   # its own window: no cursor means no pointer
+        if self.dir:
+            self.load()
+        else:
+            self.note.configure(text="No PES 2015 install found — press Choose folder…")
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # ---- install
+    def _game_dir(self):
+        """PES2015_DIR, then the remembered folder, then the usual wine/Steam places."""
+        for cand in (os.environ.get("PES2015_DIR"), self.app.cfg.get("pes2015_dir")):
+            cand = os.path.expanduser(cand or "")
+            if cand and os.path.isfile(os.path.join(cand, "Data", "dt10.cpk")):
+                return cand
+        return pes2015.find_game_dir()
+
+    def choose_dir(self):
+        folder = filedialog.askdirectory(
+            title="Select the PES 2015 folder (the one with Data/dt10.cpk)", parent=self)
+        if not folder:
+            return
+        folder = os.path.expanduser(folder)
+        if not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+            self.note.configure(text=f"no Data/dt10.cpk inside {folder}")
+            return
+        self.app.cfg["pes2015_dir"] = folder
+        settings.save(self.app.cfg)
+        self.dir = folder
+        self.load()
+
+    def _backup_dir(self):
+        return settings.backups_dir(self.app.cfg, STATE_DIR)
+
+    # ---- ui
+    def _build(self):
+        ui = self.app.ui
+        top = tk.Frame(self, bg=C_BG)
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(top, text="Search", bg=C_BG, fg=C_DIM, font=self.app.F_LABEL).pack(side="left")
+        self.q = tk.StringVar()
+        ent = ttk.Entry(top, textvariable=self.q, font=self.app.F_VALUE)
+        ent.pack(side="left", fill="x", expand=True, padx=8)
+        ent.bind("<KeyRelease>", lambda _e: self.fill())
+        self.count = tk.Label(top, text="", bg=C_BG, fg=C_HINT, font=self.app.F_TINY)
+        self.count.pack(side="left")
+        ttk.Button(top, text="Choose folder…", style="Ghost.TButton",
+                   command=self.choose_dir).pack(side="left", padx=(8, 0))
+
+        mid = tk.Frame(self, bg=C_BG)
+        mid.pack(fill="both", expand=True, padx=14)
+        left = tk.Frame(mid, bg=C_BG)
+        left.pack(side="left", fill="both", expand=True)
+        self.tree = ttk.Treeview(left, columns=("id", "name", "pos", "spd", "bc", "fin", "sta"),
+                                 show="headings", selectmode="browse")
+        for col, width, text, anchor in (("id", 62, "ID", "e"), ("name", 210, "Name", "w"),
+                                         ("pos", 52, "Pos", "w"), ("spd", 52, "SPD", "e"),
+                                         ("bc", 52, "BC", "e"), ("fin", 52, "FIN", "e"),
+                                         ("sta", 52, "STA", "e")):
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=int(width * ui), anchor=anchor,
+                             stretch=(col == "name"))
+        self.tree.tag_configure("edited", foreground=C_ACCENT)
+        self.tree.pack(side="left", fill="both", expand=True)
+        bar = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        bar.pack(side="left", fill="y")
+        self.tree.configure(yscrollcommand=bar.set)
+        self.tree.bind("<<TreeviewSelect>>", self.pick)
+
+        right = tk.Frame(mid, bg=C_BG)
+        right.pack(side="left", fill="y", padx=(12, 0))
+        self.who = tk.Label(right, text="no player selected", bg=C_BG, fg=C_DIM, anchor="w",
+                            font=self.app.F_LABEL)
+        self.who.pack(fill="x")
+        self.copies_lbl = tk.Label(right, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                   font=self.app.F_TINY)
+        self.copies_lbl.pack(fill="x")
+
+        grid = tk.Frame(right, bg=C_BG)
+        grid.pack(fill="x", pady=(8, 0))
+        tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                 font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
+        self.pos_var = tk.StringVar()
+        pos = ttk.Combobox(grid, textvariable=self.pos_var, values=list(pes2015.POSITION_NAMES),
+                           state="readonly", width=8, font=self.app.F_VALUE)
+        pos.grid(row=0, column=1, sticky="w", padx=(0, 16), pady=2)
+        self.stat_vars = {}
+        for n, label in enumerate(self.ABILITIES):
+            row, col = n // 2 + 1, (n % 2) * 2
+            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                     font=self.app.F_LABEL).grid(row=row, column=col, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.stat_vars[label] = v
+            tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=4,
+                       font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
+                                                   padx=(0, 16), pady=1)
+        names = tk.Frame(right, bg=C_BG)
+        names.pack(fill="x", pady=(8, 0))
+        self.name_vars = {}
+        for n, label in enumerate(("Name", "Shirt Name", "Japanese Name")):
+            tk.Label(names, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                     font=self.app.F_LABEL).grid(row=n, column=0, sticky="w", pady=2)
+            v = tk.StringVar()
+            self.name_vars[label] = v
+            ttk.Entry(names, textvariable=v, width=26,
+                      font=self.app.F_VALUE).grid(row=n, column=1, sticky="w", pady=2)
+        tk.Label(right, text="names: 45 bytes max, cut cleanly", bg=C_BG, fg=C_HINT,
+                 anchor="w", font=self.app.F_TINY).pack(fill="x", pady=(4, 0))
+
+        self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
+                             font=self.app.F_LABEL)
+        self.note.pack(fill="x", padx=14, pady=(6, 0))
+        buttons = tk.Frame(self, bg=C_BG)
+        buttons.pack(fill="x", padx=14, pady=10)
+        ttk.Button(buttons, text="Revert", style="Ghost.TButton",
+                   command=self.revert).pack(side="left")
+        ttk.Button(buttons, text="Apply to player", style="Ghost.TButton",
+                   command=self.apply).pack(side="right")
+        ttk.Button(buttons, text="Save to game", style="Save.TButton",
+                   command=self.save).pack(side="right", padx=(0, 8))
+
+    # ---- data
+    def load(self):
+        """(Re)read every player table of the install and rebuild the list."""
+        self.copies.clear()
+        self.display.clear()
+        self.dirty.clear()
+        self.applied.clear()
+        self.pid = None
+        self.paths = pes2015.database_cpks(self.dir) if self.dir else []
+        for path in self.paths:
+            db = pes2015.Cpk2015(path)
+            for stem in pes2015.PLAYER_STEMS:
+                if not db.entry(stem):
+                    continue
+                table = db.read_table(stem)
+                for i in range(len(table)):
+                    self.copies.setdefault(table.pid(i), []).append((path, stem, table, i))
+        for pid, copies in self.copies.items():     # show the newest update slot, else base
+            self.display[pid] = max(
+                copies, key=lambda c: (self.paths.index(c[0]), pes2015.PLAYER_STEMS.index(c[1])))
+        self.fill()
+        if self.dir:
+            src = ", ".join(os.path.basename(p) for p in self.paths)
+            self.who.configure(text=f"{len(self.copies):,} players · {src}")
+        else:
+            self.note.configure(text="No PES 2015 install found — press Choose folder…")
+
+    def fill(self):
+        low = norm(self.q.get().strip())
+        self.tree.delete(*self.tree.get_children())
+        shown = 0
+        for pid in sorted(self.copies):
+            _path, _stem, table, i = self.display[pid]
+            if low and low not in norm(table.name(i)) and low not in norm(table.shirt(i)) \
+                    and low not in str(pid):
+                continue
+            pos = table.get(i, "Position")
+            self.tree.insert("", "end", iid=str(pid), values=(
+                pid, table.name(i),
+                pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
+                table.get(i, "Speed"), table.get(i, "Ball Control"),
+                table.get(i, "Finishing"), table.get(i, "Stamina")),
+                tags=("edited",) if pid in self.dirty else ())
+            shown += 1
+            if shown >= 800:                       # 12k rows are a scrollbar, not a list
+                break
+        total = len(self.copies)
+        self.count.configure(text=f"{shown:,} of {total:,} players"
+                             + (" — type to narrow" if shown < total else ""))
+
+    def pick(self, _e=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        self.pid = int(sel[0])
+        _path, _stem, table, i = self.display[self.pid]
+        copies = self.copies[self.pid]
+        self.who.configure(text=f"{table.name(i)}  ·  id {self.pid}")
+        self.copies_lbl.configure(
+            text=f"{len(copies)} cop{'ies' if len(copies) > 1 else 'y'} — "
+                 + ", ".join(f"{os.path.basename(p)}:{s}" for p, s, _t, _r in copies))
+        pos = table.get(i, "Position")
+        self.pos_var.set(pes2015.POSITION_NAMES[pos]
+                         if pos < len(pes2015.POSITION_NAMES) else pes2015.POSITION_NAMES[0])
+        for label, v in self.stat_vars.items():
+            v.set(str(table.get(i, label)))
+        self.name_vars["Name"].set(table.name(i))
+        self.name_vars["Shirt Name"].set(table.shirt(i))
+        self.name_vars["Japanese Name"].set(table.japanese(i))
+
+    def refresh_row(self, pid):
+        if not self.tree.exists(str(pid)):
+            return
+        _path, _stem, table, i = self.display[pid]
+        pos = table.get(i, "Position")
+        self.tree.item(str(pid), values=(
+            pid, table.name(i),
+            pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
+            table.get(i, "Speed"), table.get(i, "Ball Control"),
+            table.get(i, "Finishing"), table.get(i, "Stamina")),
+            tags=("edited",) if pid in self.dirty else ())
+
+    @staticmethod
+    def _read_field(table, i, label):
+        if label == "Name":
+            return table.name(i)
+        if label == "Shirt Name":
+            return table.shirt(i)
+        if label == "Japanese Name":
+            return table.japanese(i)
+        return table.get(i, label)
+
+    def apply(self):
+        """Write the form into every in-memory copy of the selected player."""
+        if self.pid is None:
+            self.note.configure(text="pick a player in the list first")
+            return
+        wanted = {}
+        for label, v in self.stat_vars.items():
+            try:
+                wanted[label] = max(40, min(99, int(v.get())))
+            except ValueError:
+                self.note.configure(text=f"{label} needs a number (40-99)")
+                return
+        try:
+            wanted["Position"] = pes2015.POSITION_NAMES.index(self.pos_var.get())
+        except ValueError:
+            self.note.configure(text="pick a position from the list")
+            return
+        for label, v in self.name_vars.items():
+            wanted[label] = v.get().strip()
+        copies = self.copies[self.pid]
+        touched = 0
+        for _path, _stem, table, i in copies:
+            changed = False
+            for label, value in wanted.items():
+                if label == "Name":
+                    if table.name(i) != value:
+                        table.set_name(i, full=value)
+                        changed = True
+                elif label == "Shirt Name":
+                    if table.shirt(i) != value:
+                        table.set_name(i, shirt=value)
+                        changed = True
+                elif label == "Japanese Name":
+                    if table.japanese(i) != value:
+                        table.set_name(i, japanese=value)
+                        changed = True
+                elif self._read_field(table, i, label) != value:
+                    table.set(i, label, value)
+                    changed = True
+            touched += changed
+        if touched:
+            self.applied[self.pid] = dict(wanted)
+            self.dirty.add(self.pid)
+            self.refresh_row(self.pid)
+            self.note.configure(
+                text=f"applied to {len(copies)} copy{'ies' if len(copies) > 1 else ''} in "
+                     f"memory — Save to write · {len(self.dirty)} player(s) pending")
+        else:
+            self.note.configure(text="nothing changed")
+
+    def save(self):
+        """Patch every touched table into its CPK, then re-read and verify the edits."""
+        if not self.dir:
+            self.note.configure(text="no PES 2015 install — press Choose folder…")
+            return
+        if not self.dirty:
+            self.note.configure(text="nothing to save — edit a player first")
+            return
+        targets = {}
+        for pid in self.dirty:
+            for path, stem, table, _i in self.copies[pid]:
+                targets[(path, stem)] = table
+        backup_dir = self._backup_dir()
+        if self.app.cfg.get("confirm_save", True):
+            listing = "\n".join(f"  {os.path.basename(p)} · {s}.bin" for p, s in sorted(targets))
+            if not messagebox.askyesno(
+                    "Write to PES 2015",
+                    f"Write {len(self.dirty):,} changed player(s) to:\n\n{listing}\n\n"
+                    f"Region backups go to {backup_dir}/pes2015 — byte-exact restorable.\n"
+                    "Close PES 2015 while this writes.",
+                    parent=self):
+                return
+        dbs = {}
+        for (path, stem), table in targets.items():
+            if path not in dbs:
+                dbs[path] = pes2015.Cpk2015(path)
+            dbs[path].patch(stem, table.to_payload(), backup_dir=backup_dir)
+        applied = dict(self.applied)
+        self.load()                               # re-read from disk and verify
+        bad = []
+        for pid, wanted in applied.items():
+            for _path, _stem, table, i in self.copies.get(pid, []):
+                for label, value in wanted.items():
+                    got = self._read_field(table, i, label)
+                    if got != value:
+                        bad.append(f"id {pid} {label}: {got!r} != {value!r}")
+        tables = ", ".join(f"{os.path.basename(p)}:{s}.bin" for p, s in sorted(targets))
+        if bad:
+            self.note.configure(text=f"wrote {tables} — VERIFY FAILED: " + "; ".join(bad[:3]))
+        else:
+            self.note.configure(
+                text=f"wrote {len(applied):,} player(s) to {tables} — re-read ok; "
+                     f"start PES 2015 to see them")
+
+    def revert(self):
+        """Throw the in-memory edits away and reload everything from disk."""
+        if self.dirty and self.app.cfg.get("confirm_save", True) and not messagebox.askyesno(
+                "Discard edits",
+                f"Discard {len(self.dirty):,} changed player(s) that were not saved?",
+                parent=self):
+            return
+        self.load()
+        self.note.configure(text="reloaded from disk — unsaved edits discarded")
+
+    def on_close(self):
+        if self.dirty and self.app.cfg.get("confirm_save", True) and not messagebox.askyesno(
+                "Close PES 2015 editor",
+                f"{len(self.dirty):,} changed player(s) were applied but not saved.\n"
+                "Close and lose them?", parent=self):
+            return
+        self.destroy()
 
 
 class CoachWindow(tk.Toplevel):
