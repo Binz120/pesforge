@@ -1681,6 +1681,22 @@ def test_pes2015_window_edits_a_sandbox():
             assert win._club_text(4522) == "REAL MADRID", win._club_text(4522)
             assert len(win.flag_vars) == len(editor.pes2015.SKILLS) + len(editor.pes2015.COM_STYLES)
             assert "club" in win.tree["columns"]
+            # the same panel is the main window's "PES 2015" tab: it imports the database and
+            # swaps the PES 2021 body out while active
+            app.set_view_mode("pes2015")
+            app.update()
+            panel = app._pes2015_panel
+            assert panel.dir == os.path.join(box, "game"), panel.dir
+            assert len(panel.copies) > 12000, len(panel.copies)
+            assert not app._one_page_body.winfo_manager(), "the PES 2021 body stayed visible"
+            assert "PES 2015" in app.tab_pes2015.cget("text"), app.tab_pes2015.cget("text")
+            assert str(panel.tree.cget("cursor")), "the PES 2015 tab list has no cursor"
+            panel.tree.selection_set("4522")
+            panel.pick()
+            assert panel.bio_vars["Height"].get() == "185", panel.bio_vars["Height"].get()
+            app.set_view_mode("players")
+            app.update()
+            assert app._one_page_body.winfo_manager() == "pack", "the body did not come back"
             win.destroy()
     finally:
         editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla

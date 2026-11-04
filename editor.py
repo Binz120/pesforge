@@ -789,6 +789,8 @@ class Editor(tk.Tk):
         self._build_header()
         body = tk.Frame(self, bg=C_BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        # the "PES 2015" tab swaps this in place of the body (it is packed only while active)
+        self._pes2015_host = tk.Frame(self, bg=C_BG)
         # The list pane is built once and re-gridded, never rebuilt: relaying it out used to
         # re-scan all 26,395 players and recreate the tree on every fold, which is what made a
         # resize blank the window for most of a second.
@@ -1402,8 +1404,9 @@ class Editor(tk.Tk):
                                    command=lambda: self.populate(self.q.get()))
         self.pill_free.pack(anchor="w", pady=(0, 3))
 
-        # The two result kinds are tabs rather than a hidden mode switch: a club search keeps
-        # its players on the Players tab and its clubs on the Clubs tab, with counts.
+        # The result kinds are tabs rather than a hidden mode switch: a club search keeps its
+        # players on the Players tab and its clubs on the Clubs tab, with counts. The PES 2015
+        # tab swaps the whole body for the other vintage's editor (import + its own fields).
         tabs = tk.Frame(left, bg=C_BG)
         tabs.pack(fill="x", pady=(2, 4))
         self.tab_players = tk.Label(tabs, text="Players", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
@@ -1414,6 +1417,10 @@ class Editor(tk.Tk):
                                   cursor="hand2", font=self.F_LABEL)
         self.tab_clubs.pack(side="left")
         self.tab_clubs.bind("<Button-1>", lambda e: self.set_view_mode("clubs"))
+        self.tab_pes2015 = tk.Label(tabs, text="PES 2015", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                    cursor="hand2", font=self.F_LABEL)
+        self.tab_pes2015.pack(side="left", padx=(4, 0))
+        self.tab_pes2015.bind("<Button-1>", lambda e: self.set_view_mode("pes2015"))
 
         cols = ("id", "name", "club", "pos", "ovr", "age")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="extended")
@@ -2614,6 +2621,11 @@ class Editor(tk.Tk):
         players that match the club stay listed, the club rows are one click away, and the
         counts on the tabs make the choice visible.
         """
+        if self.view_mode.get() == "pes2015":
+            # the PES 2015 tab owns the body: keep it shown and leave the PES 2021 list alone
+            self._show_pes2015()
+            return
+        self._hide_pes2015()
         q = query.strip().lower()
         club_rows = []
         if q and not q.isdigit():
@@ -2675,17 +2687,44 @@ class Editor(tk.Tk):
 
     def set_view_mode(self, mode):
         self.view_mode.set(mode)
+        if mode == "pes2015":
+            self._show_pes2015()
         self.populate(self.q.get())
+
+    def _show_pes2015(self):
+        """Swap the PES 2021 list/form body for the PES 2015 panel (built on first use)."""
+        if getattr(self, "_pes2015_panel", None) is None:
+            self._pes2015_panel = Pes2015Panel(self._pes2015_host, self)
+            self._apply_cursors(self._pes2015_host)
+        self._one_page_body.pack_forget()
+        # before=…: the body normally sits above the status bar, and re-packing it later would
+        # otherwise land it after the bar in the pack order
+        self._pes2015_host.pack(fill="both", expand=True, padx=12, pady=(0, 8),
+                                before=self.statusbar.master)
+        self._update_mode_tabs()
+
+    def _hide_pes2015(self):
+        host = getattr(self, "_pes2015_host", None)
+        if host is None or not host.winfo_manager():    # pack_info() raises when not packed
+            return
+        host.pack_forget()
+        self._one_page_body.pack(fill="both", expand=True, padx=12, pady=(0, 8),
+                                 before=self.statusbar.master)
 
     def _update_mode_tabs(self):
         counts = getattr(self, "_mode_counts", {"players": 0, "clubs": 0})
-        for mode, lab in (("players", getattr(self, "tab_players", None)),
-                          ("clubs", getattr(self, "tab_clubs", None))):
+        panel = getattr(self, "_pes2015_panel", None)
+        p15 = (f"PES 2015  {len(panel.copies):,}"
+               if panel is not None and panel.copies else "PES 2015")
+        for mode, lab, text in (("players", getattr(self, "tab_players", None),
+                                 f"Players  {counts.get('players', 0):,}"),
+                                ("clubs", getattr(self, "tab_clubs", None),
+                                 f"Clubs  {counts.get('clubs', 0):,}"),
+                                ("pes2015", getattr(self, "tab_pes2015", None), p15)):
             if lab is None:
                 continue
             active = self.view_mode.get() == mode
-            lab.configure(text=f"{mode.title()}  {counts.get(mode, 0):,}",
-                          fg=C_ACCENT if active else C_DIM,
+            lab.configure(text=text, fg=C_ACCENT if active else C_DIM,
                           bg=C_SEL if active else C_PANEL2)
 
     def _render_players(self, rows, select_first=False):
@@ -4056,13 +4095,13 @@ class Editor(tk.Tk):
         self.statusbar.configure(text=msg, fg=colours.get(level, C_DIM))
 
 
-class Pes2015Window(tk.Toplevel):
-    """PES 2015's player tables — a second, small editor for the 180-byte records.
+class Pes2015Panel(tk.Frame):
+    """PES 2015's player tables — the body of the "PES 2015" tab and of the popup window.
 
     The main window speaks PES 2021 (312-byte records, ~97 fields); retail PES 2015 stores 19
     abilities, the primary position, three name slots, a bio block (height/weight/age/foot/
     weak foot/form/injury/playing style/nationality) and one bit per skill / COM style, so it
-    gets its own window. An applied edit lands in EVERY copy of the player — base Player.bin
+    gets its own panel. An applied edit lands in EVERY copy of the player — base Player.bin
     and each numbered update slot, in dt10.cpk and in the mounted data pack — because the
     slots override by id and a base-only edit can be shadowed. Save writes through
     pes2015.Cpk2015.patch() and keeps the same region backups the CLI uses
@@ -4071,15 +4110,9 @@ class Pes2015Window(tk.Toplevel):
 
     ABILITIES = tuple(pes2015.ABILITIES)          # the game's own field order
 
-    def __init__(self, app):
-        super().__init__(app)
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C_BG)
         self.app = app
-        ui = app.ui
-        self.title("PES 2015 — player tables")
-        self.configure(bg=C_BG)
-        self.geometry(f"{int(1080 * ui)}x{int(890 * ui)}")
-        self.minsize(int(640 * ui), int(480 * ui))
-        self.transient(app)
         self.dirty = set()                         # pids applied to memory, not yet written
         self.applied = {}                          # pid -> {label: value}, for the save verify
         self.copies = {}                           # pid -> [(cpk, stem, table, row), ...]
@@ -4088,12 +4121,11 @@ class Pes2015Window(tk.Toplevel):
         self.pid = None
         self.dir = self._game_dir()
         self._build()
-        app._apply_cursors(self)                   # its own window: no cursor means no pointer
+        app._apply_cursors(self)                   # no explicit cursor means no pointer at all
         if self.dir:
             self.load()
         else:
-            self.note.configure(text="No PES 2015 install found — press Choose folder…")
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+            self.note.configure(text="No PES 2015 database yet — press Import database…")
 
     # ---- install
     def _game_dir(self):
@@ -4133,8 +4165,10 @@ class Pes2015Window(tk.Toplevel):
         ent.bind("<KeyRelease>", lambda _e: self.fill())
         self.count = tk.Label(top, text="", bg=C_BG, fg=C_HINT, font=self.app.F_TINY)
         self.count.pack(side="left")
-        ttk.Button(top, text="Choose folder…", style="Ghost.TButton",
+        ttk.Button(top, text="Import database…", style="Ghost.TButton",
                    command=self.choose_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Reload", style="Ghost.TButton",
+                   command=self.revert).pack(side="left", padx=(4, 0))
 
         mid = tk.Frame(self, bg=C_BG)
         mid.pack(fill="both", expand=True, padx=14)
@@ -4486,13 +4520,44 @@ class Pes2015Window(tk.Toplevel):
         self.load()
         self.note.configure(text="reloaded from disk — unsaved edits discarded")
 
-    def on_close(self):
+    def confirm_close(self):
+        """For the popup shell: ask before dropping applied-but-unsaved edits."""
         if self.dirty and self.app.cfg.get("confirm_save", True) and not messagebox.askyesno(
                 "Close PES 2015 editor",
                 f"{len(self.dirty):,} changed player(s) were applied but not saved.\n"
                 "Close and lose them?", parent=self):
-            return
-        self.destroy()
+            return False
+        return True
+
+
+class Pes2015Window(tk.Toplevel):
+    """The popup around Pes2015Panel (Menu → "PES 2015 database…").
+
+    The same panel also lives in the main window's "PES 2015" tab; this shell adds the title
+    bar and asks before discarding applied edits.
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+        ui = app.ui
+        self.title("PES 2015 — player tables")
+        self.geometry(f"{int(1080 * ui)}x{int(890 * ui)}")
+        self.minsize(int(640 * ui), int(480 * ui))
+        self.transient(app)
+        self.panel = Pes2015Panel(self, app)
+        self.panel.pack(fill="both", expand=True)
+        app._apply_cursors(self)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def __getattr__(self, name):
+        # callers (and the tests) drive the window through the panel's API
+        if name == "panel":
+            raise AttributeError(name)
+        return getattr(self.panel, name)
+
+    def on_close(self):
+        if self.panel.confirm_close():
+            self.destroy()
 
 
 class CoachWindow(tk.Toplevel):
