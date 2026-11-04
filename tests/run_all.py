@@ -1005,6 +1005,36 @@ def test_blank_career_row_is_hidden():
         assert "Type a club name" not in note, "nothing to type into if the row is hidden"
 
 
+def test_theme_switch_repaints_bars():
+    """A palette switch rebuilds the form: the bars must come back drawn, in the new palette."""
+    import editor
+    import theme
+    with gui() as app:
+        app.q.set("gerrard")
+        app.populate("gerrard", select_first=True)
+        for _ in range(8):
+            app.update()
+            app.update_idletasks()
+        try:
+            app._apply_theme("ice")
+            for _ in range(10):
+                app.update()
+                app.update_idletasks()
+            bar = app.vars["Speed::bar"]
+            ids = bar.find_all()
+            assert len(ids) == 2, f"track + fill expected, got {ids}"
+            track = bar.coords(ids[0])
+            assert track[2] >= bar.winfo_width() - 1, \
+                f"bar drawn {track[2]}px wide in a {bar.winfo_width()}px canvas: {track}"
+            assert bar.itemcget(ids[0], "fill").lower() == theme.tokens("ice")["bar"].lower()
+            fill = bar.itemcget(ids[1], "fill").lower()
+            assert fill in (editor.C_ACCENT.lower(), editor.C_ACCENT_LO.lower(),
+                            editor.C_BAR_LOW.lower()), fill
+        finally:
+            app._apply_theme(theme.DEFAULT)          # leave the process on the default palette
+            app.update()
+
+
 def test_career_and_appearance_ui():
     """The new career fields, coaches window and appearance window work on a live Editor."""
     with gui() as app:

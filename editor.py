@@ -52,6 +52,16 @@ def bar_value(x, width):
     return 40 + round(59 * frac)
 
 
+def bar_width(bar):
+    """A just-built canvas reports width 1 until it is mapped — use its design width until then.
+
+    `winfo_width() or cget("width")` looked safe but 1 is truthy, so every bar rebuilt in place
+    (a palette switch) was drawn one pixel wide and read as blank.
+    """
+    w = bar.winfo_width()
+    return w if w > 1 else (int(bar.cget("width")) or 80)
+
+
 def group_average(get, labels):
     """Mean of the abilities in one radar group; `get(label)` returns the int value."""
     return sum(get(label) for label in labels) / len(labels)
@@ -1911,6 +1921,9 @@ class Editor(tk.Tk):
             bar.bind("<Button-1>", lambda e, l=label: self.drag_bar(l, e))
             bar.bind("<B1-Motion>", lambda e, l=label: self.drag_bar(l, e))
             bar.bind("<Button-3>", lambda e, l=label: self.reset_field(l))
+            # the canvas gets its real width only once it is mapped (and changes on resize):
+            # redraw then, or a bar built during a palette switch keeps its design width
+            bar.bind("<Configure>", lambda _e, l=label: self._redraw_field_bar(l))
             self.vars[label + "::bar"] = bar
             self._field_widgets[label] = sp
             self._field_section[label] = "abilities"
@@ -3444,16 +3457,28 @@ class Editor(tk.Tk):
     def drag_bar(self, label, evt):
         """Click or drag an ability bar to set it: left edge 40, right edge 99."""
         bar = self.vars[label + "::bar"]
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         val = bar_value(evt.x, width)
         if str(val) != self.vars[label].get():
             self.vars[label].set(str(val))
             self.apply_field(label)
 
+    def _redraw_field_bar(self, label):
+        """A canvas that was just mapped (or resized): redraw the bar at its real width."""
+        bar = self.vars.get(label + "::bar")
+        if bar is None or self.index is None:
+            return
+        try:
+            val = int(self.vars[label].get())
+        except (TypeError, ValueError):
+            return                                   # no player loaded yet; load_form will draw
+        entry = self._changes.get(("Player", self.table.pid(self.index), label))
+        self._draw_bar(bar, val, base=entry["base"] if entry is not None else None)
+
     def _draw_bar(self, bar, val, base=None):
         """Redraw one ability bar: track, tiered fill, and a ghost tick at the value it started with."""
         bar.delete("all")
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         height = int(bar.cget("height"))
         bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
         frac = max(0.0, min(1.0, (val - 40) / 59))
@@ -4412,7 +4437,7 @@ class Pes2015Panel(tk.Frame):
         except (TypeError, ValueError):
             val = 40
         bar.delete("all")
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         height = int(bar.cget("height"))
         bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
         frac = max(0.0, min(1.0, (val - 40) / 59))
@@ -4423,7 +4448,7 @@ class Pes2015Panel(tk.Frame):
     def _drag_ab_bar(self, label, evt):
         """Click or drag an ability bar to set it: left edge 40, right edge 99."""
         bar = self._ab_bars[label]
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         val = bar_value(evt.x, width)
         if str(val) != self.stat_vars[label].get():
             self.stat_vars[label].set(str(val))     # the var's trace repaints the bar
