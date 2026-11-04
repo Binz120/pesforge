@@ -476,8 +476,8 @@ def validate_database(path):
         if not rows or len(rows) % rec:
             if name == "Player" and pes2015_vintage(path):
                 raise ValueError("this is a PES 2015 database (180-byte records) — the editor "
-                                 "speaks PES 2021 / SP Football Life; edit PES 2015 with the "
-                                 "pesforge2015 command")
+                                 "speaks PES 2021 / SP Football Life; edit PES 2015 from the "
+                                 "menu: \"PES 2015 database…\"")
             raise ValueError(f"{name}.bin does not look like a PES 2021 table "
                              f"({len(rows):,} bytes)")
     return path
