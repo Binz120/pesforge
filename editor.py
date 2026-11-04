@@ -588,7 +588,9 @@ class Editor(tk.Tk):
         self.populate("")
         where = " · database found automatically" if self.auto_found else ""
         shadow = " · in-game EDIT save overrides the database on load" if self.edit_saves else ""
-        self.status(f"{len(self.table.records):,} players loaded from {self.game_dir}{where}{shadow}")
+        self._main_status = (f"{len(self.table.records):,} players loaded from {self.game_dir}"
+                             f"{where}{shadow}")
+        self.status(self._main_status)
         self.after(150, self._update_career_note)     # one pass over the table, off the open path
         self._park_if_asked()
 
@@ -2707,6 +2709,11 @@ class Editor(tk.Tk):
         self._pes2015_host.pack(fill="both", expand=True, padx=12, pady=(0, 8),
                                 before=self.statusbar.master)
         self._update_mode_tabs()
+        panel = self._pes2015_panel
+        self.status(
+            f"PES 2015 view: {len(panel.copies):,} players from Data/dt10.cpk + the mounted "
+            "data pack — its Save writes those files, not the SP Football database"
+            if panel.copies else "PES 2015 view: no database imported yet")
 
     def _hide_pes2015(self):
         host = getattr(self, "_pes2015_host", None)
@@ -2715,6 +2722,7 @@ class Editor(tk.Tk):
         host.pack_forget()
         self._one_page_body.pack(fill="both", expand=True, padx=12, pady=(0, 8),
                                  before=self.statusbar.master)
+        self.status(getattr(self, "_main_status", ""))
 
     def _update_mode_tabs(self):
         counts = getattr(self, "_mode_counts", {"players": 0, "clubs": 0})
