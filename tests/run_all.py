@@ -1689,11 +1689,19 @@ def test_pes2015_window_edits_a_sandbox():
             assert panel.dir == os.path.join(box, "game"), panel.dir
             assert len(panel.copies) > 12000, len(panel.copies)
             assert not app._one_page_body.winfo_manager(), "the PES 2021 body stayed visible"
+            assert panel.winfo_ismapped(), "the PES 2015 panel is not mapped in its host"
             assert "PES 2015" in app.tab_pes2015.cget("text"), app.tab_pes2015.cget("text")
             assert str(panel.tree.cget("cursor")), "the PES 2015 tab list has no cursor"
-            panel.tree.selection_set("4522")
+            for lab in (app.tab_players, app.tab_clubs, app.tab_pes2015):
+                assert lab.winfo_ismapped(), "the tab strip is not visible in PES 2015 mode"
+            panel.q.set("messi")
+            panel.fill()
+            assert "7511" in panel.tree.get_children(), "the search did not list Messi"
+            panel.tree.selection_set("7511")
             panel.pick()
-            assert panel.bio_vars["Height"].get() == "185", panel.bio_vars["Height"].get()
+            assert panel.name_vars["Name"].get().upper() == "L. MESSI", \
+                panel.name_vars["Name"].get()
+            assert panel.bio_vars["Height"].get() == "169", panel.bio_vars["Height"].get()
             app.set_view_mode("players")
             app.update()
             assert app._one_page_body.winfo_manager() == "pack", "the body did not come back"

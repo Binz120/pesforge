@@ -787,6 +787,10 @@ class Editor(tk.Tk):
     # ---------------------------------------------------------------- ui
     def _build_ui(self):
         self._build_header()
+        # the tab row is a full-width strip: it stays visible (and clickable) whichever tab is
+        # active, including "PES 2015", which swaps the body underneath it
+        self._tabs_bar = tk.Frame(self, bg=C_BG)
+        self._tabs_bar.pack(fill="x", padx=12, pady=(4, 0))
         body = tk.Frame(self, bg=C_BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         # the "PES 2015" tab swaps this in place of the body (it is packed only while active)
@@ -1407,8 +1411,8 @@ class Editor(tk.Tk):
         # The result kinds are tabs rather than a hidden mode switch: a club search keeps its
         # players on the Players tab and its clubs on the Clubs tab, with counts. The PES 2015
         # tab swaps the whole body for the other vintage's editor (import + its own fields).
-        tabs = tk.Frame(left, bg=C_BG)
-        tabs.pack(fill="x", pady=(2, 4))
+        # The strip itself lives in _build_ui, above the body, so it survives that swap.
+        tabs = self._tabs_bar
         self.tab_players = tk.Label(tabs, text="Players", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
                                     cursor="hand2", font=self.F_LABEL)
         self.tab_players.pack(side="left", padx=(0, 4))
@@ -2695,6 +2699,7 @@ class Editor(tk.Tk):
         """Swap the PES 2021 list/form body for the PES 2015 panel (built on first use)."""
         if getattr(self, "_pes2015_panel", None) is None:
             self._pes2015_panel = Pes2015Panel(self._pes2015_host, self)
+            self._pes2015_panel.pack(fill="both", expand=True)
             self._apply_cursors(self._pes2015_host)
         self._one_page_body.pack_forget()
         # before=…: the body normally sits above the status bar, and re-packing it later would
