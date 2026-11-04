@@ -1602,8 +1602,8 @@ def test_import_database_validates_foreign_files():
     if folder and os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
         try:
             editor.validate_database(os.path.join(folder, "Data", "dt10.cpk"))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            assert "PES 2015" in str(exc), exc          # the refusal names the vintage
         else:
             raise AssertionError("a PES 2015 CPK passed as a PES 2021 database")
 

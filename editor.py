@@ -23,6 +23,7 @@ import unicodedata
 from tkinter import ttk, messagebox, filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pes2015
 import pesdb
 import settings
 import theme
@@ -447,6 +448,15 @@ def load_tables(cpk_path):
     return tables
 
 
+def pes2015_vintage(path):
+    """True when the file is a PES 2015-vintage CPK with a player table (dt10 / DT80 packs)."""
+    try:
+        db = pes2015.Cpk2015(path)
+        return bool(db.entry("Player"))
+    except (OSError, ValueError):
+        return False
+
+
 def validate_database(path):
     """A CPK the editor can load: readable Player/Team/PlayerAssignment in PES 2021 shapes.
 
@@ -464,6 +474,10 @@ def validate_database(path):
         except (ValueError, OSError) as exc:
             raise ValueError(str(exc) or exc.__class__.__name__) from None
         if not rows or len(rows) % rec:
+            if name == "Player" and pes2015_vintage(path):
+                raise ValueError("this is a PES 2015 database (180-byte records) — the editor "
+                                 "speaks PES 2021 / SP Football Life; edit PES 2015 with the "
+                                 "pesforge2015 command")
             raise ValueError(f"{name}.bin does not look like a PES 2021 table "
                              f"({len(rows):,} bytes)")
     return path
