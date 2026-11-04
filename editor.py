@@ -389,13 +389,17 @@ def norm(text):
     """Lowercase and strip accents: 'München' -> 'munchen', 'Atlético' -> 'atletico'."""
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
+# PES 2021's own playing-style ids — the binary enum the game reads at bit 155 (verified
+# against the game's data; the eFootball-era ordering this list used to carry shifted nearly
+# every style, so e.g. an Orchestrator read as a full-back).
 PLAY_STYLES = [
-    "Goal Poacher", "Dummy Runner", "Fox in the Box", "Target Man", "Deep-Lying Forward",
-    "Creative Playmaker", "Prolific Winger", "Roaming Flank", "Cross Specialist",
-    "Box-to-Box", "The Destroyer", "Orchestrator", "Anchor Man", "Defensive Full-back",
-    "Offensive Full-back", "Full-back Finisher", "Build Up", "Offensive Goalkeeper",
-    "Defensive Goalkeeper", "None 19", "None 20", "None 21", "None 22", "None 23",
-    "None 24", "None 25", "None 26", "None 27", "None 28", "None 29", "None 30", "None 31",
+    "None", "Goal Poacher", "Dummy Runner", "Fox in the Box", "Prolific Winger",
+    "Classic No. 10", "Hole Player", "Box-to-Box", "Anchor Man", "The Destroyer",
+    "Extra Frontman", "Offensive Full-back", "Defensive Full-back", "Target Man",
+    "Creative Playmaker", "Build Up", "Offensive Goalkeeper", "Defensive Goalkeeper",
+    "Roaming Flank", "Cross Specialist", "Orchestrator", "Full-back Finisher",
+    "None 22", "None 23", "None 24", "None 25", "None 26", "None 27", "None 28",
+    "None 29", "None 30", "None 31",
 ]
 
 

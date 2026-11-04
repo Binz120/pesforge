@@ -1714,6 +1714,18 @@ def test_pes2015_window_edits_a_sandbox():
             os.environ["PES2015_DIR"] = saved_dir
 
 
+def test_playing_style_enum():
+    """The playing-style ids are PES 2021's binary enum, not the eFootball-era order."""
+    import editor
+    for idx, name in ((1, "Goal Poacher"), (3, "Fox in the Box"), (4, "Prolific Winger"),
+                      (5, "Classic No. 10"), (6, "Hole Player"), (7, "Box-to-Box"),
+                      (11, "Offensive Full-back"), (13, "Target Man"),
+                      (14, "Creative Playmaker"), (15, "Build Up"),
+                      (17, "Defensive Goalkeeper"), (18, "Roaming Flank"),
+                      (20, "Orchestrator"), (21, "Full-back Finisher")):
+        assert editor.PLAY_STYLES[idx] == name, (idx, editor.PLAY_STYLES[idx])
+
+
 def test_pes2015_form_is_compact():
     """The PES 2015 form must fit a modest window without scrolling: ~400px tall at ui=1."""
     pes2015_install()                                   # skips cleanly when there is none
