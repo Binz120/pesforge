@@ -982,6 +982,19 @@ def test_new_tables_patch_into_cpk():
     assert again.pid(276) == 7511
 
 
+def test_blank_career_row_is_hidden():
+    """A career field the database leaves empty everywhere collapses; the value stays reachable."""
+    with gui() as app:
+        app.update()
+        assert "Owner Club" in app.vars, "the value must stay settable even when its row is hidden"
+        assert app._field_widgets["Owner Club"].winfo_manager() == "", "the dead row should be hidden"
+        assert app._field_widgets["Youth Club"].winfo_manager() == "grid", "a populated row stays"
+        assert app._field_labels["Owner Club"].winfo_manager() == "", "its label too"
+        note = app.career_note.cget("text")
+        assert "Owner Club" in note and "hidden" in note, note
+        assert "Type a club name" not in note, "nothing to type into if the row is hidden"
+
+
 def test_career_and_appearance_ui():
     """The new career fields, coaches window and appearance window work on a live Editor."""
     with gui() as app:

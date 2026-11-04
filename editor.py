@@ -581,6 +581,7 @@ class Editor(tk.Tk):
         self._edited_pids = set()  # players touched this session, for the "changed only" view
         self._changes = {}         # (table, record id, field) -> pending edit, the change ledger
         self._field_widgets = {}   # (table, record id, field) -> the widget that shows it
+        self._field_labels = {}    # field name -> its row label, so dead rows can collapse
         self._field_section = {}   # field name -> section key, for the per-section counts
         self._section_counts = {}  # section key -> the label that carries its changed count
         self._ovr_cache = {}       # record index -> OVR, invalidated when an ability changes
@@ -602,8 +603,9 @@ class Editor(tk.Tk):
         """Career fields that hold nothing in any record of the loaded table.
 
         The shipped data leaves OwnerClub zero for all 26,395 players (the schema puts it at
-        byte 4; it is not a decoding bug), and Contract/Loan/MarketValue are blank for all but
-        a few dozen. Showing "0 —" made those look broken; the form says which they are instead.
+        byte 4; it is not a decoding bug), so that row collapses to nothing instead of a dead
+        "0 —". Contract/Loan/MarketValue are blank for all but a few dozen players and stay
+        visible; the note above the grid says which is which.
         """
         cached = getattr(self, "_career_empty_cache", None)
         if cached is not None:
@@ -622,15 +624,27 @@ class Editor(tk.Tk):
         if note is None or not note.winfo_exists():
             return
         empty = self._career_empties()
+        # a field the whole database leaves empty collapses to nothing instead of a dead "0 —";
+        # set one again and the row comes back (the cache clears on every write)
+        for label, _bit, _w, _add in pesdb.CAREER:
+            lab, wid = self._field_labels.get(label), self._field_widgets.get(label)
+            if lab is None or wid is None:
+                continue
+            if label in empty and wid.winfo_manager():
+                lab.grid_remove()
+                wid.grid_remove()
+            elif label not in empty and not wid.winfo_manager():
+                lab.grid()
+                wid.grid()
         if not empty:
             note.configure(text="")
             return
         names = ", ".join(empty)
         text = (f"{names} {'is' if len(empty) == 1 else 'are'} blank in all "
-                f"{len(self.table.records):,} records \u2014 shipped data, not a read error.")
+                f"{len(self.table.records):,} records \u2014 shipped data, not a read error, so "
+                f"the {'row is' if len(empty) == 1 else 'rows are'} hidden.")
         if "Owner Club" in empty:
             text += " Per-player ownership lives in the game's EDIT save."
-        text += " Type a club name or id to set one."
         note.configure(text=text)
 
     # ------------------------------------------------------------------ tables
@@ -699,6 +713,7 @@ class Editor(tk.Tk):
         self._pane_canvases = []
         self._section_counts = {}
         self._field_widgets = {}
+        self._field_labels = {}
         self._field_section = {}
         self._name_counters = {}
         self.vars = {}
@@ -1792,8 +1807,9 @@ class Editor(tk.Tk):
         for n, spec in enumerate(fields):
             label = spec[0]
             r, c = divmod(n, cols)
-            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=16, font=F).grid(
-                row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            lab = tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=16, font=F)
+            lab.grid(row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            self._field_labels[label] = lab
             key = label
             v = tk.StringVar()
             self.vars[key] = v
