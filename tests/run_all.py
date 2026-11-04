@@ -990,6 +990,16 @@ def test_blank_career_row_is_hidden():
         assert app._field_widgets["Owner Club"].winfo_manager() == "", "the dead row should be hidden"
         assert app._field_widgets["Youth Club"].winfo_manager() == "grid", "a populated row stays"
         assert app._field_labels["Owner Club"].winfo_manager() == "", "its label too"
+        # and the rows after it move up: the grid stays dense, no hole where the row was
+        g = app._career_grid
+        cells = []
+        for label in g["labels"]:
+            info = app._field_widgets[label].grid_info()
+            if info:
+                cells.append((int(info["row"]), int(info["column"]) // 2))
+        assert sorted(cells) == [divmod(i, g["cols"]) for i in range(len(cells))], \
+            f"career rows leave a hole: {sorted(cells)}"
+        assert len(cells) == len(g["labels"]) - 1, "Owner Club is the only hidden one"
         note = app.career_note.cget("text")
         assert "Owner Club" in note and "hidden" in note, note
         assert "Type a club name" not in note, "nothing to type into if the row is hidden"

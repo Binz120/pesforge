@@ -619,23 +619,33 @@ class Editor(tk.Tk):
         self._career_empty_cache = empty
         return empty
 
+    def _compact_career_rows(self, empty):
+        """Re-flow the career grid around hidden fields, so their cells leave no hole."""
+        g = getattr(self, "_career_grid", None)
+        if not g:
+            return
+        n = 0
+        for label in g["labels"]:
+            lab, wid = self._field_labels.get(label), self._field_widgets.get(label)
+            if lab is None or wid is None:
+                continue
+            if label in empty:
+                lab.grid_remove()
+                wid.grid_remove()
+                continue
+            r, c = divmod(n, g["cols"])
+            lab.grid(row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            wid.grid(row=r, column=c * 2 + 1, sticky="w", pady=1, padx=(0, 8))
+            n += 1
+
     def _update_career_note(self):
         note = getattr(self, "career_note", None)
         if note is None or not note.winfo_exists():
             return
         empty = self._career_empties()
-        # a field the whole database leaves empty collapses to nothing instead of a dead "0 —";
-        # set one again and the row comes back (the cache clears on every write)
-        for label, _bit, _w, _add in pesdb.CAREER:
-            lab, wid = self._field_labels.get(label), self._field_widgets.get(label)
-            if lab is None or wid is None:
-                continue
-            if label in empty and wid.winfo_manager():
-                lab.grid_remove()
-                wid.grid_remove()
-            elif label not in empty and not wid.winfo_manager():
-                lab.grid()
-                wid.grid()
+        # a field the whole database leaves empty collapses to nothing instead of a dead "0 —",
+        # and the rows after it move up into its cell: no hole in the grid
+        self._compact_career_rows(empty)
         if not empty:
             note.configure(text="")
             return
@@ -1781,7 +1791,9 @@ class Editor(tk.Tk):
         # a relayout rebuilds this section; the note's text has to be put back on the new label
         self.after_idle(self._update_career_note)
         # one grid, so the date row shares its columns with every row below it
-        self._field_grid(rest, dates + others + list(pesdb.MOTIONS), cols, section="career")
+        fields = dates + others + list(pesdb.MOTIONS)
+        self._career_grid = {"labels": [f[0] for f in fields], "cols": cols}
+        self._field_grid(rest, fields, cols, section="career")
 
     def _country_id(self, name):
         return (getattr(self, "_country_ids", {}) or {}).get(name)
