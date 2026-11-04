@@ -296,7 +296,8 @@ for any `.cpk` — a database kept outside a game folder, or a second `data_s*.c
 `download/`. The picked file is validated (Player, Team and PlayerAssignment must parse as PES
 2021 tables; a PES 2015 CPK is refused) and becomes the file the loads and saves go to, remembered
 as `database` in the config — the CLI and `--check` follow it too. Picking an install's own
-`data_s*.cpk` hands control back to that folder.
+`data_s*.cpk` hands control back to that folder, and the **Unmount** button beside the dropdown
+drops an imported database outright, so the install's own CPK is used again.
 
 ## Ability and skill tables (eFootball ↔ PES 2021)
 

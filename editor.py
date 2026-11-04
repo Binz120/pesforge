@@ -2121,6 +2121,10 @@ class Editor(tk.Tk):
                                           state="readonly", postcommand=self._refresh_databases)
                 self.cb_db.pack(side="left", fill="x", expand=True, padx=6)
                 self.cb_db.bind("<<ComboboxSelected>>", self._database_chosen)
+                self.btn_unmount = ttk.Button(r, text="Unmount", style="Ghost.TButton",
+                                              command=self.unmount_database)
+                self.btn_unmount.pack(side="left")
+                self._sync_unmount_button()
                 # the disk is only walked when the dropdown opens or the database changes
                 self.cb_db["values"] = (getattr(self, "_db_paths", None)
                                         or [self._short_path(self.cpk_path)]) + [self.IMPORT_ENTRY]
@@ -2360,6 +2364,7 @@ class Editor(tk.Tk):
             paths.insert(0, self.cpk_path)
         self._db_paths = [self._short_path(p) for p in paths]
         self.cb_db["values"] = self._db_paths + [self.IMPORT_ENTRY]
+        self._sync_unmount_button()
 
     @staticmethod
     def _short_path(path):
@@ -2414,6 +2419,26 @@ class Editor(tk.Tk):
                 self.status(f"not a usable database: {os.path.basename(path)} — {exc}")
                 return
             self.cfg["database"] = path                      # use this very file
+        self._reload_database()
+
+    def _sync_unmount_button(self):
+        """Unmount only means something while a database is imported."""
+        mounted = bool(settings.imported_database(self.cfg))
+        self.btn_unmount.configure(state="normal" if mounted else "disabled")
+
+    def unmount_database(self):
+        """Drop an imported database: the install's own data CPK is the database again."""
+        if self.dirty_tables:
+            self.status("unsaved changes — save or revert before switching database")
+            return
+        if not settings.imported_database(self.cfg):
+            self.status(f"no imported database — using {self._short_path(self.cpk_path)}")
+            return
+        self.cfg["database"] = ""
+        self._reload_database()
+
+    def _reload_database(self):
+        """Point every path at the current database, load it, and re-fill the window."""
         settings.save(self.cfg)
         self.game_dir = settings.game_dir(self.cfg)
         self.cpk_path = settings.current_database(self.game_dir, self.cfg)
@@ -2436,6 +2461,7 @@ class Editor(tk.Tk):
         self.db_var.set(self._short_path(self.cpk_path))
         source = " (imported)" if self.cfg["database"] else ""
         self.status(f"database → {self.cpk_path}{source} · {len(self.table.records):,} players")
+        self._sync_unmount_button()
 
     def _filter_target_values(self, evt):
         """Type-ahead in the Move to club box: names, accents and nicknames all match."""
@@ -4188,6 +4214,7 @@ class Pes2015Panel(tk.Frame):
         self.dir = self._game_dir()
         self._build()
         app._apply_cursors(self)                   # no explicit cursor means no pointer at all
+        self._sync_unmount()
         if self.dir:
             self.load()
         else:
@@ -4216,6 +4243,22 @@ class Pes2015Panel(tk.Frame):
         self.dir = folder
         self.load()
 
+    def unmount_dir(self):
+        """Forget an imported folder: the environment or auto-detection provides the install."""
+        if not self.app.cfg.get("pes2015_dir"):
+            self.note.configure(text="no imported folder — already using "
+                                     + (self.dir or "nothing found"))
+            return
+        self.app.cfg["pes2015_dir"] = ""
+        settings.save(self.app.cfg)
+        self.dir = self._game_dir()                # the fallback, not the folder we just dropped
+        self.load()
+
+    def _sync_unmount(self):
+        """The Unmount button only matters while a folder was imported by hand."""
+        self.btn_unmount.configure(state="normal" if self.app.cfg.get("pes2015_dir")
+                                   else "disabled")
+
     def _backup_dir(self):
         return settings.backups_dir(self.app.cfg, STATE_DIR)
 
@@ -4233,6 +4276,9 @@ class Pes2015Panel(tk.Frame):
         self.count.pack(side="left")
         ttk.Button(top, text="Import database…", style="Ghost.TButton",
                    command=self.choose_dir).pack(side="left", padx=(8, 0))
+        self.btn_unmount = ttk.Button(top, text="Unmount", style="Ghost.TButton",
+                                      command=self.unmount_dir)
+        self.btn_unmount.pack(side="left", padx=(4, 0))
         ttk.Button(top, text="Reload", style="Ghost.TButton",
                    command=self.revert).pack(side="left", padx=(4, 0))
 
@@ -4420,6 +4466,7 @@ class Pes2015Panel(tk.Frame):
             self.who.configure(text=f"{len(self.copies):,} players · {src}")
         else:
             self.note.configure(text="No PES 2015 install found — press Choose folder…")
+        self._sync_unmount()
 
     def _club_text(self, pid):
         club = self.club_of.get(pid)

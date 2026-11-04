@@ -1610,6 +1610,37 @@ def test_pes2015_name_slots_never_split_a_codepoint():
 
 
 # ---------------------------------------------------------------- importing a database
+def test_pes2015_unmount_returns_to_the_detected_install():
+    """The 2015 tab's Unmount forgets the imported folder and falls back to the install."""
+    folder = pes2015.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+        raise FileNotFoundError("no PES 2015 install")
+    saved_env = os.environ.get("PES2015_DIR")
+    os.environ["PES2015_DIR"] = folder
+    try:
+        with gui() as app:
+            app.cfg["pes2015_dir"] = folder
+            settings.save(app.cfg)
+            app.set_view_mode("pes2015")
+            app.update()
+            panel = app._pes2015_panel
+            assert panel.dir == folder, panel.dir
+            assert str(panel.btn_unmount["state"]) == "normal"
+            panel.unmount_dir()
+            app.update()
+            assert not settings.load().get("pes2015_dir")
+            assert str(panel.btn_unmount["state"]) == "disabled"
+            assert panel.dir == folder, "the environment still points at the install"
+            assert panel.copies, "tables must reload from the fallback install"
+            panel.unmount_dir()                      # nothing imported: say so, change nothing
+            assert "no imported folder" in panel.note.cget("text")
+    finally:
+        if saved_env is None:
+            os.environ.pop("PES2015_DIR", None)
+        else:
+            os.environ["PES2015_DIR"] = saved_env
+
+
 def test_import_database_switches_the_editor():
     """Import… takes any data CPK file: it becomes the database the editor reads and writes."""
     box = sandbox()
@@ -1632,9 +1663,20 @@ def test_import_database_switches_the_editor():
             assert settings.load().get("database") == imported
             assert len(app.table.records) == 26395
             assert settings.imported_database({"database": imported}) == imported
+            assert str(app.btn_unmount["state"]) == "normal", "mounted: Unmount must be live"
             app.switch_database(before)              # back to the install: folder mode again
             assert app.cpk_path == before, app.cpk_path
             assert not settings.load().get("database")
+            assert str(app.btn_unmount["state"]) == "disabled", "nothing mounted: Unmount is dead"
+            app.switch_database(imported)            # and now the button's own way back
+            assert str(app.btn_unmount["state"]) == "normal"
+            app.unmount_database()
+            assert app.cpk_path == before, app.cpk_path
+            assert not settings.load().get("database")
+            assert len(app.table.records) == 26395
+            assert str(app.btn_unmount["state"]) == "disabled"
+            app.unmount_database()                   # nothing imported: a plain refusal
+            assert app.cpk_path == before
     finally:
         editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
         if saved_dir is None:
