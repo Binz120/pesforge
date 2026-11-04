@@ -39,6 +39,7 @@ _adopt_old_home()
 
 DEFAULTS = {
     "game_dir": DEFAULT_GAME_DIR,
+    "database": "",             # an imported CPK (Database row's Import…); wins over game_dir
     "backups_dir": "",          # empty = <state>/backups
     "max_backups": 50,          # 0 keeps everything
     "confirm_save": True,
@@ -121,6 +122,22 @@ def database_path(folder):
 def has_database(folder):
     """True when the folder holds a data CPK."""
     return bool(folder) and os.path.isfile(database_path(folder))
+
+
+def imported_database(cfg=None):
+    """An explicitly imported CPK (the Database row's Import…), or '' when it is gone."""
+    path = os.path.expanduser(((cfg or {}).get("database") or "").strip())
+    return path if path and os.path.isfile(path) else ""
+
+
+def current_database(folder, cfg=None):
+    """The CPK loads and saves go to: an imported database wins over the folder's own."""
+    return imported_database(cfg) or database_path(folder)
+
+
+def has_current_database(folder, cfg=None):
+    """True when there is a database to work with: an imported file, or the folder's CPK."""
+    return bool(imported_database(cfg)) or has_database(folder)
 
 
 def load():

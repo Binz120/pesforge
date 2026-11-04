@@ -779,17 +779,20 @@ def test_csv_round_trip():
 
 def test_portrait_fits_slot():
     """A portrait is never clipped or stretched: the slot fits the image, oversized ones are halved."""
+    import editor
     with gui() as app:
+        side = int(editor.PHOTO_SIDE * app.ui)   # the slot is DPI-scaled: 128 at 96 dpi, 256 at 192
         path = os.path.join(tempfile.mkdtemp(), "portrait.ppm")
         with open(path, "wb") as f:              # Tk reads binary P6 only
-            f.write(b"P6\n256 256\n255\n" + bytes([200, 120, 90]) * (256 * 256))
+            f.write(b"P6\n%d %d\n255\n" % (side * 2, side * 2)
+                    + bytes([200, 120, 90]) * (side * side * 4))
         app._show_portrait(path)
-        assert (app.photo_img.width(), app.photo_img.height()) == (128, 128), \
+        assert (app.photo_img.width(), app.photo_img.height()) == (side, side), \
             (app.photo_img.width(), app.photo_img.height())
         app.update()
         # a photo is shown at its full size or not at all: never squashed into a narrow slot
         if app.photo.winfo_ismapped():
-            assert app.photo.winfo_width() >= 128 and app.photo.winfo_height() >= 128, \
+            assert app.photo.winfo_width() >= side and app.photo.winfo_height() >= side, \
                 (app.photo.winfo_width(), app.photo.winfo_height())
         shutil.rmtree(os.path.dirname(path))
 
@@ -1545,6 +1548,64 @@ def test_pes2015_name_slots_never_split_a_codepoint():
     assert len(cut) == 46 and cut.endswith(b"\x00\x00"), cut
     cut.decode("utf-8")              # no half codepoint left behind
     assert pes2015.encode_name("") == b"\x00" * 46
+
+
+# ---------------------------------------------------------------- importing a database
+def test_import_database_switches_the_editor():
+    """Import… takes any data CPK file: it becomes the database the editor reads and writes."""
+    box = sandbox()
+    source = box_cpk(box)                            # <box>/game/download/data_s2627.cpk
+    imported = os.path.join(box, "elsewhere", "custom_db.cpk")
+    os.makedirs(os.path.dirname(imported), exist_ok=True)
+    shutil.copy2(source, imported)                   # a copy outside any game-folder shape
+    import editor
+    saved_state, saved_vanilla = editor.STATE_DIR, editor.VANILLA
+    editor.STATE_DIR = os.path.join(box, "state")    # keep the test out of the real state dir
+    editor.VANILLA = os.path.join(editor.STATE_DIR, "Player.vanilla.bin")
+    saved_dir = os.environ.get("SPFL_DIR")
+    os.environ["SPFL_DIR"] = os.path.join(box, "game")
+    try:
+        with gui() as app:
+            assert app.IMPORT_ENTRY in list(app.cb_db["values"]), "no Import entry in the dropdown"
+            before = app.cpk_path
+            app.switch_database(imported)
+            assert app.cpk_path == imported, app.cpk_path
+            assert settings.load().get("database") == imported
+            assert len(app.table.records) == 26395
+            assert settings.imported_database({"database": imported}) == imported
+            app.switch_database(before)              # back to the install: folder mode again
+            assert app.cpk_path == before, app.cpk_path
+            assert not settings.load().get("database")
+    finally:
+        editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
+        if saved_dir is None:
+            os.environ.pop("SPFL_DIR", None)
+        else:
+            os.environ["SPFL_DIR"] = saved_dir
+
+
+def test_import_database_validates_foreign_files():
+    """A file that is not a PES 2021 database is refused, not loaded."""
+    box = sandbox()
+    import editor
+    editor.validate_database(box_cpk(box))           # the shipped database passes
+    junk = os.path.join(box, "junk.cpk")
+    with open(junk, "wb") as f:
+        f.write(b"not a cpk at all" * 64)
+    try:
+        editor.validate_database(junk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-CPK file passed database validation")
+    folder = pes2015.find_game_dir()
+    if folder and os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+        try:
+            editor.validate_database(os.path.join(folder, "Data", "dt10.cpk"))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a PES 2015 CPK passed as a PES 2021 database")
 
 
 def main():

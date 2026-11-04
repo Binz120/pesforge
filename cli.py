@@ -27,7 +27,7 @@ import settings
 
 CFG = settings.load()
 GAME_DIR = settings.game_dir(CFG)
-DATA_CPK = settings.database_path(GAME_DIR)
+DATA_CPK = settings.current_database(GAME_DIR, CFG)
 STATE_DIR = settings.state_dir()
 BACKUP_DIR = settings.backups_dir(CFG, STATE_DIR)
 VANILLA = os.path.join(STATE_DIR, "Player.vanilla.bin")

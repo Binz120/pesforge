@@ -447,11 +447,34 @@ def load_tables(cpk_path):
     return tables
 
 
+def validate_database(path):
+    """A CPK the editor can load: readable Player/Team/PlayerAssignment in PES 2021 shapes.
+
+    Raises ValueError with a short reason when the file cannot drive the editor — a foreign
+    vintage (PES 2015's tables are 180-byte records) or a file that is not a database at all.
+    """
+    if not path or not os.path.isfile(path):
+        raise ValueError("file not found")
+    for name, rec in (("Player", pesdb.REC), ("Team", pesdb.TEAM_REC),
+                      ("PlayerAssignment", pesdb.ASSIGN_REC)):
+        try:
+            rows = pesdb.read_table(path, name)
+        except KeyError:
+            raise ValueError(f"no {name}.bin inside") from None
+        except (ValueError, OSError) as exc:
+            raise ValueError(str(exc) or exc.__class__.__name__) from None
+        if not rows or len(rows) % rec:
+            raise ValueError(f"{name}.bin does not look like a PES 2021 table "
+                             f"({len(rows):,} bytes)")
+    return path
+
+
 class Editor(tk.Tk):
     # fields bulk edit may touch: every ability plus the plain numeric identity values
     NUMERIC_FIELDS = [l for l, *_ in pesdb.ATTRS] + [l for l, *_ in pesdb.CAREER] + \
                      ["Age", "Height (cm)", "Weight (kg)", "Form", "Weak Foot Usage",
                       "Weak Foot Accuracy", "Injury Resistance"]
+    IMPORT_ENTRY = "Import database…"
 
     def __init__(self):
         super().__init__()
@@ -484,7 +507,10 @@ class Editor(tk.Tk):
         self.game_dir = settings.game_dir(self.cfg)      # searches the disk if that folder is gone
         self.auto_found = configured != self.game_dir
         self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
-        self.cpk_path = settings.database_path(self.game_dir)
+        if self.cfg.get("database") and not settings.imported_database(self.cfg):
+            self.cfg["database"] = ""                    # the imported file moved away
+            settings.save(self.cfg)
+        self.cpk_path = settings.current_database(self.game_dir, self.cfg)
         if not os.path.exists(self.cpk_path):
             # First run on a new machine: ask where the game is instead of refusing to start.
             self.withdraw()
@@ -508,9 +534,10 @@ class Editor(tk.Tk):
                         parent=self)
                     continue
                 self.cfg["game_dir"] = folder
+                self.cfg["database"] = ""                # a picked install is its own database
                 settings.save(self.cfg)
                 self.game_dir, self.auto_found = folder, True
-                self.cpk_path = settings.database_path(folder)
+                self.cpk_path = settings.current_database(folder, self.cfg)
             self.deiconify()
         self.pristine = pristine_cpk(self.cpk_path)
         self.edit_saves = settings.edit_save_files()
@@ -962,6 +989,7 @@ class Editor(tk.Tk):
                          command=self._later(self.open_backups))
         menu.add_separator()
         menu.add_command(label="Reload database", command=self._later(self.reload))
+        menu.add_command(label="Import database…", command=self._later(self.import_database))
         menu.add_command(label="Restore vanilla", command=self._later(self.restore_vanilla))
         menu.add_separator()
         menu.add_command(label="Export roster CSV…", command=self._later(self._export_dialog))
@@ -2022,11 +2050,10 @@ class Editor(tk.Tk):
                 self.cb_db = ttk.Combobox(r, textvariable=self.db_var, width=24, font=F,
                                           state="readonly", postcommand=self._refresh_databases)
                 self.cb_db.pack(side="left", fill="x", expand=True, padx=6)
-                self.cb_db.bind("<<ComboboxSelected>>",
-                                lambda e: self.switch_database(self.db_var.get()))
+                self.cb_db.bind("<<ComboboxSelected>>", self._database_chosen)
                 # the disk is only walked when the dropdown opens or the database changes
-                self.cb_db["values"] = getattr(self, "_db_paths", None) or [
-                    self._short_path(self.cpk_path)]
+                self.cb_db["values"] = (getattr(self, "_db_paths", None)
+                                        or [self._short_path(self.cpk_path)]) + [self.IMPORT_ENTRY]
                 continue
             v = tk.StringVar()
             self.team_vars[label] = v
@@ -2250,20 +2277,46 @@ class Editor(tk.Tk):
                            if self.shirt_rows else "—")
 
     def _refresh_databases(self):
-        """Fill the Database dropdown: every data_s*.cpk on disk, current one first."""
+        """Fill the Database dropdown: every data_s*.cpk on disk, current one first, Import last."""
         paths = settings.find_databases()
         if self.cpk_path not in paths:
             paths.insert(0, self.cpk_path)
         self._db_paths = [self._short_path(p) for p in paths]
-        self.cb_db["values"] = self._db_paths
+        self.cb_db["values"] = self._db_paths + [self.IMPORT_ENTRY]
 
     @staticmethod
     def _short_path(path):
         home = os.path.expanduser("~")
         return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 
+    def _database_chosen(self, evt=None):
+        """The Database dropdown: a path switches the database, the last entry imports one."""
+        if self.db_var.get() == self.IMPORT_ENTRY:
+            self.import_database()
+        else:
+            self.switch_database(self.db_var.get())
+
+    def import_database(self):
+        """Pick any data CPK on disk and make it the database the loads and saves go to."""
+        if self.dirty_tables:
+            self.db_var.set(self._short_path(self.cpk_path))
+            self.status("unsaved changes — save or revert before switching database")
+            return
+        path = filedialog.askopenfilename(
+            title="Import a data CPK", parent=self,
+            initialdir=os.path.dirname(self.cpk_path) or os.path.expanduser("~"),
+            filetypes=[("CRI CPK database", "*.cpk"), ("All files", "*")])
+        if not path:
+            self.db_var.set(self._short_path(self.cpk_path))   # cancelled: keep showing the truth
+            return
+        self.switch_database(path)
+
     def switch_database(self, path):
-        """Point the editor (loads and saves) at another install's data CPK."""
+        """Point the editor (loads and saves) at another database.
+
+        An install's own data CPK re-points at that folder; any other file — a copy kept
+        elsewhere, or a second data_s*.cpk in the same download/ — is imported as-is.
+        """
         path = os.path.expanduser(path or "")
         if not path or os.path.realpath(path) == os.path.realpath(self.cpk_path):
             return
@@ -2272,14 +2325,21 @@ class Editor(tk.Tk):
             self.status("unsaved changes — save or revert before switching database")
             return
         game_dir = os.path.dirname(os.path.dirname(path))     # <game>/download/data_sXXXX.cpk
-        if not settings.has_database(game_dir):
-            self.db_var.set(self._short_path(self.cpk_path))
-            self.status(f"no data_s*.cpk in {os.path.join(game_dir, 'download')}")
-            return
-        self.cfg["game_dir"] = game_dir
+        if settings.has_database(game_dir) and \
+                os.path.realpath(settings.database_path(game_dir)) == os.path.realpath(path):
+            self.cfg["game_dir"] = game_dir
+            self.cfg["database"] = ""                        # the install's own CPK wins again
+        else:
+            try:
+                validate_database(path)
+            except ValueError as exc:
+                self.db_var.set(self._short_path(self.cpk_path))
+                self.status(f"not a usable database: {os.path.basename(path)} — {exc}")
+                return
+            self.cfg["database"] = path                      # use this very file
         settings.save(self.cfg)
         self.game_dir = settings.game_dir(self.cfg)
-        self.cpk_path = settings.database_path(self.game_dir)
+        self.cpk_path = settings.current_database(self.game_dir, self.cfg)
         self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
         self.pristine = pristine_cpk(self.cpk_path)
         self.edit_saves = settings.edit_save_files()
@@ -2297,7 +2357,8 @@ class Editor(tk.Tk):
         self.lbl_club.configure(text="—")
         self.populate(self.q.get())
         self.db_var.set(self._short_path(self.cpk_path))
-        self.status(f"database → {self.cpk_path} · {len(self.table.records):,} players")
+        source = " (imported)" if self.cfg["database"] else ""
+        self.status(f"database → {self.cpk_path}{source} · {len(self.table.records):,} players")
 
     def _filter_target_values(self, evt):
         """Type-ahead in the Move to club box: names, accents and nicknames all match."""
@@ -3904,7 +3965,9 @@ class Editor(tk.Tk):
         def commit():
             gd = os.path.expanduser(game.get().strip())
             pid = self.table.pid(self.index) if self.index is not None else None
-            cpk = settings.database_path(gd)
+            if gd != self.cfg["game_dir"]:
+                self.cfg["database"] = ""             # a new folder means that install's database
+            cpk = settings.current_database(gd, self.cfg)
             if not os.path.exists(cpk):
                 err.configure(text=f"no download/data_s*.cpk in {gd}")
                 return
@@ -3922,7 +3985,7 @@ class Editor(tk.Tk):
             settings.save(self.cfg)
             self.game_dir = settings.game_dir(self.cfg)
             self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
-            self.cpk_path = settings.database_path(self.game_dir)
+            self.cpk_path = settings.current_database(self.game_dir, self.cfg)
             dlg.destroy()
             self.pristine = pristine_cpk(self.cpk_path)
             self.edit_saves = settings.edit_save_files()
@@ -4368,16 +4431,16 @@ def check():
     folder = settings.game_dir(cfg)
     print("config      :", settings.CONFIG_PATH)
     print("game folder :", folder or "(not found)")
-    if folder and settings.has_database(folder):
-        cpk = settings.database_path(folder)
+    if settings.has_current_database(folder, cfg):
+        cpk = settings.current_database(folder, cfg)
         print("database    :", cpk, "%.1f MB" % (os.path.getsize(cpk) / 1e6))
     else:
-        print("database    : NOT FOUND — set the game folder in Settings")
+        print("database    : NOT FOUND — set the game folder in Settings, or import a CPK")
     print("countries   :", f"{len(pesdb.COUNTRIES)} names" if pesdb.COUNTRIES
           else "MISSING data/countries.json — nationality will be blank")
     saves = settings.edit_save_files()
     print("edit saves  :", ", ".join(saves) if saves else "none (database edits are live)")
-    return 0 if folder and settings.has_database(folder) else 1
+    return 0 if settings.has_current_database(folder, cfg) else 1
 
 
 if __name__ == "__main__":

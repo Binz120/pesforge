@@ -135,9 +135,9 @@ Settings: the colours are re-bound and the widgets rebuilt, keeping the loaded t
 query, the selection and pending edits.
 
 Menu entries: **Settings…** (`Ctrl+,`), **Theme**, open backups folder, **Reload database**,
-**Restore vanilla**, export/import roster CSV, **Bulk edit selected…**, **Compare selected
-players…**, **Coaches…**, **Appearance of the selected player…**, **About**, plus
-Undo/Redo/Discard at the top.
+**Import database…**, **Restore vanilla**, export/import roster CSV, **Bulk edit selected…**,
+**Compare selected players…**, **Coaches…**, **Appearance of the selected player…**, **About**,
+plus Undo/Redo/Discard at the top.
 
 Keyboard: `Ctrl+S` save · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+F` focus the search box ·
 `Ctrl+,` settings · `Escape` clear the search · `Enter` open the first match / apply a field ·
@@ -262,6 +262,14 @@ tables — an override for these tables ends up listing every player as `--- / U
 for a byte-identical copy of the shipped file — so edits are patched into `download/data_s*.cpk`
 directly (the table's own bytes, same length; or appended with its TOC entry repointed when the
 recompressed table needs a few extra bytes).
+
+**Any CPK can be the database.** The Club section's Database dropdown lists every `data_s*.cpk`
+found on disk; **Import database…** (the dropdown's last entry, or the menu) opens a file picker
+for any `.cpk` — a database kept outside a game folder, or a second `data_s*.cpk` in the same
+`download/`. The picked file is validated (Player, Team and PlayerAssignment must parse as PES
+2021 tables; a PES 2015 CPK is refused) and becomes the file the loads and saves go to, remembered
+as `database` in the config — the CLI and `--check` follow it too. Picking an install's own
+`data_s*.cpk` hands control back to that folder.
 
 ## Ability and skill tables (eFootball ↔ PES 2021)
 
