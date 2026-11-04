@@ -214,20 +214,28 @@ Retail PES 2015 is a different vintage — 180-byte player records, three name s
 abilities, a CRI-encrypted TOC — so it gets its own reader/writer. Edit it two ways:
 
 - **In the app**: Menu → **PES 2015 database…** opens a small editor window — search the
-  12k+ players, set the 19 abilities, the primary position and the three names, then **Save to
-  game**. An edit lands in every copy of the player (base `Player.bin` and each numbered update
-  slot, in `dt10.cpk` and in the mounted data pack), region backups land in
-  `<state>/backups/pes2015`, and the save note lists exactly which tables were written. The
-  window finds the install itself and asks for the folder once if it cannot. Close PES 2015
-  while a save writes.
+  12k+ players, set the 19 abilities, the bio block (height, weight, age, foot, weak foot,
+  form, injury resistance, playing style, nationality), the primary position, the three names
+  and the skill / COM-style flags (tick the ones a player has), then **Save to game**. The
+  list also shows each player's club. An edit lands in every copy of the player (base
+  `Player.bin` and each numbered update slot, in `dt10.cpk` and in the mounted data pack),
+  region backups land in `<state>/backups/pes2015`, and the save note lists exactly which
+  tables were written. The window finds the install itself and asks for the folder once if it
+  cannot. Close PES 2015 while a save writes.
 - **Headless**:
 
 ```
 pesforge2015 --tables                        # what an edit would reach, with row counts
 pesforge2015 --find "messi"                  # id, name, position, a few stats
-pesforge2015 --show 7511                     # every ability + all three names
+pesforge2015 --show 7511                     # abilities, bio, flags and the three names
 pesforge2015 --set 7511 Speed=90 Position=SS            # dry run, prints before/after
 pesforge2015 --set 7511 Speed=90 Position=SS --save     # write every table holding him
+pesforge2015 --set 7511 Height=180 "Skill: Scissors Feint"=1    # bio + flags via --set too
+pesforge2015 --teams "barcelona"             # clubs / national teams: id, kind, name, short
+pesforge2015 --set-team 108 Name="FC Barcelona" Short="BARCELONA" --save
+pesforge2015 --coaches "mazzarri"            # coach list; Name= / Japanese= to rename
+pesforge2015 --squads "L. Messi"             # his club and country rows, with squad numbers
+pesforge2015 --set-squad "L. Messi" Team=108 Number=10 --save   # or Club=113 to move him
 pesforge2015 --export players.csv            # all tables, with cpk/table columns
 pesforge2015 --fields                        # field names + ranges
 pesforge2015 --backups                       # what can be undone
@@ -237,26 +245,36 @@ pesforge2015 --restore last                  # put the previous bytes back
 The install folder is found automatically (Wine prefixes, `wineprefixes/*`, Steam);
 `PES2015_DIR` overrides it, or pass `--game DIR`. Writes need the game closed.
 
-**What an edit reaches.** The player tables live in `Data/dt10.cpk` (base) and in the data pack
-`download/DpFileList.bin` names — `dt80_100E.cpk` on this install — each holding `Player.bin`
-plus numbered update slots (`Player1..6.bin`). A `--set` (CLI) or **Save to game** (window)
-lands in *every* copy of the player across those tables, so the change shows whichever file the
-game reads on boot.
+**What an edit reaches.** The tables live in `Data/dt10.cpk` (base) and in the data pack
+`download/DpFileList.bin` names — `dt80_100E.cpk` on this install. Each holds `Player.bin` plus
+numbered update slots (`Player1..6.bin`) and the same numbered slots for `Team.bin`,
+`Coach.bin` and `PlayerAssignment.bin` (the squads). A `--set`, `--set-team`, `--set-coach`,
+`--set-squad` or **Save to game** (window) lands in *every* copy across those tables — dt10 and
+the pack disagree on hundreds of squads, so the edit shows whichever file the game reads on
+boot.
 
-**Saves are reversible.** Before touching a CPK, the regions about to change — the TOC, the
-header table and the old payload — are saved under `<state>/backups/pes2015/`; `--restore`
-writes them back and truncates the file to its recorded size, so a save undoes byte for byte.
+**Saves are reversible.** Before touching a CPK, the bytes about to change — the TOC, the
+header table and the payload region up to whatever the write can reach — are saved under
+`<state>/backups/pes2015/`; `--restore` writes them back and truncates the file to its recorded
+size, so a save undoes byte for byte.
 The game's own compressor beats standard zlib by a few percent, so a re-packed table usually
 outgrows its slot and is appended at the end of the CPK with its TOC entry repointed (the file
 grows by about one table per save: ~0.5 MB on dt10, ~0.6 MB on the data pack); an edit that
 fits is patched in place and the file size does not move.
 
 Format notes (the details live in `pes2015.py`): 180-byte records, id u32 at +0, names at
-+0x28/+0x56/+0x84 (46-byte UTF-8 slots), primary position 4 bits at 0xcf, 19 abilities as
-6-bit fields on a 6-bit grid (value = raw + 40). In the CPK a file's payload starts at
-`FileOffset + 0x800`, is `prefix + "WESYS" + u32 compressed + u32 uncompressed + zlib`, and is
-`FileSize` long; the TOC sits at `0x10 + header.TocOffset`, and both the TOC and header tables
-are XOR-obfuscated (the writer re-applies the stream).
++0x28/+0x56/+0x84 (46-byte UTF-8 slots), bio fields as bit-packed values (nationality 8 bits
+at 32, height at 50 + 132, weight at 57 + 30, age at 192 + 15, playing style 198, form 211,
+weak foot 233/241, injury 237, strong foot 279), primary position 4 bits at 0xcf, 19 abilities
+as 6-bit fields on a 6-bit grid (value = raw + 40), and one bit per skill / COM style in the
+block at 264..291 (+ Early Cross at 95) — the whole map matches ~200 pesdb.net cards
+bit-for-bit. `Team.bin` rows are 700 bytes (roster id u16@8 — the id the squads carry — names
+at 24/48/234/304/654), `Coach.bin` 108 bytes (id u32@0, names at 16/62), and
+`PlayerAssignment.bin` is 4-byte lead + 16-byte rows ([player][team][number + flags]
+[counter]) + 12-byte trailer; team ids below 100 are national teams. In the CPK a file's
+payload starts at `FileOffset + 0x800`, is `prefix + "WESYS" + u32 compressed + u32
+uncompressed + zlib`, and is `FileSize` long; the TOC sits at `0x10 + header.TocOffset`, and
+both the TOC and header tables are XOR-obfuscated (the writer re-applies the stream).
 
 ## Good to know
 

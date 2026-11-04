@@ -4060,11 +4060,13 @@ class Pes2015Window(tk.Toplevel):
     """PES 2015's player tables — a second, small editor for the 180-byte records.
 
     The main window speaks PES 2021 (312-byte records, ~97 fields); retail PES 2015 stores 19
-    abilities, the primary position and three name slots, so it gets its own window. An applied
-    edit lands in EVERY copy of the player — base Player.bin and each numbered update slot, in
-    dt10.cpk and in the mounted data pack — because the slots override by id and a base-only
-    edit can be shadowed. Save writes through pes2015.Cpk2015.patch() and keeps the same region
-    backups the CLI uses (state/backups/pes2015, restorable byte for byte).
+    abilities, the primary position, three name slots, a bio block (height/weight/age/foot/
+    weak foot/form/injury/playing style/nationality) and one bit per skill / COM style, so it
+    gets its own window. An applied edit lands in EVERY copy of the player — base Player.bin
+    and each numbered update slot, in dt10.cpk and in the mounted data pack — because the
+    slots override by id and a base-only edit can be shadowed. Save writes through
+    pes2015.Cpk2015.patch() and keeps the same region backups the CLI uses
+    (state/backups/pes2015, restorable byte for byte).
     """
 
     ABILITIES = tuple(pes2015.ABILITIES)          # the game's own field order
@@ -4075,7 +4077,7 @@ class Pes2015Window(tk.Toplevel):
         ui = app.ui
         self.title("PES 2015 — player tables")
         self.configure(bg=C_BG)
-        self.geometry(f"{int(1080 * ui)}x{int(720 * ui)}")
+        self.geometry(f"{int(1080 * ui)}x{int(890 * ui)}")
         self.minsize(int(640 * ui), int(480 * ui))
         self.transient(app)
         self.dirty = set()                         # pids applied to memory, not yet written
@@ -4138,9 +4140,11 @@ class Pes2015Window(tk.Toplevel):
         mid.pack(fill="both", expand=True, padx=14)
         left = tk.Frame(mid, bg=C_BG)
         left.pack(side="left", fill="both", expand=True)
-        self.tree = ttk.Treeview(left, columns=("id", "name", "pos", "spd", "bc", "fin", "sta"),
-                                 show="headings", selectmode="browse")
-        for col, width, text, anchor in (("id", 62, "ID", "e"), ("name", 210, "Name", "w"),
+        self.tree = ttk.Treeview(
+            left, columns=("id", "name", "club", "pos", "spd", "bc", "fin", "sta"),
+            show="headings", selectmode="browse")
+        for col, width, text, anchor in (("id", 62, "ID", "e"), ("name", 190, "Name", "w"),
+                                         ("club", 150, "Club", "w"),
                                          ("pos", 52, "Pos", "w"), ("spd", 52, "SPD", "e"),
                                          ("bc", 52, "BC", "e"), ("fin", 52, "FIN", "e"),
                                          ("sta", 52, "STA", "e")):
@@ -4181,6 +4185,44 @@ class Pes2015Window(tk.Toplevel):
             tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=4,
                        font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
                                                    padx=(0, 16), pady=1)
+
+        bio = tk.Frame(right, bg=C_BG)
+        bio.pack(fill="x", pady=(6, 0))
+        self.bio_vars = {}
+        bio_rows = ("Height", "Weight", "Age", "Nationality", "Playing Style", "Form",
+                    "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance")
+        for n, label in enumerate(bio_rows):
+            row, col = n // 2, (n % 2) * 2
+            tk.Label(bio, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                     font=self.app.F_LABEL).grid(row=row, column=col, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.bio_vars[label] = v
+            tk.Spinbox(bio, textvariable=v, from_=0, to=999, width=4,
+                       font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
+                                                   padx=(0, 16), pady=1)
+        tk.Label(bio, text="Foot", bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                 font=self.app.F_LABEL).grid(row=4, column=2, sticky="w", pady=1)
+        self.foot_var = tk.StringVar()
+        ttk.Combobox(bio, textvariable=self.foot_var, values=("Right", "Left"),
+                     state="readonly", width=6, font=self.app.F_VALUE).grid(
+                         row=4, column=3, sticky="w", pady=1)
+
+        sk = tk.Frame(right, bg=C_BG)
+        sk.pack(fill="x", pady=(6, 0))
+        self.flag_vars = {}
+        flags = [(name, "Skill") for name in pes2015.SKILLS] \
+            + [(name, "Style") for name in pes2015.COM_STYLES]
+        for n, (name, family) in enumerate(flags):
+            v = tk.BooleanVar()
+            self.flag_vars[(family, name)] = v
+            tk.Checkbutton(sk, text=name, variable=v, bg=C_BG, fg=C_DIM, bd=0,
+                           highlightthickness=0, activebackground=C_BG,
+                           activeforeground=C_ACCENT, selectcolor=C_PANEL2,
+                           font=self.app.F_TINY, anchor="w").grid(
+                               row=n // 3, column=n % 3, sticky="w", padx=(0, 8))
+        tk.Label(right, text="the game's skill / COM-style flags — tick to set, clear to drop",
+                 bg=C_BG, fg=C_HINT, anchor="w", font=self.app.F_TINY).pack(fill="x", pady=(2, 0))
+
         names = tk.Frame(right, bg=C_BG)
         names.pack(fill="x", pady=(8, 0))
         self.name_vars = {}
@@ -4208,15 +4250,31 @@ class Pes2015Window(tk.Toplevel):
 
     # ---- data
     def load(self):
-        """(Re)read every player table of the install and rebuild the list."""
+        """(Re)read every table of the install and rebuild the list."""
         self.copies.clear()
         self.display.clear()
         self.dirty.clear()
         self.applied.clear()
         self.pid = None
         self.paths = pes2015.database_cpks(self.dir) if self.dir else []
+        self.team_names = {}                       # roster id -> team name
+        self.club_of = {}                          # pid -> (club team id, squad number)
         for path in self.paths:
             db = pes2015.Cpk2015(path)
+            for stem in pes2015.TEAM_STEMS:
+                if not db.entry(stem):
+                    continue
+                teams = pes2015.TeamTable(*db.read_raw(stem))
+                for i in range(len(teams)):
+                    if teams.name(i):
+                        self.team_names.setdefault(teams.id(i), teams.name(i))
+            for stem in pes2015.ASSIGN_STEMS:
+                if not db.entry(stem):
+                    continue
+                assign = pes2015.AssignmentTable(*db.read_raw(stem))
+                for i in range(len(assign)):
+                    if assign.team(i) >= 100:      # the club row; national rows sit below 100
+                        self.club_of[assign.player(i)] = (assign.team(i), assign.number(i))
             for stem in pes2015.PLAYER_STEMS:
                 if not db.entry(stem):
                     continue
@@ -4233,6 +4291,12 @@ class Pes2015Window(tk.Toplevel):
         else:
             self.note.configure(text="No PES 2015 install found — press Choose folder…")
 
+    def _club_text(self, pid):
+        club = self.club_of.get(pid)
+        if not club:
+            return ""
+        return self.team_names.get(club[0], str(club[0]))
+
     def fill(self):
         low = norm(self.q.get().strip())
         self.tree.delete(*self.tree.get_children())
@@ -4244,7 +4308,7 @@ class Pes2015Window(tk.Toplevel):
                 continue
             pos = table.get(i, "Position")
             self.tree.insert("", "end", iid=str(pid), values=(
-                pid, table.name(i),
+                pid, table.name(i), self._club_text(pid),
                 pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
                 table.get(i, "Speed"), table.get(i, "Ball Control"),
                 table.get(i, "Finishing"), table.get(i, "Stamina")),
@@ -4263,7 +4327,11 @@ class Pes2015Window(tk.Toplevel):
         self.pid = int(sel[0])
         _path, _stem, table, i = self.display[self.pid]
         copies = self.copies[self.pid]
-        self.who.configure(text=f"{table.name(i)}  ·  id {self.pid}")
+        club = self.club_of.get(self.pid)
+        club_text = ""
+        if club:
+            club_text = f"  ·  {self.team_names.get(club[0], club[0])} (#{club[1]})"
+        self.who.configure(text=f"{table.name(i)}  ·  id {self.pid}{club_text}")
         self.copies_lbl.configure(
             text=f"{len(copies)} cop{'ies' if len(copies) > 1 else 'y'} — "
                  + ", ".join(f"{os.path.basename(p)}:{s}" for p, s, _t, _r in copies))
@@ -4272,6 +4340,11 @@ class Pes2015Window(tk.Toplevel):
                          if pos < len(pes2015.POSITION_NAMES) else pes2015.POSITION_NAMES[0])
         for label, v in self.stat_vars.items():
             v.set(str(table.get(i, label)))
+        for label, v in self.bio_vars.items():
+            v.set(str(table.get(i, label)))
+        self.foot_var.set("Left" if table.get(i, "Foot") else "Right")
+        for (family, name), v in self.flag_vars.items():
+            v.set(bool(table.get(i, f"{family}: {name}")))
         self.name_vars["Name"].set(table.name(i))
         self.name_vars["Shirt Name"].set(table.shirt(i))
         self.name_vars["Japanese Name"].set(table.japanese(i))
@@ -4282,7 +4355,7 @@ class Pes2015Window(tk.Toplevel):
         _path, _stem, table, i = self.display[pid]
         pos = table.get(i, "Position")
         self.tree.item(str(pid), values=(
-            pid, table.name(i),
+            pid, table.name(i), self._club_text(pid),
             pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
             table.get(i, "Speed"), table.get(i, "Ball Control"),
             table.get(i, "Finishing"), table.get(i, "Stamina")),
@@ -4315,6 +4388,17 @@ class Pes2015Window(tk.Toplevel):
         except ValueError:
             self.note.configure(text="pick a position from the list")
             return
+        for label, v in self.bio_vars.items():
+            try:
+                value = int(v.get())
+            except ValueError:
+                self.note.configure(text=f"{label} needs a number")
+                return
+            bit, width, add = pes2015.FIELD_BY_LABEL[label]
+            wanted[label] = max(add, min(add + (1 << width) - 1, value))
+        wanted["Foot"] = 1 if self.foot_var.get() == "Left" else 0
+        for (family, name), v in self.flag_vars.items():
+            wanted[f"{family}: {name}"] = 1 if v.get() else 0
         for label, v in self.name_vars.items():
             wanted[label] = v.get().strip()
         copies = self.copies[self.pid]

@@ -1,14 +1,30 @@
-"""PES 2015 database: read and write the player tables inside dt10.cpk / dt80_*.cpk.
+"""PES 2015 database: read and write the tables inside dt10.cpk / dt80_*.cpk.
 
 Player record (180 bytes, little-endian bit fields counted from bit 0):
     id      u32 at +0
     names   +0x28 Japanese | +0x56 shirt | +0x84 full, 46-byte UTF-8 slots
+    bio     nationality 8 bits at 32; height 7 bits at 50 (+132 cm); weight 7 bits at 57
+            (+30 kg); age 6 bits at 192 (+15); playing style 5 bits at 198; form 3 bits at
+            211 (+1); weak foot usage 2 bits at 233; injury resistance 2 bits at 237;
+            weak foot accuracy 2 bits at 241; strong foot 1 bit at 279 (0 right, 1 left)
     primary position   4 bits at 0xcf (0 GK, 1 CB, ... 12 CF)
     abilities  19 six-bit fields, value = raw + 40
+    flags      one bit each at 264..291 — the game's skill / COM-style block (see SKILLS,
+               COM_STYLES): e.g. Marseille Turn 271, Mazing Run 291, Trickster 266
 
-The map was recovered from the game's own tables and checked against pesdb.net cards
-(Goalkeeping/Saving match exactly; outfield values sit a few points under the online
-ratings, which is the shipped data pack vs the live site).
+Team.bin rows are 700 bytes: u16 alt id @0, kind @2, roster id @8 (PlayerAssignment's team
+ids; 108 Barcelona, 1 Ireland, 100 Manchester United); name slots — Japanese @24, 3-letter
+code @48, English full name @234 and @304, short name @654.
+
+Coach.bin rows are 108 bytes: u32 id @0, Japanese name @16, name @62.
+
+PlayerAssignment.bin: 4-byte lead, 16-byte rows ([player id][team id][number+flags]
+[counter]), 12-byte trailer. Team ids below 100 are national teams, 100+ clubs.
+
+The player map was recovered from the game's own tables: abilities checked against pesdb.net
+cards (Goalkeeping/Saving match exactly; outfield values sit a few points under the online
+ratings, which is the shipped data pack vs the live site), the bio/flag fields matched ~200
+pesdb cards bit-for-bit (values verified on L. Messi, C. Ronaldo, M. Neuer, G. Buffon).
 
 CPK layout in these releases (2015-2017 vintage; no "TOC " magic, all @UTF tables XOR
 obfuscated with CRI's LCG stream, see cpk.decrypt_utf):
@@ -75,6 +91,62 @@ ABILITY_WIDTH = 6
 # label -> (bit, width, add). "Position" is the primary position, 0..12.
 FIELD_BY_LABEL = {label: (bit, ABILITY_WIDTH, ABILITY_ADD) for label, bit in ABILITIES.items()}
 FIELD_BY_LABEL["Position"] = (PRIMARY_POSITION, 4, 0)
+
+# Bio + characteristics: recovered 2026-11-04 by cross-checking ~200 pesdb.net cards against
+# these tables (height/weight/age/foot/weak foot/form/injury/style and the flag block all
+# matched every card exactly or within a couple of shipped-data drifts). (bit, width, add).
+BIO_FIELDS = {
+    "Nationality": (32, 8, 0),          # country code (Country.bin's numbering)
+    "Height": (50, 7, 132),             # cm
+    "Weight": (57, 7, 30),              # kg
+    "Age": (192, 6, 15),                # years, as of the shipped database
+    "Playing Style": (198, 5, 0),       # style id (1..17+; Neuer 17 Offensive Goalkeeper)
+    "Form": (211, 3, 1),                # 1..8
+    "Weak Foot Usage": (233, 2, 1),     # 1..4
+    "Injury Resistance": (237, 2, 1),   # 1..4
+    "Weak Foot Accuracy": (241, 2, 1),  # 1..4
+    "Foot": (279, 1, 0),                # 0 right, 1 left
+}
+
+# The 28-bit flag block at 264..291, in the game's own internal order (both families share it),
+# plus "Early Cross" on the spare bit at 95. Labels come from the same cross-check; bit 275 did
+# not appear on any of the ~200 cards.
+SKILLS = {
+    "Flip Flap": 264,
+    "Fighting Spirit": 265,
+    "Low Punt Trajectory": 267,
+    "Captaincy": 268,
+    "Outside Curler": 269,
+    "Acrobatic Finishing": 270,
+    "Marseille Turn": 271,
+    "Man Marking": 272,
+    "One-touch Pass": 273,
+    "First-time Shot": 277,
+    "Knuckle Shot": 278,
+    "Super-sub": 280,
+    "Scissors Feint": 282,
+    "Long Throw": 283,
+    "Weighted Pass": 284,
+    "GK Long Throw": 285,
+    "Scotch Move": 286,
+    "Long Range Drive": 288,
+    "Cut Behind & Turn": 289,
+    "Track Back": 281,
+}
+COM_STYLES = {
+    "Trickster": 266,
+    "Long Ranger": 274,
+    "Incisive Run": 276,
+    "Speeding Bullet": 287,
+    "Long Ball Expert": 290,
+    "Mazing Run": 291,
+    "Early Cross": 95,              # the gap bit inside the ability block; 3-card match
+}
+FLAG_FIELDS = dict({f"Skill: {name}": (bit, 1, 0) for name, bit in SKILLS.items()},
+                   **{f"Style: {name}": (bit, 1, 0) for name, bit in COM_STYLES.items()})
+
+FIELD_BY_LABEL.update(BIO_FIELDS)
+FIELD_BY_LABEL.update(FLAG_FIELDS)
 
 # the base table plus the numbered update slots (dt10 ships Player1/4/5, dt80 more)
 PLAYER_STEMS = ("Player", "Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
@@ -190,6 +262,10 @@ class PlayerTable:
         return [i for i in range(len(self.records))
                 if low in self.name(i).lower() or low in self.shirt(i).lower()]
 
+    def skills(self, i):
+        """The set flags of the skill / COM-style block, by label."""
+        return [label for label in FLAG_FIELDS if self.get(i, label)]
+
     def to_payload(self):
         return wesys_payload(b"".join(bytes(r) for r in self.records), self.prefix)
 
@@ -248,14 +324,18 @@ class Cpk2015:
                              f"the TOC says {size}")
         return payload
 
-    def read_table(self, stem):
-        """PlayerTable for a Player*.bin stem, decompressed and eof-checked."""
+    def read_raw(self, stem):
+        """(decompressed bytes, 3-byte prefix) of any WESYS table in the CPK."""
         found = self.entry(stem)
         if found is None:
             raise KeyError(f"{stem} not in {self.path}")
         _i, (_fn, off, size, _x) = found
         payload = self.read_payload(off, size)
-        return PlayerTable(wesys_records(payload), payload[:3])
+        return wesys_records(payload), payload[:3]
+
+    def read_table(self, stem):
+        """PlayerTable for a Player*.bin stem, decompressed and eof-checked."""
+        return PlayerTable(*self.read_raw(stem))
 
     def next_payload(self, off):
         """Start of the next file payload after this entry, or the end of the CPK."""
@@ -277,9 +357,12 @@ class Cpk2015:
         p_off = off + LEAD
         limit = self.next_payload(off)
         fits = not append and p_off + len(payload) <= limit
+        # In place, the write can reach past the old payload's tail into the slot's slack;
+        # back up everything that will be written so a restore undoes it exactly.
+        span = max(size, len(payload)) if fits else size
         backup_regions(self.path, [(0x10, self.header.size),
                                    (self.toc_off, self.toc.size),
-                                   (p_off, size)], backup_dir, stem)
+                                   (p_off, span)], backup_dir, stem)
         if fits:
             where = p_off
         else:
@@ -315,6 +398,202 @@ class Cpk2015:
         self._flush(self.header, 0x10)
 
 
+# ---------------------------------------------------------------- Team.bin (700-byte rows)
+TEAM_REC = 700
+TEAM_ALT_ID = 0            # u16: the id the shipped edit data uses
+TEAM_KIND = 2              # u16: 2 special, 4 club, 5 Master League, 6 national team, 7 Japan
+TEAM_ID = 8                # u16: the roster id PlayerAssignment rows carry
+TEAM_NAME_SLOTS = {"japanese": 24, "code": 48, "full": 234, "full2": 304, "short": 654}
+TEAM_STEMS = ("Team", "Team1", "Team2", "Team3", "Team4", "Team5", "Team6")
+
+
+class TeamTable:
+    """Team.bin rows: one team per 700 bytes.
+
+    Field map recovered from the shipped tables (roster ids cross-checked against
+    PlayerAssignment rosters — 108 Barcelona, 50 Argentina, 1 Ireland, 100 Manchester
+    United): u16 id@8 is the id PlayerAssignment rows carry, kind@2 says what the row is.
+    Names: Japanese @24, 3-letter code @48, the English full name @234 and @304 (both
+    carry it on every row that has one) and the short name @654 ('BARCELONA',
+    'REAL_MADRID'). set_names() writes those five slots; the eleven other language slots
+    the national teams carry stay as shipped.
+    """
+
+    def __init__(self, raw, prefix=PREFIX):
+        if len(raw) % TEAM_REC:
+            raise ValueError(f"team table is not a multiple of {TEAM_REC}: {len(raw)} bytes")
+        self.prefix = prefix
+        self.records = [bytearray(raw[i:i + TEAM_REC]) for i in range(0, len(raw), TEAM_REC)]
+
+    def __len__(self):
+        return len(self.records)
+
+    def id(self, i):
+        return struct.unpack_from("<H", self.records[i], TEAM_ID)[0]
+
+    def alt_id(self, i):
+        return struct.unpack_from("<H", self.records[i], TEAM_ALT_ID)[0]
+
+    def kind(self, i):
+        return struct.unpack_from("<H", self.records[i], TEAM_KIND)[0]
+
+    def _slot(self, i, name):
+        off = TEAM_NAME_SLOTS[name]
+        return self.records[i][off:off + NAME_LEN].split(b"\x00")[0].decode("utf-8", "replace")
+
+    def name(self, i):
+        return self._slot(i, "full") or self._slot(i, "full2")
+
+    def short(self, i):
+        return self._slot(i, "short")
+
+    def japanese(self, i):
+        return self._slot(i, "japanese")
+
+    def code(self, i):
+        return self._slot(i, "code")
+
+    def set_names(self, i, full=None, short=None, japanese=None, code=None):
+        """Write the name slots; 'full' covers both English slots (@234 and @304)."""
+        rec = self.records[i]
+        if full is not None:
+            for off in (TEAM_NAME_SLOTS["full"], TEAM_NAME_SLOTS["full2"]):
+                rec[off:off + NAME_LEN] = encode_name(full)
+        for name, value in (("short", short), ("japanese", japanese), ("code", code)):
+            if value is None:
+                continue
+            off = TEAM_NAME_SLOTS[name]
+            rec[off:off + NAME_LEN] = encode_name(value)
+
+    def find(self, needle):
+        """Row indexes for a roster id (digits; alt-id fallback), or a name substring."""
+        needle = needle.strip()
+        low = needle.lower()
+        if needle.isdigit():
+            want = int(needle)
+            rows = [i for i in range(len(self.records)) if self.id(i) == want]
+            if rows:
+                return rows                             # alt ids live in another namespace
+            return [i for i in range(len(self.records)) if self.alt_id(i) == want]
+        return [i for i in range(len(self.records))
+                if low in self.name(i).lower() or low in self.short(i).lower()]
+
+    def to_payload(self):
+        return wesys_payload(b"".join(bytes(r) for r in self.records), self.prefix)
+
+
+# ---------------------------------------------------------------- Coach.bin (108-byte rows)
+COACH_REC = 108
+COACH_ID = 0               # u32
+COACH_JP = 16              # 46-byte name slot
+COACH_NAME = 62            # 46-byte name slot
+COACH_STEMS = ("Coach", "Coach1", "Coach2", "Coach3", "Coach4", "Coach5", "Coach6")
+
+
+class CoachTable:
+    """Coach.bin rows: u32 id@0, 12 unknown bytes, Japanese name @16, name @62."""
+
+    def __init__(self, raw, prefix=PREFIX):
+        if len(raw) % COACH_REC:
+            raise ValueError(f"coach table is not a multiple of {COACH_REC}: {len(raw)} bytes")
+        self.prefix = prefix
+        self.records = [bytearray(raw[i:i + COACH_REC]) for i in range(0, len(raw), COACH_REC)]
+
+    def __len__(self):
+        return len(self.records)
+
+    def id(self, i):
+        return struct.unpack_from("<I", self.records[i], COACH_ID)[0]
+
+    def _slot(self, i, off):
+        return self.records[i][off:off + NAME_LEN].split(b"\x00")[0].decode("utf-8", "replace")
+
+    def name(self, i):
+        return self._slot(i, COACH_NAME)
+
+    def japanese(self, i):
+        return self._slot(i, COACH_JP)
+
+    def set_names(self, i, name=None, japanese=None):
+        rec = self.records[i]
+        for off, value in ((COACH_NAME, name), (COACH_JP, japanese)):
+            if value is not None:
+                rec[off:off + NAME_LEN] = encode_name(value)
+
+    def find(self, needle):
+        """Row indexes for a coach id (digits) or a name substring."""
+        needle = needle.strip()
+        if needle.isdigit():
+            cid = int(needle)
+            return [i for i in range(len(self.records)) if self.id(i) == cid]
+        low = needle.lower()
+        return [i for i in range(len(self.records)) if low in self.name(i).lower()]
+
+    def to_payload(self):
+        return wesys_payload(b"".join(bytes(r) for r in self.records), self.prefix)
+
+
+# ---------------------------------------------------------------- PlayerAssignment.bin
+ASSIGN_LEAD = 4            # leading bytes before the first row
+ASSIGN_REC = 16
+ASSIGN_TRAIL = 12          # trailing bytes after the last row
+ASSIGN_NUMBER_MASK = 0x7F  # the squad number lives in the low 7 bits of the number word
+ASSIGN_STEMS = ("PlayerAssignment", "PlayerAssignment1", "PlayerAssignment2",
+                "PlayerAssignment3", "PlayerAssignment4", "PlayerAssignment5",
+                "PlayerAssignment6")
+
+
+class AssignmentTable:
+    """PlayerAssignment.bin: 4-byte lead + 16-byte rows + 12-byte trailer.
+
+    A row is [player id u32][team id u32][number byte + flags][counter]. Team ids below
+    100 are national teams, 100 and up clubs (verified against the rosters: 108
+    Barcelona, 50 Argentina, 1 Ireland, 100 Manchester United); the number word's low
+    seven bits are the squad number (Messi 10, Buffon 1, Pirlo 21), and a player usually
+    has two rows — club and country. set_number() touches only the number bits.
+    """
+
+    def __init__(self, raw, prefix=PREFIX):
+        if len(raw) < ASSIGN_LEAD + ASSIGN_TRAIL \
+                or (len(raw) - ASSIGN_LEAD - ASSIGN_TRAIL) % ASSIGN_REC:
+            raise ValueError(f"assignment table has an odd shape: {len(raw)} bytes")
+        self.prefix = prefix
+        self.lead = raw[:ASSIGN_LEAD]
+        self.trailer = raw[len(raw) - ASSIGN_TRAIL:]
+        body = raw[ASSIGN_LEAD:len(raw) - ASSIGN_TRAIL]
+        self.records = [bytearray(body[i:i + ASSIGN_REC])
+                        for i in range(0, len(body), ASSIGN_REC)]
+
+    def __len__(self):
+        return len(self.records)
+
+    def player(self, i):
+        return struct.unpack_from("<I", self.records[i], 0)[0]
+
+    def team(self, i):
+        return struct.unpack_from("<I", self.records[i], 4)[0]
+
+    def number(self, i):
+        return self.records[i][8] & ASSIGN_NUMBER_MASK
+
+    def set_number(self, i, value):
+        if not 0 <= int(value) <= ASSIGN_NUMBER_MASK:
+            raise ValueError(f"squad number out of range: {value}")
+        rec = self.records[i]
+        rec[8] = (rec[8] & ~ASSIGN_NUMBER_MASK) | int(value)
+
+    def set_team(self, i, team_id):
+        struct.pack_into("<I", self.records[i], 4, int(team_id))
+
+    def find(self, pid):
+        """Row indexes for one player id."""
+        return [i for i in range(len(self.records)) if self.player(i) == int(pid)]
+
+    def to_payload(self):
+        body = b"".join(bytes(r) for r in self.records)
+        return wesys_payload(self.lead + body + self.trailer, self.prefix)
+
+
 # ---------------------------------------------------------------- backups
 def backup_regions(cpk_path, regions, backup_dir, tag):
     """Save the byte ranges a patch will touch (payload, TOC, header) plus the file size.
@@ -328,6 +607,10 @@ def backup_regions(cpk_path, regions, backup_dir, tag):
     os.makedirs(out, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     name = f"{os.path.basename(cpk_path)[:-4]}.{tag}.{stamp}"
+    n = 1
+    while os.path.exists(os.path.join(out, name + ".json")):
+        n += 1                                     # same-second saves must not clobber
+        name = f"{os.path.basename(cpk_path)[:-4]}.{tag}.{stamp}-{n}"
     blob = bytearray()
     index = []
     with open(cpk_path, "rb") as f:

@@ -1646,6 +1646,9 @@ def test_pes2015_window_edits_a_sandbox():
             win.pick()
             win.stat_vars["Speed"].set("41")
             win.name_vars["Shirt Name"].set("TESTSHIRT")
+            win.bio_vars["Height"].set("170")
+            win.foot_var.set("Right")
+            win.flag_vars[("Skill", "Scissors Feint")].set(True)
             win.apply()
             assert multi in win.dirty, "apply did not mark the player"
             win.save()
@@ -1655,17 +1658,22 @@ def test_pes2015_window_edits_a_sandbox():
                 row = next(k for k in range(len(fresh)) if fresh.pid(k) == multi)
                 assert fresh.get(row, "Speed") == 41, (stem, fresh.get(row, "Speed"))
                 assert fresh.shirt(row) == "TESTSHIRT", (stem, fresh.shirt(row))
+                assert fresh.get(row, "Height") == 170, (stem, fresh.get(row, "Height"))
+                assert fresh.get(row, "Skill: Scissors Feint") == 1, stem
+                assert fresh.get(row, "Foot") == 0, stem
             kept = editor.pes2015.Cpk2015(os.path.join(box, "game", "Data", "dt10.cpk"))
             assert len(kept.read_table("Player")) == 10091
             win.tree.selection_set(str(multi))               # Revert drops an unsaved edit
             win.pick()
             win.stat_vars["Speed"].set("42")
+            win.bio_vars["Height"].set("171")
             win.apply()
             assert multi in win.dirty
             win.revert()
             assert not win.dirty, "revert left edits pending"
             _p, _s, table, i = win.display[multi]
             assert table.get(i, "Speed") == 41, "revert did not reload from disk"
+            assert table.get(i, "Height") == 170, "revert did not reload the bio fields"
             win.destroy()
     finally:
         editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
@@ -1673,6 +1681,39 @@ def test_pes2015_window_edits_a_sandbox():
             os.environ.pop("PES2015_DIR", None)
         else:
             os.environ["PES2015_DIR"] = saved_dir
+
+
+def test_pes2015_teams_coaches_squads_roundtrip():
+    """Team and coach renames plus a squad-number move land on disk, verify, and restore."""
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    original = open(cpk_path, "rb").read()
+
+    out = cli2015(box, "--teams", "barcelona")
+    assert "FC BARCELONA" in out, out
+    out = cli2015(box, "--set-team", "108", "Name=FC TEST", "Short=TEST")
+    assert "dry run" in out and "FC BARCELONA" in out, out
+    assert open(cpk_path, "rb").read() == original, "a dry run wrote to the CPK"
+    out = cli2015(box, "--set-team", "108", "Name=FC TEST", "Short=TEST", "--save")
+    assert "all edits present" in out, out
+    assert "FC TEST" in cli2015(box, "--teams", "108")
+
+    out = cli2015(box, "--set-coach", "mazzarri", "Name=V. COACH", "--save")
+    assert "all edits present" in out, out
+    assert "V. COACH" in cli2015(box, "--coaches", "18")
+
+    out = cli2015(box, "--set-squad", "L. Messi", "Team=108", "Number=77", "--save")
+    assert "all edits present" in out, out
+    shown = cli2015(box, "--squads", "L. Messi")
+    assert re.search(r"108\s+FC TEST\s+number 77", shown), shown
+
+    state = os.path.join(box, "state", "backups", "pes2015")
+    backups = [f[:-5] for f in os.listdir(state) if f.endswith(".json")]
+    backups.sort(key=lambda n: os.path.getmtime(os.path.join(state, n + ".json")), reverse=True)
+    assert len(backups) >= 3, backups
+    for name in backups:
+        cli2015(box, "--restore", name)
+    assert open(cpk_path, "rb").read() == original, "restore did not return the original bytes"
 
 
 def main():
