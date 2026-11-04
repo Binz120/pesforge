@@ -4211,9 +4211,12 @@ class Pes2015Panel(tk.Frame):
         col_a.pack(side="left", fill="both", expand=True, padx=(12, 0))
         col_b = tk.Frame(mid, bg=C_BG)
         col_b.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        # scroll only ever appears if the window is squeezed below the form's design size
+        col_a_body = self.app._scroll_pane(col_a)
+        col_b_body = self.app._scroll_pane(col_b)
 
         # the player card the PES 2021 view opens with: hero name, meta line, chips, names
-        card = self.app._section(col_a, "Player")
+        card = self.app._section(col_a_body, "Player")
         self.who = tk.Label(card, text="no player selected", bg=C_BG, fg=C_FG, anchor="w",
                             font=(self.app.FONT, 16, "bold"))
         self.who.pack(fill="x", pady=(0, 2))
@@ -4240,7 +4243,7 @@ class Pes2015Panel(tk.Frame):
                                                   padx=(4, 0), pady=1)
         nrow.columnconfigure(1, weight=1)
 
-        grid = self.app._section(col_a, "Abilities", hint="40 \u2013 99")
+        grid = self.app._section(col_a_body, "Abilities", hint="40 \u2013 99")
         tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
                  font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
         self.pos_var = tk.StringVar()
@@ -4270,7 +4273,7 @@ class Pes2015Panel(tk.Frame):
         for c in range(2):
             grid.columnconfigure(c * 3 + 2, weight=1)
 
-        bio = self.app._section(col_a, "Bio")
+        bio = self.app._section(col_b_body, "Bio")
         self.bio_vars = {}
         bio_rows = ("Height", "Weight", "Age", "Nationality", "Playing Style", "Form",
                     "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance")
@@ -4291,7 +4294,7 @@ class Pes2015Panel(tk.Frame):
                          row=4, column=3, sticky="w", pady=1)
 
         # the flags as the same pill chips the PES 2021 skills use
-        sk = self.app._section(col_b, "Skills & COM styles", hint="click to toggle")
+        sk = self.app._section(col_b_body, "Skills & COM styles", hint="click to toggle")
         self.flag_vars = {}
         grid_b = tk.Frame(sk, bg=C_BG)
         grid_b.pack(fill="x")
@@ -4299,16 +4302,16 @@ class Pes2015Panel(tk.Frame):
             v = tk.BooleanVar()
             self.flag_vars[("Skill", name)] = v
             CheckPill(grid_b, name, self.app._chip_font, v).grid(
-                row=n // 2, column=n % 2, sticky="w", padx=(0, 8), pady=2)
-        com_row = (len(pes2015.SKILLS) + 1) // 2
+                row=n // 3, column=n % 3, sticky="w", padx=(0, 8), pady=2)
+        com_row = (len(pes2015.SKILLS) + 2) // 3
         tk.Label(grid_b, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
-                 font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=2, sticky="w",
+                 font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=3, sticky="w",
                                             pady=(6, 0))
         for n, name in enumerate(pes2015.COM_STYLES):
             v = tk.BooleanVar()
             self.flag_vars[("Style", name)] = v
             CheckPill(grid_b, name, self.app._chip_font, v).grid(
-                row=com_row + 1 + n // 2, column=n % 2, sticky="w", padx=(0, 8), pady=2)
+                row=com_row + 1 + n // 3, column=n % 3, sticky="w", padx=(0, 8), pady=2)
 
         self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
                              font=self.app.F_LABEL)

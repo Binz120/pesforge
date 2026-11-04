@@ -1714,6 +1714,17 @@ def test_pes2015_window_edits_a_sandbox():
             os.environ["PES2015_DIR"] = saved_dir
 
 
+def test_pes2015_form_is_compact():
+    """The PES 2015 form must fit a modest window without scrolling: ~400px tall at ui=1."""
+    pes2015_install()                                   # skips cleanly when there is none
+    import editor
+    with gui() as app:
+        app.set_view_mode("pes2015")
+        app.update()
+        panel = app._pes2015_panel
+        assert panel.winfo_reqheight() <= int(560 * app.ui), panel.winfo_reqheight()
+
+
 def test_pes2015_teams_coaches_squads_roundtrip():
     """Team and coach renames plus a squad-number move land on disk, verify, and restore."""
     box = pes2015_box()
