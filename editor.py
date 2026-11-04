@@ -4177,56 +4177,92 @@ class Pes2015Panel(tk.Frame):
 
         mid = tk.Frame(self, bg=C_BG)
         mid.pack(fill="both", expand=True, padx=14)
+        # narrow list on the left, the form beside it — the proportions the PES 2021 view
+        # uses, instead of a list that swallowed the whole body
         left = tk.Frame(mid, bg=C_BG)
-        left.pack(side="left", fill="both", expand=True)
+        left.pack(side="left", fill="both")
         self.tree = ttk.Treeview(
             left, columns=("id", "name", "club", "pos", "spd", "bc", "fin", "sta"),
             show="headings", selectmode="browse")
-        for col, width, text, anchor in (("id", 62, "ID", "e"), ("name", 190, "Name", "w"),
-                                         ("club", 150, "Club", "w"),
-                                         ("pos", 52, "Pos", "w"), ("spd", 52, "SPD", "e"),
-                                         ("bc", 52, "BC", "e"), ("fin", 52, "FIN", "e"),
-                                         ("sta", 52, "STA", "e")):
+        for col, width, text, anchor in (("id", 46, "ID", "e"), ("name", 110, "Name", "w"),
+                                         ("club", 96, "Club", "w"),
+                                         ("pos", 38, "Pos", "w"), ("spd", 42, "SPD", "e"),
+                                         ("bc", 42, "BC", "e"), ("fin", 42, "FIN", "e"),
+                                         ("sta", 42, "STA", "e")):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=int(width * ui), anchor=anchor,
                              stretch=(col == "name"))
         self.tree.tag_configure("edited", foreground=C_ACCENT)
         self.tree.pack(side="left", fill="both", expand=True)
-        bar = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        bar.pack(side="left", fill="y")
-        self.tree.configure(yscrollcommand=bar.set)
+        self.scroll = SlimScroll(left, self.tree.yview)    # overlays the edge, like the main list
+        self.tree.configure(yscrollcommand=self.scroll.set)
         self.tree.bind("<<TreeviewSelect>>", self.pick)
+        self.tree.bind("<Return>", lambda _e: self.pick())
 
-        right = tk.Frame(mid, bg=C_BG)
-        right.pack(side="left", fill="y", padx=(12, 0))
-        self.who = tk.Label(right, text="no player selected", bg=C_BG, fg=C_DIM, anchor="w",
-                            font=self.app.F_LABEL)
-        self.who.pack(fill="x")
-        self.copies_lbl = tk.Label(right, text="", bg=C_BG, fg=C_HINT, anchor="w",
-                                   font=self.app.F_TINY)
+        col_a = tk.Frame(mid, bg=C_BG)
+        col_a.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        col_b = tk.Frame(mid, bg=C_BG)
+        col_b.pack(side="left", fill="both", expand=True, padx=(12, 0))
+
+        # the player card the PES 2021 view opens with: hero name, meta line, chips, names
+        card = self.app._section(col_a, "Player")
+        self.who = tk.Label(card, text="no player selected", bg=C_BG, fg=C_FG, anchor="w",
+                            font=(self.app.FONT, 16, "bold"))
+        self.who.pack(fill="x", pady=(0, 2))
+        self.copies_lbl = tk.Label(card, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                   font=self.app.F_SMALL)
         self.copies_lbl.pack(fill="x", pady=(0, 4))
+        chip_row = tk.Frame(card, bg=C_BG)
+        chip_row.pack(fill="x", pady=(0, 6))
+        self.chips = {}
+        for name in ("Height", "Weight", "Age", "Foot"):
+            chip = Pill(chip_row, "\u2014", self.app._chip_font)
+            chip.pack(side="left", padx=(0, 6))
+            self.chips[name] = chip
+        nrow = tk.Frame(card, bg=C_BG)
+        nrow.pack(fill="x")
+        self.name_vars = {}
+        for n, label in enumerate(("Name", "Shirt Name", "Japanese Name")):
+            tk.Label(nrow, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=15,
+                     font=self.app.F_LABEL).grid(row=n, column=0, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.name_vars[label] = v
+            ttk.Entry(nrow, textvariable=v, width=30,
+                      font=self.app.F_VALUE).grid(row=n, column=1, sticky="we",
+                                                  padx=(4, 0), pady=1)
+        nrow.columnconfigure(1, weight=1)
 
-        # the same foldable sections the PES 2021 form uses — the raw grid read as one data
-        # dump with abilities, bio and flags mixed together
-        grid = self.app._section(right, "Abilities")
+        grid = self.app._section(col_a, "Abilities", hint="40 \u2013 99")
         tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
                  font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
         self.pos_var = tk.StringVar()
         pos = ttk.Combobox(grid, textvariable=self.pos_var, values=list(pes2015.POSITION_NAMES),
                            state="readonly", width=8, font=self.app.F_VALUE)
-        pos.grid(row=0, column=1, sticky="w", padx=(0, 16), pady=2)
+        pos.grid(row=0, column=1, columnspan=2, sticky="w", pady=2)
         self.stat_vars = {}
+        self._ab_bars = {}
         for n, label in enumerate(self.ABILITIES):
-            row, col = n // 2 + 1, (n % 2) * 2
+            row, col = n // 2 + 1, (n % 2) * 3
             tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
                      font=self.app.F_LABEL).grid(row=row, column=col, sticky="w", pady=1)
             v = tk.StringVar()
             self.stat_vars[label] = v
-            tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=4,
+            tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=3,
                        font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
-                                                   padx=(0, 16), pady=1)
+                                                   padx=(0, 6), pady=1)
+            bar = tk.Canvas(grid, width=44, height=int(18 * ui), bg=C_BAR,
+                            highlightthickness=1, highlightbackground=C_LINE,
+                            cursor="sb_h_double_arrow")
+            bar.grid(row=row, column=col + 2, sticky="we", padx=(0, 10), pady=1)
+            bar.bind("<Button-1>", lambda e, l=label: self._drag_ab_bar(l, e))
+            bar.bind("<B1-Motion>", lambda e, l=label: self._drag_ab_bar(l, e))
+            bar.bind("<Configure>", lambda _e, l=label: self._sync_ab_bar(l))
+            self._ab_bars[label] = bar
+            v.trace_add("write", lambda *a, l=label: self._sync_ab_bar(l))
+        for c in range(2):
+            grid.columnconfigure(c * 3 + 2, weight=1)
 
-        bio = self.app._section(right, "Bio")
+        bio = self.app._section(col_a, "Bio")
         self.bio_vars = {}
         bio_rows = ("Height", "Weight", "Age", "Nationality", "Playing Style", "Form",
                     "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance")
@@ -4246,38 +4282,25 @@ class Pes2015Panel(tk.Frame):
                      state="readonly", width=6, font=self.app.F_VALUE).grid(
                          row=4, column=3, sticky="w", pady=1)
 
-        sk = self.app._section(right, "Skills & COM styles", hint="tick to set, clear to drop")
+        # the flags as the same pill chips the PES 2021 skills use
+        sk = self.app._section(col_b, "Skills & COM styles", hint="click to toggle")
         self.flag_vars = {}
+        grid_b = tk.Frame(sk, bg=C_BG)
+        grid_b.pack(fill="x")
         for n, name in enumerate(pes2015.SKILLS):
             v = tk.BooleanVar()
             self.flag_vars[("Skill", name)] = v
-            tk.Checkbutton(sk, text=name, variable=v, bg=C_BG, fg=C_DIM, bd=0,
-                           highlightthickness=0, activebackground=C_BG,
-                           activeforeground=C_ACCENT, selectcolor=C_PANEL2,
-                           font=self.app.F_TINY, anchor="w").grid(
-                               row=n // 2, column=n % 2, sticky="w", padx=(0, 12))
+            CheckPill(grid_b, name, self.app._chip_font, v).grid(
+                row=n // 2, column=n % 2, sticky="w", padx=(0, 8), pady=2)
         com_row = (len(pes2015.SKILLS) + 1) // 2
-        tk.Label(sk, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
+        tk.Label(grid_b, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
                  font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=2, sticky="w",
                                             pady=(6, 0))
         for n, name in enumerate(pes2015.COM_STYLES):
             v = tk.BooleanVar()
             self.flag_vars[("Style", name)] = v
-            tk.Checkbutton(sk, text=name, variable=v, bg=C_BG, fg=C_DIM, bd=0,
-                           highlightthickness=0, activebackground=C_BG,
-                           activeforeground=C_ACCENT, selectcolor=C_PANEL2,
-                           font=self.app.F_TINY, anchor="w").grid(
-                               row=com_row + 1 + n // 2, column=n % 2, sticky="w", padx=(0, 12))
-
-        names = self.app._section(right, "Names", hint="45 bytes max, cut cleanly")
-        self.name_vars = {}
-        for n, label in enumerate(("Name", "Shirt Name", "Japanese Name")):
-            tk.Label(names, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
-                     font=self.app.F_LABEL).grid(row=n, column=0, sticky="w", pady=2)
-            v = tk.StringVar()
-            self.name_vars[label] = v
-            ttk.Entry(names, textvariable=v, width=26,
-                      font=self.app.F_VALUE).grid(row=n, column=1, sticky="w", pady=2)
+            CheckPill(grid_b, name, self.app._chip_font, v).grid(
+                row=com_row + 1 + n // 2, column=n % 2, sticky="w", padx=(0, 8), pady=2)
 
         self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
                              font=self.app.F_LABEL)
@@ -4340,6 +4363,32 @@ class Pes2015Panel(tk.Frame):
             return ""
         return self.team_names.get(club[0], str(club[0]))
 
+    def _sync_ab_bar(self, label):
+        """Repaint one ability bar — the same palette and 40-99 scale as the PES 2021 form."""
+        bar = self._ab_bars.get(label)
+        if bar is None:
+            return
+        try:
+            val = int(self.stat_vars[label].get())
+        except (TypeError, ValueError):
+            val = 40
+        bar.delete("all")
+        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        height = int(bar.cget("height"))
+        bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
+        frac = max(0.0, min(1.0, (val - 40) / 59))
+        bar.create_rectangle(0, 0, max(1, int(width * frac)), height,
+                             fill=C_ACCENT if val >= 80 else
+                             (C_ACCENT_LO if val >= 65 else C_BAR_LOW), width=0)
+
+    def _drag_ab_bar(self, label, evt):
+        """Click or drag an ability bar to set it: left edge 40, right edge 99."""
+        bar = self._ab_bars[label]
+        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        val = bar_value(evt.x, width)
+        if str(val) != self.stat_vars[label].get():
+            self.stat_vars[label].set(str(val))     # the var's trace repaints the bar
+
     def fill(self):
         low = norm(self.q.get().strip())
         self.tree.delete(*self.tree.get_children())
@@ -4374,10 +4423,14 @@ class Pes2015Panel(tk.Frame):
         club_text = ""
         if club:
             club_text = f"  ·  {self.team_names.get(club[0], club[0])} (#{club[1]})"
-        self.who.configure(text=f"{table.name(i)}  ·  id {self.pid}{club_text}")
+        self.who.configure(text=table.name(i) or f"id {self.pid}")
         self.copies_lbl.configure(
-            text=f"{len(copies)} cop{'ies' if len(copies) > 1 else 'y'} — "
+            text=f"id {self.pid}{club_text}  \u00b7  {len(copies)} "
+                 f"cop{'ies' if len(copies) > 1 else 'y'}: "
                  + ", ".join(f"{os.path.basename(p)}:{s}" for p, s, _t, _r in copies))
+        for name in ("Height", "Weight", "Age"):
+            self.chips[name].set_text(f"{name} {table.get(i, name)}")
+        self.chips["Foot"].set_text("Left" if table.get(i, "Foot") else "Right")
         pos = table.get(i, "Position")
         self.pos_var.set(pes2015.POSITION_NAMES[pos]
                          if pos < len(pes2015.POSITION_NAMES) else pes2015.POSITION_NAMES[0])
