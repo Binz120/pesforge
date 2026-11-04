@@ -4204,10 +4204,11 @@ class Pes2015Panel(tk.Frame):
         self.who.pack(fill="x")
         self.copies_lbl = tk.Label(right, text="", bg=C_BG, fg=C_HINT, anchor="w",
                                    font=self.app.F_TINY)
-        self.copies_lbl.pack(fill="x")
+        self.copies_lbl.pack(fill="x", pady=(0, 4))
 
-        grid = tk.Frame(right, bg=C_BG)
-        grid.pack(fill="x", pady=(8, 0))
+        # the same foldable sections the PES 2021 form uses — the raw grid read as one data
+        # dump with abilities, bio and flags mixed together
+        grid = self.app._section(right, "Abilities")
         tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
                  font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
         self.pos_var = tk.StringVar()
@@ -4225,8 +4226,7 @@ class Pes2015Panel(tk.Frame):
                        font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
                                                    padx=(0, 16), pady=1)
 
-        bio = tk.Frame(right, bg=C_BG)
-        bio.pack(fill="x", pady=(6, 0))
+        bio = self.app._section(right, "Bio")
         self.bio_vars = {}
         bio_rows = ("Height", "Weight", "Age", "Nationality", "Playing Style", "Form",
                     "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance")
@@ -4246,24 +4246,30 @@ class Pes2015Panel(tk.Frame):
                      state="readonly", width=6, font=self.app.F_VALUE).grid(
                          row=4, column=3, sticky="w", pady=1)
 
-        sk = tk.Frame(right, bg=C_BG)
-        sk.pack(fill="x", pady=(6, 0))
+        sk = self.app._section(right, "Skills & COM styles", hint="tick to set, clear to drop")
         self.flag_vars = {}
-        flags = [(name, "Skill") for name in pes2015.SKILLS] \
-            + [(name, "Style") for name in pes2015.COM_STYLES]
-        for n, (name, family) in enumerate(flags):
+        for n, name in enumerate(pes2015.SKILLS):
             v = tk.BooleanVar()
-            self.flag_vars[(family, name)] = v
+            self.flag_vars[("Skill", name)] = v
             tk.Checkbutton(sk, text=name, variable=v, bg=C_BG, fg=C_DIM, bd=0,
                            highlightthickness=0, activebackground=C_BG,
                            activeforeground=C_ACCENT, selectcolor=C_PANEL2,
                            font=self.app.F_TINY, anchor="w").grid(
-                               row=n // 3, column=n % 3, sticky="w", padx=(0, 8))
-        tk.Label(right, text="the game's skill / COM-style flags — tick to set, clear to drop",
-                 bg=C_BG, fg=C_HINT, anchor="w", font=self.app.F_TINY).pack(fill="x", pady=(2, 0))
+                               row=n // 2, column=n % 2, sticky="w", padx=(0, 12))
+        com_row = (len(pes2015.SKILLS) + 1) // 2
+        tk.Label(sk, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
+                 font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=2, sticky="w",
+                                            pady=(6, 0))
+        for n, name in enumerate(pes2015.COM_STYLES):
+            v = tk.BooleanVar()
+            self.flag_vars[("Style", name)] = v
+            tk.Checkbutton(sk, text=name, variable=v, bg=C_BG, fg=C_DIM, bd=0,
+                           highlightthickness=0, activebackground=C_BG,
+                           activeforeground=C_ACCENT, selectcolor=C_PANEL2,
+                           font=self.app.F_TINY, anchor="w").grid(
+                               row=com_row + 1 + n // 2, column=n % 2, sticky="w", padx=(0, 12))
 
-        names = tk.Frame(right, bg=C_BG)
-        names.pack(fill="x", pady=(8, 0))
+        names = self.app._section(right, "Names", hint="45 bytes max, cut cleanly")
         self.name_vars = {}
         for n, label in enumerate(("Name", "Shirt Name", "Japanese Name")):
             tk.Label(names, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
@@ -4272,8 +4278,6 @@ class Pes2015Panel(tk.Frame):
             self.name_vars[label] = v
             ttk.Entry(names, textvariable=v, width=26,
                       font=self.app.F_VALUE).grid(row=n, column=1, sticky="w", pady=2)
-        tk.Label(right, text="names: 45 bytes max, cut cleanly", bg=C_BG, fg=C_HINT,
-                 anchor="w", font=self.app.F_TINY).pack(fill="x", pady=(4, 0))
 
         self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
                              font=self.app.F_LABEL)
