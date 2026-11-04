@@ -654,7 +654,9 @@ def main(argv):
         if name == "last":
             chosen = backups[0]
         else:
-            matches = [b for b in backups if os.path.basename(b).startswith(name)]
+            matches = [b for b in backups if os.path.basename(b) == name]
+            if not matches:                      # allow a prefix, but an exact name wins
+                matches = [b for b in backups if os.path.basename(b).startswith(name)]
             if len(matches) != 1:
                 raise SystemExit(f"{len(matches)} backups match {name!r} — see --backups")
             chosen = matches[0]

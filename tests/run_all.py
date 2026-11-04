@@ -1674,6 +1674,13 @@ def test_pes2015_window_edits_a_sandbox():
             _p, _s, table, i = win.display[multi]
             assert table.get(i, "Speed") == 41, "revert did not reload from disk"
             assert table.get(i, "Height") == 170, "revert did not reload the bio fields"
+            win.tree.selection_set("4522")                   # the form populates from disk
+            win.pick()
+            assert win.bio_vars["Height"].get() == "185", win.bio_vars["Height"].get()
+            assert win.foot_var.get() == "Right", win.foot_var.get()
+            assert win._club_text(4522) == "REAL MADRID", win._club_text(4522)
+            assert len(win.flag_vars) == len(editor.pes2015.SKILLS) + len(editor.pes2015.COM_STYLES)
+            assert "club" in win.tree["columns"]
             win.destroy()
     finally:
         editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
