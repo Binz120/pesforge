@@ -20,6 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import pesdb
 import pesdb_maps as maps
+import pes2015
 import settings
 import settings
 
@@ -1395,6 +1396,155 @@ def test_popup_windows_have_cursors():
         assert str(aware.cget("cursor")), "the appearance window has no cursor"
         assert str(aware.tree.cget("cursor")), "the appearance tree has no cursor"
         aware.destroy()
+
+
+# ---------------------------------------------------------------- PES 2015
+def pes2015_install():
+    """The PES 2015 install, or a skip when this machine has none (set PES2015_DIR)."""
+    folder = os.environ.get("PES2015_DIR") or pes2015.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+        raise FileNotFoundError(2, "no PES 2015 install (set PES2015_DIR)", "dt10.cpk")
+    return folder
+
+
+def pes2015_box():
+    """A private copy of dt10.cpk — edits patch it in place, so a symlink would hit the game."""
+    box = tempfile.mkdtemp(prefix="pesforge-2015-")
+    os.makedirs(os.path.join(box, "game", "Data"))
+    os.makedirs(os.path.join(box, "game", "download"))
+    shutil.copy2(os.path.join(pes2015_install(), "Data", "dt10.cpk"),
+                 os.path.join(box, "game", "Data", "dt10.cpk"))
+    return box
+
+
+def cli2015(box, *args, expect=0):
+    env = dict(os.environ, PES2015_DIR=os.path.join(box, "game"),
+               SPFL_STATE=os.path.join(box, "state"),
+               SPFL_CONFIG=os.path.join(box, "state", "config.json"))
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "cli2015.py")] + list(args),
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == expect, f"{args} -> rc {p.returncode}\n{p.stdout}\n{p.stderr}"
+    return p.stdout + p.stderr
+
+
+def pes2015_diffs(a, b, span=1 << 16):
+    """Byte ranges where two buffers differ; the tail is one range, chunks keep it fast."""
+    common = min(len(a), len(b))
+    ranges = []
+    for start in range(0, common, span):
+        end = min(start + span, common)
+        if a[start:end] == b[start:end]:
+            continue
+        i = start
+        while i < end:
+            if a[i:i + 1] != b[i:i + 1]:
+                j = i
+                while j < end and a[j:j + 1] != b[j:j + 1]:
+                    j += 1
+                ranges.append((i, j))
+                i = j
+            else:
+                i += 1
+    if len(a) != len(b):
+        ranges.append((common, max(len(a), len(b))))
+    return ranges
+
+
+def test_pes2015_reads_the_shipped_table():
+    db = pes2015.Cpk2015(os.path.join(pes2015_install(), "Data", "dt10.cpk"))
+    table = db.read_table("Player")
+    assert len(table) == 10091, len(table)
+    assert len(db.read_table("Player1")) == 1100
+    for i in range(len(table)):      # every shipped row carries an id and all three names
+        assert table.pid(i) and table.name(i) and table.shirt(i) and table.japanese(i), i
+    me = table.find("7511")[0]
+    assert table.name(me).upper() == "L. MESSI", table.name(me)
+    assert pes2015.POSITION_NAMES[table.get(me, "Position")] == "SS"
+
+
+def test_pes2015_default_targets_include_the_mounted_pack():
+    folder = pes2015_install()
+    paths = [os.path.basename(p) for p in pes2015.database_cpks(folder)]
+    assert paths and paths[0] == "dt10.cpk", paths
+    packs = pes2015.mounted_packs(folder)
+    assert packs, "DpFileList.bin names no data pack"
+    for pack in packs:
+        assert pack in paths, (pack, paths)
+
+
+def test_pes2015_cli_dry_run_then_save():
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    out = cli2015(box, "--set", "7511", "Speed=41")
+    assert "Speed" in out and "dry run" in out, out
+    assert open(cpk_path, "rb").read() == before, "a dry run wrote to the CPK"
+    out = cli2015(box, "--set", "7511", "Speed=41", "--save")
+    assert "all edits present" in out, out
+    shown = cli2015(box, "--show", "7511")
+    assert re.search(r"Speed\s+41\n", shown), shown
+    out = cli2015(box, "--set", "7511", "Speed=41")
+    assert "nothing changed" in out, out
+
+
+def test_pes2015_write_confines_its_changes():
+    """A save may touch only the header/TOC tables and the appended payload."""
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    db = pes2015.Cpk2015(cpk_path)
+    table = db.read_table("Player")
+    rows_before = [bytes(r) for r in table.records]
+    me = table.find("7511")[0]
+    table.set(me, "Speed", 42)
+    table.set_name(me, shirt="MESSI-TEST")
+    backup = os.path.join(box, "backup")
+    where, appended = db.patch("Player", table.to_payload(), backup_dir=backup)
+    assert appended and where >= len(before), (where, len(before))
+    after = open(cpk_path, "rb").read()
+    allowed = [(0x10, 0x10 + db.header.size), (db.toc_off, db.toc_off + db.toc.size)]
+    for lo, hi in pes2015_diffs(before, after):
+        assert any(lo >= a and hi <= b for a, b in allowed) or lo >= len(before), \
+            f"unexpected change at {lo:#x}..{hi:#x}"
+    fresh = pes2015.Cpk2015(cpk_path).read_table("Player")
+    assert len(fresh) == len(rows_before)
+    assert fresh.get(me, "Speed") == 42
+    assert fresh.shirt(me) == "MESSI-TEST"
+    for i in range(len(fresh)):
+        if i != me:
+            assert bytes(fresh.records[i]) == rows_before[i], f"row {i} moved"
+    folder = os.path.join(backup, "pes2015")
+    base = os.path.join(folder, [f for f in os.listdir(folder) if f.endswith(".json")][0][:-5])
+    pes2015.restore_backup(base)
+    assert open(cpk_path, "rb").read() == before, "restore did not return the original bytes"
+
+
+def test_pes2015_patch_in_place_keeps_the_file_size():
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    db = pes2015.Cpk2015(cpk_path)
+    table = db.read_table("Player1")
+    small = pes2015.PlayerTable(b"".join(bytes(r) for r in table.records[:1]), table.prefix)
+    assert pes2015.wesys_records(small.to_payload()) == b"".join(
+        bytes(r) for r in small.records)
+    off = db.entry("Player1")[1][1]
+    where, appended = db.patch("Player1", small.to_payload())
+    assert not appended, "a one-row payload must fit the slot"
+    assert where == off + pes2015.LEAD, (where, off)
+    assert len(open(cpk_path, "rb").read()) == len(before), "an in-place patch grew the CPK"
+    again = pes2015.Cpk2015(cpk_path)
+    found = again.entry("Player1")
+    assert found and found[1][1] == off
+    assert len(again.read_table("Player1")) == 1
+
+
+def test_pes2015_name_slots_never_split_a_codepoint():
+    assert pes2015.encode_name("A" * 60) == b"A" * 45 + b"\x00"
+    cut = pes2015.encode_name("A" * 44 + "名")
+    assert len(cut) == 46 and cut.endswith(b"\x00\x00"), cut
+    cut.decode("utf-8")              # no half codepoint left behind
+    assert pes2015.encode_name("") == b"\x00" * 46
 
 
 def main():

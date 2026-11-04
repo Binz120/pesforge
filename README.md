@@ -208,6 +208,47 @@ this database, so a player's country row is left untouched. Rows referencing a t
 from `Team.bin` export with a blank club and are counted in the export summary rather than
 dropped.
 
+## PES 2015 (dt10.cpk + dt80 data packs)
+
+Retail PES 2015 is a different vintage — 180-byte player records, three name slots, nineteen
+abilities, a CRI-encrypted TOC — so it gets its own reader/writer and its own CLI. The GUI
+stays on SP Football Life; PES 2015 is edited headlessly:
+
+```
+pesforge2015 --tables                        # what an edit would reach, with row counts
+pesforge2015 --find "messi"                  # id, name, position, a few stats
+pesforge2015 --show 7511                     # every ability + all three names
+pesforge2015 --set 7511 Speed=90 Position=SS            # dry run, prints before/after
+pesforge2015 --set 7511 Speed=90 Position=SS --save     # write every table holding him
+pesforge2015 --export players.csv            # all tables, with cpk/table columns
+pesforge2015 --fields                        # field names + ranges
+pesforge2015 --backups                       # what can be undone
+pesforge2015 --restore last                  # put the previous bytes back
+```
+
+The install folder is found automatically (Wine prefixes, `wineprefixes/*`, Steam);
+`PES2015_DIR` overrides it, or pass `--game DIR`. Writes need the game closed.
+
+**What an edit reaches.** The player tables live in `Data/dt10.cpk` (base) and in the data pack
+`download/DpFileList.bin` names — `dt80_100E.cpk` on this install — each holding `Player.bin`
+plus numbered update slots (`Player1..6.bin`). A `--set` lands in *every* copy of the player
+across those tables, so the change shows whichever file the game reads on boot.
+
+**Saves are reversible.** Before touching a CPK, the regions about to change — the TOC, the
+header table and the old payload — are saved under `<state>/backups/pes2015/`; `--restore`
+writes them back and truncates the file to its recorded size, so a save undoes byte for byte.
+The game's own compressor beats standard zlib by a few percent, so a re-packed table usually
+outgrows its slot and is appended at the end of the CPK with its TOC entry repointed (the file
+grows by about one table per save: ~0.5 MB on dt10, ~0.6 MB on the data pack); an edit that
+fits is patched in place and the file size does not move.
+
+Format notes (the details live in `pes2015.py`): 180-byte records, id u32 at +0, names at
++0x28/+0x56/+0x84 (46-byte UTF-8 slots), primary position 4 bits at 0xcf, 19 abilities as
+6-bit fields on a 6-bit grid (value = raw + 40). In the CPK a file's payload starts at
+`FileOffset + 0x800`, is `prefix + "WESYS" + u32 compressed + u32 uncompressed + zlib`, and is
+`FileSize` long; the TOC sits at `0x10 + header.TocOffset`, and both the TOC and header tables
+are XOR-obfuscated (the writer re-applies the stream).
+
 ## Good to know
 
 **An in-game edit save shadows the database.** PES writes `EDIT00000000` under
@@ -239,10 +280,12 @@ finds id 12; the 12 FL27 skills the list lacks return `None`.
 
 | file | purpose |
 |---|---|
-| `cpk.py` | CRI CPK reader (header + TOC `@UTF` tables) |
+| `cpk.py` | CRI CPK reader/writer (header + TOC `@UTF` tables, plaintext or XOR-obfuscated) |
 | `pesdb.py` | WESYS pack/unpack, CPK table extraction, 312-byte bit-field record codec, team maps |
 | `editor.py` | Tkinter UI (and entry point) |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
+| `pes2015.py` | PES 2015 tables: 180-byte records, WESYS payloads, CPK patching, backups |
+| `cli2015.py` | headless PES 2015 find / show / set / export / tables / backups / restore |
 | `settings.py` | config file: game folder, backups, save confirmation, photos, theme, window size |
 | `theme.py` | the four palettes and the derived colour tokens (contrast-checked) |
 | `pesdb_maps.py` | ability/skill/style tables + eFootball↔PES2021 conversion |
@@ -250,6 +293,7 @@ finds id 12; the 12 FL27 skills the list lacks return `None`.
 | `data/countries.json` | nationality names keyed by the record's field |
 | `assets/pesforge.png` | window and menu icon |
 | `bin/pesforge` | launcher: picks a python with tkinter, sets session vars |
+| `bin/pesforge2015` | launcher for the PES 2015 CLI (plain Python, no display) |
 | `install.sh` | user-level install: launcher + menu entry, no root |
 
 The pristine table extracted from the CPK is cached at

@@ -11,10 +11,11 @@ here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 BIN="$HOME/.local/bin"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 LAUNCHER="$BIN/pesforge"
+LAUNCHER2015="$BIN/pesforge2015"
 DESKTOP="$APPS/pesforge.desktop"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -f "$LAUNCHER" "$DESKTOP"
+  rm -f "$LAUNCHER" "$LAUNCHER2015" "$DESKTOP"
   for s in 16 32 48 64 128 256 512; do
     rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${s}x${s}/apps/pesforge.png"
   done
@@ -31,6 +32,12 @@ if ln -sf "$here/bin/pesforge" "$LAUNCHER" 2>/dev/null; then :; else
   cp "$here/bin/pesforge" "$LAUNCHER"
 fi
 chmod +x "$LAUNCHER" 2>/dev/null
+
+chmod +x "$here/bin/pesforge2015" 2>/dev/null
+if ln -sf "$here/bin/pesforge2015" "$LAUNCHER2015" 2>/dev/null; then :; else
+  cp "$here/bin/pesforge2015" "$LAUNCHER2015"
+fi
+chmod +x "$LAUNCHER2015" 2>/dev/null
 
 # The window icon comes from assets/pesforge.png; the menu entry needs it in the
 # icon theme so `Icon=pesforge` resolves.
@@ -61,6 +68,7 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 
 echo "installed:"
 echo "  launcher : $LAUNCHER"
+echo "  PES 2015 : $LAUNCHER2015"
 echo "  menu     : $DESKTOP"
 echo
 if ! "$LAUNCHER" --check; then
