@@ -623,11 +623,9 @@ class Editor(tk.Tk):
             return
         names = ", ".join(empty)
         text = (f"{names} {'is' if len(empty) == 1 else 'are'} blank in all "
-                f"{len(self.table.records):,} records of this database \u2014 the shipped "
-                "data, not a read error.")
+                f"{len(self.table.records):,} records \u2014 shipped data, not a read error.")
         if "Owner Club" in empty:
-            text += (" The game keeps per-player ownership in its EDIT save, which PESForge "
-                     "cannot read yet.")
+            text += " Per-player ownership lives in the game's EDIT save."
         text += " Type a club name or id to set one."
         note.configure(text=text)
 
@@ -2064,8 +2062,7 @@ class Editor(tk.Tk):
         tk.Label(number, text="worn in this club", bg=C_BG, fg=C_HINT,
                  font=self.F_TINY).pack(side="left", padx=4)
 
-        sec2 = self._section(parent, "Club name in the database", key="clubname",
-                             hint="Team.bin")
+        sec2 = self._section(parent, "Club name", key="clubname", hint="Team.bin")
         self.team_vars = {}
         for label in ("English", "Database", "Short"):
             r = tk.Frame(sec2, bg=C_BG)
@@ -2093,9 +2090,9 @@ class Editor(tk.Tk):
                 ttk.Button(r, text="Apply", style="Ghost.TButton",
                            command=self.apply_team_name).pack(side="left")
         self._field_section["Club name"] = "clubname"
-        note = "Transfers and club names are written to Team.bin + PlayerAssignment.bin on save."
+        note = "Written to Team.bin + PlayerAssignment.bin on save."
         if self.edit_saves:
-            note += ("\nAn in-game edit save overrides this database: "
+            note += ("\nIn-game edit save overrides this database: "
                      + ", ".join(os.path.basename(p) for p in self.edit_saves))
         note_lbl = tk.Label(parent, text=note, bg=C_BG, fg=C_WARN if self.edit_saves else C_HINT,
                             anchor="w", justify="left", font=self.F_TINY)
@@ -2287,11 +2284,10 @@ class Editor(tk.Tk):
         self.lbl_club.configure(text=name)
         if team_id:
             squad = self.club_counts.get(team_id, 0)
-            scope = (f"Coach, stadium and squad number belong to this club and every one of "
-                     f"its {squad} players, not to the player above.  team id {team_id} · "
-                     f"{len(club_rows)} club row(s), {len(rows)} total")
+            scope = (f"club-level \u2014 shared by all {squad} players \u00b7 "
+                     f"team {team_id} \u00b7 {len(club_rows)} club row(s)")
         else:
-            scope = "This player has no club row — a transfer creates one."
+            scope = "no club row yet \u2014 a transfer creates one."
         self.lbl_club_scope.configure(text=scope)
         self.club_target.set("")
         idx = self.team_index.get(team_id)
@@ -3018,9 +3014,9 @@ class Editor(tk.Tk):
         natural = "/".join(nm for nm in pesdb.POS_NAMES if t.get(i, "Pos " + nm) >= 1) or "—"
         foot = "left foot" if t.get(i, "Stronger Foot") else "right foot"
         self.lbl_hero.configure(text=t.name(i) or "(no name)")
-        self.lbl_sub.configure(text=f"ID {pid}   ·   {club}   ·   "
-                                   f"{pesdb.country_name(t.get(i, 'Nationality')) or '—'}   ·   "
-                                   f"{natural}   ·   {foot}")
+        self.lbl_sub.configure(text=f"ID {pid} · {club} · "
+                                   f"{pesdb.country_name(t.get(i, 'Nationality')) or '—'} · "
+                                   f"{natural} · {foot}")
         rating = self.ovr(i)
         self.ovr_big.configure(text=str(rating), fg=self._ovr_colour(rating))
         style_i = t.get(i, "Playing Style")
