@@ -1625,15 +1625,13 @@ def test_pes2015_unmount_returns_to_the_detected_install():
             app.update()
             panel = app._pes2015_panel
             assert panel.dir == folder, panel.dir
-            assert str(panel.btn_unmount["state"]) == "normal"
             panel.unmount_dir()
             app.update()
             assert not settings.load().get("pes2015_dir")
-            assert str(panel.btn_unmount["state"]) == "disabled"
             assert panel.dir == folder, "the environment still points at the install"
             assert panel.copies, "tables must reload from the fallback install"
             panel.unmount_dir()                      # nothing imported: say so, change nothing
-            assert "no imported folder" in panel.note.cget("text")
+            assert "nothing imported" in panel.note.cget("text")
     finally:
         if saved_env is None:
             os.environ.pop("PES2015_DIR", None)
@@ -1663,20 +1661,19 @@ def test_import_database_switches_the_editor():
             assert settings.load().get("database") == imported
             assert len(app.table.records) == 26395
             assert settings.imported_database({"database": imported}) == imported
-            assert str(app.btn_unmount["state"]) == "normal", "mounted: Unmount must be live"
             app.switch_database(before)              # back to the install: folder mode again
             assert app.cpk_path == before, app.cpk_path
             assert not settings.load().get("database")
-            assert str(app.btn_unmount["state"]) == "disabled", "nothing mounted: Unmount is dead"
             app.switch_database(imported)            # and now the button's own way back
-            assert str(app.btn_unmount["state"]) == "normal"
+            assert app.cpk_path == imported
             app.unmount_database()
             assert app.cpk_path == before, app.cpk_path
             assert not settings.load().get("database")
             assert len(app.table.records) == 26395
-            assert str(app.btn_unmount["state"]) == "disabled"
-            app.unmount_database()                   # nothing imported: a plain refusal
+            app.unmount_database()                   # nothing imported: it must say so
             assert app.cpk_path == before
+            assert "nothing imported" in app.statusbar.cget("text"), \
+                app.statusbar.cget("text")
     finally:
         editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
         if saved_dir is None:
