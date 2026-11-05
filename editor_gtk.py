@@ -92,8 +92,18 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
         names = [f for f in os.listdir(folder) if f.endswith(".cpk")]
     except OSError:
         return ""
-    rank = lambda n: (0, n) if n in prefer else ((1, n) if n.startswith("dt80") else (2, n))
-    for name in sorted(names, key=rank):
+    game = install_of(path) if os.path.basename(folder) == "download" else ""
+    packs = pes2019.mounted_packs(game) if game else []
+    order = {name: i for i, name in enumerate(packs)}      # the last mounted pack wins
+
+    def rank(name):
+        if name in prefer:
+            return (0, 0)                  # the base table the game reads first
+        if name in order:
+            return (1, len(order) - order[name])   # later in DpFileList overrides earlier
+        return (2, 0) if name.startswith("dt80") else (3, 0)
+
+    for name in sorted(names, key=lambda n: (rank(n), n)):
         if name == os.path.basename(path):
             continue
         try:

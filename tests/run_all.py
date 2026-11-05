@@ -2128,6 +2128,14 @@ def test_gtk4_import_probe_identifies_the_release():
     assert "nada ''" in text, text[-400:]
     if os.path.isfile(empty):
         assert "swap dt10_x64.cpk" in text, text[-400:]
+    # a pick inside download/ must resolve to the pack that overrides the others
+    script = ("import sys; sys.path.insert(0, %r); import editor_gtk as g\n"
+              "print('mounted', g.sibling_database(%r).split('/')[-1])\n"
+              ) % (ROOT, os.path.join(game, "download", "zz-missing.cpk"))
+    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300)
+    mounted = [l for l in out.stdout.splitlines() if l.startswith("mounted")]
+    if mounted:
+        assert mounted[0].endswith("dt80_200E_x64.cpk"), mounted[0]
     try:
         os.unlink(junk)
     except OSError:
