@@ -2005,6 +2005,26 @@ def test_pes2019_tab_swaps_the_body_and_shows_players():
 
 
 
+def gtk4_python():
+    """An interpreter that can import GTK4, picked the way bin/pesforge-gtk4 picks one.
+
+    The interpreter running the suite is not necessarily the one with system PyGObject: a venv
+    without system site packages has no `gi` at all.
+    """
+    for candidate in (os.environ.get("PESFORGE_GTK4_PYTHON"), sys.executable,
+                      "/usr/bin/python3", "python3"):
+        if not candidate:
+            continue
+        path = candidate if os.sep in candidate else shutil.which(candidate)
+        if not path or not os.path.isfile(path):
+            continue
+        probe = subprocess.run([path, "-c", 'import gi; gi.require_version("Gtk", "4.0");'
+                                             ' from gi.repository import Gtk'], capture_output=True)
+        if probe.returncode == 0:
+            return path
+    raise RuntimeError("no interpreter with GTK4 (PyGObject) for the GTK4 app")
+
+
 def test_gtk4_app_builds_and_searches():
     """The GTK4 screen builds on the installed PES 2019 table and its search narrows the list.
 
@@ -2012,16 +2032,11 @@ def test_gtk4_app_builds_and_searches():
     not the same as a list holding the real rows with a record loaded into the form.
     """
     game = pes2019_install()
-    try:
-        import gi
-        gi.require_version("Gtk", "4.0")
-        from gi.repository import Gtk  # noqa: F401
-    except (ImportError, ValueError) as exc:
-        raise RuntimeError(f"no GTK4 for the GTK4 app ({exc})")
+    py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         raise RuntimeError("no display for the GTK4 app")
     env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="1")
-    out = subprocess.run([sys.executable, os.path.join(ROOT, "editor_gtk.py")],
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")],
                          capture_output=True, text=True, env=env, timeout=600)
     text = out.stdout + out.stderr
     assert "SELFTEST OK" in text, text[-600:]
@@ -2032,7 +2047,8 @@ def test_gtk4_app_builds_and_searches():
     assert players > 10000, f"only {players} players listed"
     assert selected < players, f"row {selected} selected of {players}"
     assert abilities == 23, f"{abilities} ability rows"
-    assert chips >= 48, f"{chips} skill chips"
+    expected = len(pes2019.SKILLS) + len(pes2019.COM_STYLES)
+    assert chips == expected, f"{chips} skill chips, the map holds {expected}"
 
 
 def main():
