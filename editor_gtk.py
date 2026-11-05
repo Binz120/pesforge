@@ -401,9 +401,21 @@ class ImportHub(Gtk.Window):
         return True
 
     def show_path(self, path):
-        """A pick (dropped or chosen) — say what it holds and whether Load will take it."""
+        """A pick — say what it holds, and offer the folder's database when the pick has none.
+
+        load_database() resolves the same case by itself, so the hub has to as well or it
+        would be the less useful of the two.
+        """
         self.path = path
         details, can_load = describe_database(path)
+        self.load_btn.set_label("Load")
+        if not can_load:
+            better = sibling_database(path)
+            if better:
+                bdetails, can_load = describe_database(better)
+                details = [f"picked: {os.path.basename(path)} — no player table"] + bdetails
+                self.path = better
+                self.load_btn.set_label(f"Load {os.path.basename(better)}")
         self.summary.set_text("\n".join(details))
         self.load_btn.set_sensitive(can_load)
         self.load_btn.set_tooltip_text("" if can_load else
@@ -1209,6 +1221,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             self.hub = ImportHub(self)
             self.hub.show_path(pack or spfl)
             checks.append(("the hub takes a pick", self.hub.load_btn.get_sensitive(), bool(pack)))
+            empty = os.path.join(os.environ.get("PES2019_DIR", ""), "Data", "dt00_4K_x64.cpk")
+            if os.path.isfile(empty):
+                self.hub.show_path(empty)
+                checks.append(("a pick with no table offers the folder's database",
+                               os.path.basename(self.hub.path), "dt10_x64.cpk"))
+                checks.append(("and it is loadable", self.hub.load_btn.get_sensitive(), True))
             self.hub.close()
             for label, got, want in checks:
                 if got != want:
