@@ -2204,6 +2204,22 @@ def test_gtk4_clicking_a_player_shows_that_player():
     assert "a click shows the row it hit: 7" in text, text[-600:]
 
 
+def test_gtk4_import_hub_describes_a_pick():
+    """The hub names what a pick holds and marks whether this build can open it."""
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="hub", PES2019_DIR=pes2019_install(),
+               SPFL_DIR=settings.game_dir() or "")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST HUB OK" in text, text[-600:]
+    assert "a PES 2019 pack is loadable: True" in text, text[-600:]
+    if os.path.isfile(os.path.join(settings.game_dir() or "", "download", "data_s2627.cpk")):
+        assert "SP Football Life is refused: False" in text, text[-600:]
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

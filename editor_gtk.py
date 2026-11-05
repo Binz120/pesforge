@@ -116,6 +116,31 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
     return ""
 
 
+VINTAGE_NAMES = {"pes2019": "PES 2019", "pes2015": "PES 2015",
+                 "pes2021": "SP Football Life / PES 2021"}
+NOT_READ = ("Reads CRI CPK databases — PES 2019, PES 2015 and SP Football Life. EDIT0000 "
+            "option files, .ted/.ced containers and spreadsheets are not read by this build.")
+
+
+def describe_database(path):
+    """(details, can_load) for a pick: what it holds, then whether Load will do anything.
+
+    The release is read off the tables, so there is nothing here to choose — the point of
+    the dialog is to show the detection before the main window changes under you.
+    """
+    vintage, note = probe_database(path)
+    details = [f"file: {os.path.basename(path)}",
+               f"detected: {VINTAGE_NAMES.get(vintage, vintage)} — {note}"]
+    can_load = vintage == "pes2019"
+    if can_load:
+        try:
+            teams = pes2019.TeamTable(*pes2019.Cpk2019(path).read_raw("Team"))
+            details.append(f"contents: {len(teams):,} clubs, {pes2019.REC}-byte player records")
+        except Exception:
+            pass
+    return details, can_load
+
+
 def import_start_folder(last=""):
     """Where the file chooser opens: where you last picked, else your games, else home.
 
@@ -312,6 +337,84 @@ class AbilityBar(Gtk.DrawingArea):
 
 
 # ---------------------------------------------------------------- the window
+class ImportHub(Gtk.Window):
+    """Drop or choose a CPK, see what it holds, then load it.
+
+    Version tabs are deliberately absent: detection reads the release out of the tables,
+    so a manual pick could only disagree with the file.
+    """
+
+    def __init__(self, app):
+        super().__init__(title="Import database", transient_for=app, modal=True)
+        self.app = app
+        self.path = ""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        for edge in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{edge}")(16)
+        box.set_size_request(460, -1)
+        self.set_child(box)
+
+        zone = Gtk.Label(label="Drop a CPK here", justify=Gtk.Justification.CENTER)
+        zone.add_css_class("hint")
+        zone.set_size_request(-1, 84)
+        frame = Gtk.Frame()
+        frame.set_child(zone)
+        frame.add_controller(self._drop_target())
+        box.append(frame)
+
+        choose = Gtk.Button(label="Choose file…")
+        choose.connect("clicked", lambda _b: app.choose_database_file(self.show_path))
+        box.append(choose)
+
+        self.summary = Gtk.Label(label="nothing chosen yet", xalign=0, justify=Gtk.Justification.LEFT)
+        self.summary.set_wrap(True)
+        self.summary.set_max_width_chars(72)   # a wrapping label is still as wide as its text
+        box.append(self.summary)
+        note = Gtk.Label(label=NOT_READ, xalign=0, wrap=True)
+        note.set_max_width_chars(72)
+        note.add_css_class("hint")
+        box.append(note)
+
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda _b: self.close())
+        self.load_btn = Gtk.Button(label="Load")
+        self.load_btn.set_sensitive(False)
+        self.load_btn.connect("clicked", lambda _b: self._load())
+        buttons.append(cancel)
+        buttons.append(self.load_btn)
+        box.append(buttons)
+        if app.source:                  # reopening: show what is loaded now
+            self.show_path(app.source)
+
+    def _drop_target(self):
+        target = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        target.connect("drop", self._on_drop)
+        return target
+
+    def _on_drop(self, _target, value, _x, _y):
+        files = value.get_files()
+        path = files[0].get_path() if files else None
+        if not path:
+            return False
+        self.show_path(path)
+        return True
+
+    def show_path(self, path):
+        """A pick (dropped or chosen) — say what it holds and whether Load will take it."""
+        self.path = path
+        details, can_load = describe_database(path)
+        self.summary.set_text("\n".join(details))
+        self.load_btn.set_sensitive(can_load)
+        self.load_btn.set_tooltip_text("" if can_load else
+                                       "this build edits PES 2019 tables only")
+
+    def _load(self):
+        if self.path:
+            self.app.load_database(self.path)
+        self.close()
+
+
 class PesForgeGtk(Gtk.ApplicationWindow):
     def __init__(self, app, table=None, table_source=None, teams=None, assign=None):
         """Starts with no database: nothing is read until the user imports one."""
@@ -901,7 +1004,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self._update_bulk()
 
     def import_database(self):
-        """Pick the CPK the game reads; what it is decides whether this build can open it."""
+        """The import hub: drop or choose a CPK, see what it holds, then load it."""
+        self.hub = ImportHub(self)
+        self.hub.present()
+
+    def choose_database_file(self, callback):
+        """A CPK chooser that starts where you last picked."""
         chooser = Gtk.FileChooserNative(title="Import a database CPK", transient_for=self,
                                         action=Gtk.FileChooserAction.OPEN)
         filters = Gtk.FileFilter()
@@ -909,14 +1017,15 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         filters.add_pattern("*.cpk")
         chooser.add_filter(filters)
         chooser.set_current_folder(Gio.File.new_for_path(import_start_folder(self.last_folder)))
-        chooser.connect("response", self._on_import_response)
-        chooser.show()
 
-    def _on_import_response(self, chooser, response):
-        path = chooser.get_file().get_path() if response == Gtk.ResponseType.ACCEPT else None
-        chooser.destroy()
-        if path:
-            self.load_database(path)
+        def chosen(c, response):
+            file = c.get_file() if response == Gtk.ResponseType.ACCEPT else None
+            c.destroy()
+            if file is not None and file.get_path():
+                callback(file.get_path())
+
+        chooser.connect("response", chosen)
+        chooser.show()
 
     def load_database(self, path):
         """Probe a CPK and load it, or say precisely why this build will not."""
@@ -1019,6 +1128,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return self._selftest_cycle()
         if mode == "select":
             return self._selftest_select()
+        if mode == "hub":
+            return self._selftest_hub()
         if not self.rows or len(self.store) != len(self.rows):
             return self._selftest_fail(f"list holds {len(self.store)} rows, table has {len(self.rows)}")
         if self.index is None or not self.name_entries["Name"].get_text().strip():
@@ -1074,6 +1185,36 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                     return self._selftest_fail(f"{label}: got {got}, want {want}")
                 print(f"SELECT {label}: {got}", flush=True)
             print("SELFTEST SELECT OK", flush=True)
+        except Exception as exc:
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
+        self.close()
+        return False
+
+    def _selftest_hub(self):
+        """The hub says what a pick holds, and offers Load only when it can open it."""
+        try:
+            checks = []
+            pack = default_database(os.environ.get("PES2019_DIR", ""))
+            if pack:
+                details, can_load = describe_database(pack)
+                checks.append(("a PES 2019 pack is loadable", can_load, True))
+                checks.append(("its players are counted", any("players" in d for d in details), True))
+            spfl = os.path.join(os.environ.get("SPFL_DIR", ""), "download", "data_s2627.cpk")
+            if os.path.isfile(spfl):
+                details, can_load = describe_database(spfl)
+                checks.append(("SP Football Life is refused", can_load, False))
+                checks.append(("and is named", any("PES 2021" in d for d in details), True))
+            if not checks:
+                return self._selftest_fail("no install to describe")
+            self.hub = ImportHub(self)
+            self.hub.show_path(pack or spfl)
+            checks.append(("the hub takes a pick", self.hub.load_btn.get_sensitive(), bool(pack)))
+            self.hub.close()
+            for label, got, want in checks:
+                if got != want:
+                    return self._selftest_fail(f"{label}: got {got}, want {want}")
+                print(f"HUB {label}: {got}", flush=True)
+            print("SELFTEST HUB OK", flush=True)
         except Exception as exc:
             return self._selftest_fail(f"{type(exc).__name__}: {exc}")
         self.close()
