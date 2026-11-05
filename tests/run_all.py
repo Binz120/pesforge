@@ -2094,6 +2094,14 @@ def test_gtk4_starts_empty_and_imports_on_demand():
     found = re.search(r"SELFTEST EMPTY OK rows=(\d+) source=(\S+)", text)
     assert found, text[-300:]
     assert int(found.group(1)) > 10000, found.group(1)
+    # a pick from the game's own Data/ that carries no tables resolves to one that does
+    empty_pick = os.path.join(game, "Data", "dt00_4K_x64.cpk")
+    if os.path.isfile(empty_pick):
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", empty_pick],
+                            capture_output=True, text=True, timeout=600,
+                            env=dict(env, PESFORGE_GTK_SELFTEST="1"))
+        picked = out.stdout + out.stderr
+        assert "source=dt10_x64.cpk" in picked, picked[-400:]
 
 
 def test_gtk4_import_probe_identifies_the_release():

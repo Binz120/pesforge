@@ -294,6 +294,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.source_name = os.path.basename(str(table_source)) if table_source else ""
         self.game = install_of(table_source) if table_source else None
         self.binding = False                    # guards the checkbox <-> selection loop
+        self.provenance = ""                    # the file being edited, for the footer line
         self.rows = []
         self.dirty = set()
         self.loading = True                     # until the first record is loaded
@@ -375,9 +376,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
 
     def _on_tab(self, _button, label, here):
         if here:
-            self.status.set_text(f"Players · PES 2019 · {len(self.rows):,} players")
+            self._status(f"Players · {len(self.rows):,} players")
         else:
-            self.status.set_text(f"{label}: not in the GTK4 build yet, the Tk editor has it")
+            self._status(f"{label}: not in the GTK4 build yet, the Tk editor has it")
 
     # ---- empty state: shown until a database is imported
     def _empty_state(self):
@@ -771,8 +772,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             self._load(self.index)              # the form shows the current player: reload it
         done = f"set {label} to {max(lo, min(hi, amount))}" if op == "set" \
             else f"{op} {amount:+d} {label}"
-        self.status.set_text(f"{done} on {len(indexes)} player(s) · "
-                             f"{len(self.dirty)} pending edit(s) · Save writes it")
+        self._status(f"{done} on {len(indexes)} player(s) · "
+                     f"{len(self.dirty)} pending edit(s) · Save writes it")
         self._update_bulk()
 
     def _refresh_cells(self, indexes):
@@ -824,6 +825,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         bar.append(self.save_btn)
         return bar
 
+    def _status(self, text):
+        """Write the footer line. Everything it reports names the database it is about."""
+        self.status.set_text(f"{self.provenance} · {text}" if self.provenance else text)
+
     # ---- import
     def import_database(self):
         """Pick the CPK the game reads; what it is decides whether this build can open it."""
@@ -859,8 +864,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 name = os.path.basename(path)
                 vintage, note = probe_database(path)
         if vintage != "pes2019":
-            self.status.set_text(f"{name}: {vintage} — {note}. This build edits PES 2019 "
-                                 f"({pes2019.REC}-byte records); the Tk editor has the rest.")
+            self._status(f"{name}: {vintage} — {note}. This build edits PES 2019 "
+                         f"({pes2019.REC}-byte records); the Tk editor has the rest.")
             return False
         db = pes2019.Cpk2019(path)
         self.table = db.read_table("Player")
@@ -885,8 +890,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.save_btn.set_sensitive(True)
         self.revert_btn.set_sensitive(True)
         self.search.set_sensitive(True)
-        self.status.set_text(f"PES 2019 · {len(self.rows):,} players from {name} · {note}"
-                             + (f" · {swapped} has no player table" if swapped else ""))
+        self.provenance = name + (f" ({swapped} had no player table)" if swapped else "")
+        self._status(f"PES 2019 · {len(self.rows):,} players · {note}")
         return True
 
     # ---- data
@@ -964,7 +969,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         if os.environ.get("PESFORGE_GTK_SELFTEST", "").lower() in ("write", "2"):
             return self._selftest_write()
         print(f"SELFTEST OK players={total} selected={self.index} "
-              f"abilities={len(self.abilities)} chips={len(self.chips)}", flush=True)
+              f"abilities={len(self.abilities)} chips={len(self.chips)} "
+              f"source={self.source_name}", flush=True)
         self.close()
         return False
 
@@ -1112,9 +1118,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         for label, chip in self.chips.items():
             chip.set_active(bool(t.get(index, label)))
         self.loading = False
-        self.status.set_text(
-            f"PES 2019 · {len(self.rows):,} players · showing {t.name(index)} (id {pid})"
-            + (f" · {len(self.dirty)} edited" if self.dirty else ""))
+        self._status(f"{len(self.rows):,} players · showing {t.name(index)} (id {pid})"
+                     + (f" · {len(self.dirty)} edited" if self.dirty else ""))
 
     # ---- commit
     def _edited_values(self):
@@ -1143,10 +1148,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _save(self):
         """Write every pending edit into each copy of the table, backing each region up first."""
         if not self.dirty:
-            self.status.set_text("nothing to save · edit a field first")
+            self._status("nothing to save · edit a field first")
             return
         if not GAME:
-            self.status.set_text("no install to write to (set PES2019_DIR)")
+            self._status("no install to write to (set PES2019_DIR)")
             return
         edits = self._edited_values()
         backup = settings.backups_dir()
@@ -1180,16 +1185,16 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         running = subprocess.run(["pgrep", "-f", "PES2019.exe"], capture_output=True).returncode == 0
         head = "game is running, it reloads the table when you restart it · " if running else ""
         if failed:
-            self.status.set_text(f"{head}partial save: " + "; ".join(failed))
+            self._status(f"{head}partial save: " + "; ".join(failed))
             return
         if not written:
-            self.status.set_text("no database copy carries these players — nothing written")
+            self._status("no database copy carries these players — nothing written")
             return
         self.dirty.clear()
         for r in self.rows:
             r.edited = False
-        self.status.set_text(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
-                             + f" · backups in {backup}")
+        self._status(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
+                     + f" · backups in {backup}")
         self._update_bulk()
 
     def _reload(self):
@@ -1197,7 +1202,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         try:
             self.table = pes2019.Cpk2019(self.source).read_table("Player")
         except (KeyError, OSError, ValueError) as exc:
-            self.status.set_text(f"reload failed: {exc}")
+            self._status(f"reload failed: {exc}")
             return
         self.dirty.clear()
         self.index = None
@@ -1205,13 +1210,13 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.store.remove_all()
         self.load_rows()
         self.populate()
-        self.status.set_text(f"reloaded {self.source_name} · pending edits dropped")
+        self._status("pending edits dropped, re-read from disk")
 
     def _mark_dirty(self, index, label):
         self.dirty.add((index, label))
         self.rows[index].edited = True
-        self.status.set_text(f"PES 2019 · {len(self.rows):,} players · "
-                             f"{len(self.dirty)} pending edit(s) · Save writes it")
+        self._status(f"{len(self.rows):,} players · {len(self.dirty)} pending edit(s) "
+                     f"· Save writes it")
         if hasattr(self, "batch"):
             self._update_bulk()
 
