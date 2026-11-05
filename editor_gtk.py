@@ -116,6 +116,18 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
     return ""
 
 
+def import_start_folder(last=""):
+    """Where the file chooser opens: where you last picked, else your games, else home.
+
+    Deliberately not a release's install — that made every import start in PES 2019's
+    folder and forced a walk out of it to reach SP Football Life or PES 2015.
+    """
+    if last and os.path.isdir(last):
+        return last
+    games = os.path.expanduser("~/Games")
+    return games if os.path.isdir(games) else os.path.expanduser("~")
+
+
 def db_arg():
     """`--db <cpk>`: open straight into a database instead of the empty start."""
     args = sys.argv[1:]
@@ -315,6 +327,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.game = install_of(table_source) if table_source else None
         self.binding = False                    # guards the checkbox <-> selection loop
         self.provenance = ""                    # the file being edited, for the footer line
+        self.last_folder = ""                   # where the last pick came from, for the chooser
         self.rows = []
         self.dirty = set()
         self.loading = True                     # until the first record is loaded
@@ -412,8 +425,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         title = Gtk.Label(label="No database loaded")
         title.add_css_class("hero")
         box.append(title)
-        hint = Gtk.Label(label="Import the CPK the game reads:\n"
-                               "Data/dt10_x64.cpk, or a mounted download/dt80_*_x64.cpk",
+        hint = Gtk.Label(label="Import the CPK that carries the player tables — for example\n"
+                               "PES 2019's Data/dt10_x64.cpk or an SP Football Life "
+                               "download/data_s*.cpk",
                          justify=Gtk.Justification.CENTER)
         hint.add_css_class("hint")
         box.append(hint)
@@ -422,7 +436,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         button.set_halign(Gtk.Align.CENTER)
         button.connect("clicked", lambda _b: self.import_database())
         box.append(button)
-        version = Gtk.Label(label=f"PES 2019 map · {len(self.BULK_FIELDS)} batch fields · "
+        version = Gtk.Label(label="reads PES 2019, PES 2015 and SP Football Life CPKs · "
                                   f"record size {pes2019.REC} bytes")
         version.add_css_class("hint")
         box.append(version)
@@ -894,11 +908,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         filters.set_name("CRI CPK database")
         filters.add_pattern("*.cpk")
         chooser.add_filter(filters)
-        start = (self.game and (os.path.join(self.game, "download")
-                                if os.path.isdir(os.path.join(self.game, "download"))
-                                else os.path.join(self.game, "Data"))) or GAME or None
-        if start and os.path.isdir(start):
-            chooser.set_current_folder(Gio.File.new_for_path(start))
+        chooser.set_current_folder(Gio.File.new_for_path(import_start_folder(self.last_folder)))
         chooser.connect("response", self._on_import_response)
         chooser.show()
 
@@ -910,6 +920,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
 
     def load_database(self, path):
         """Probe a CPK and load it, or say precisely why this build will not."""
+        self.last_folder = os.path.dirname(os.path.abspath(path))
         vintage, note = probe_database(path)
         name = os.path.basename(path)
         swapped = ""

@@ -2122,6 +2122,9 @@ def test_gtk4_import_probe_identifies_the_release():
     # SP Football Life's download/ is 20+ 01_smkdb_* entries plus the one real database
     smkdb = os.path.join(settings.game_dir() or "", "download", "01_smkdb_fa2.cpk")
     if os.path.isfile(smkdb):
+        # the chooser opens where you last picked, so a pick is not pushed at you
+        script += ("print('folder', g.import_start_folder(%r))\n"
+                   ) % os.path.join(settings.game_dir(), "download")
         script += ("print('spfl swap', g.sibling_database(%r).split('/')[-1])\n"
                    "print('spfl probe', g.probe_database(%r)[0])\n"
                    ) % (smkdb, os.path.join(settings.game_dir(), "download", "data_s2627.cpk"))
@@ -2133,6 +2136,7 @@ def test_gtk4_import_probe_identifies_the_release():
     assert "'unreadable'" in text, text[-400:]
     assert "nada ''" in text, text[-400:]
     if os.path.isfile(smkdb):
+        assert "SP Football Life 2027/download" in text, text[-400:]
         assert "spfl swap data_s2627.cpk" in text, text[-400:]
         assert "spfl probe pes2021" in text, text[-400:]
     if os.path.isfile(empty):
