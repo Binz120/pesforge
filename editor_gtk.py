@@ -80,6 +80,30 @@ def db_arg():
     return ""
 
 
+def sibling_database(path, prefer=("dt10_x64.cpk",)):
+    """A CPK in the same folder that does hold the Player table, for a pick that does not.
+
+    PES 2019's `Data/` ships 40+ CPKs and only the dt00_x64/dt10_x64 pair carries the
+    tables, so a pick from the right folder is often one entry away from a working
+    database. Ranked: the base table, a mounted dt80 pack, then anything else.
+    """
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        names = [f for f in os.listdir(folder) if f.endswith(".cpk")]
+    except OSError:
+        return ""
+    rank = lambda n: (0, n) if n in prefer else ((1, n) if n.startswith("dt80") else (2, n))
+    for name in sorted(names, key=rank):
+        if name == os.path.basename(path):
+            continue
+        try:
+            if pes2019.Cpk2019(os.path.join(folder, name)).read_raw("Player")[0]:
+                return os.path.join(folder, name)
+        except Exception:
+            continue
+    return ""
+
+
 def default_database(game_dir):
     """The CPK the game itself loads from an install: the mounted pack, else the base table."""
     packs = pes2019.database_cpks(game_dir) if game_dir else []
@@ -827,6 +851,13 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         """Probe a CPK and load it, or say precisely why this build will not."""
         vintage, note = probe_database(path)
         name = os.path.basename(path)
+        swapped = ""
+        if vintage == "no player table":
+            better = sibling_database(path)
+            if better:                       # the folder has the tables, this entry does not
+                swapped, path = name, better
+                name = os.path.basename(path)
+                vintage, note = probe_database(path)
         if vintage != "pes2019":
             self.status.set_text(f"{name}: {vintage} — {note}. This build edits PES 2019 "
                                  f"({pes2019.REC}-byte records); the Tk editor has the rest.")
@@ -854,7 +885,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.save_btn.set_sensitive(True)
         self.revert_btn.set_sensitive(True)
         self.search.set_sensitive(True)
-        self.status.set_text(f"PES 2019 · {len(self.rows):,} players from {name} · {note}")
+        self.status.set_text(f"PES 2019 · {len(self.rows):,} players from {name} · {note}"
+                             + (f" · {swapped} has no player table" if swapped else ""))
         return True
 
     # ---- data

@@ -2107,12 +2107,19 @@ def test_gtk4_import_probe_identifies_the_release():
         "open(%r, 'w').write('not a cpk')\n"
         "print('junk', g.probe_database(%r))\n"
     ) % (ROOT, os.path.join(game, "Data", "dt10_x64.cpk"), junk, junk)
-    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300,
+    # a pick that lands on a CPK without the tables must find the one that has them
+    empty = os.path.join(game, "Data", "dt00_4K_x64.cpk")
+    script += ("print('swap', g.sibling_database(%r).split('/')[-1])\n"
+               "print('nada', repr(g.sibling_database(%r)))\n") % (empty, junk)
+    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=600,
                          env=dict(os.environ, GDK_BACKEND="x11"))
     text = out.stdout + out.stderr
     assert "('pes2019'" in text, text[-400:]
     assert "13,805" in text, text[-400:]
     assert "'unreadable'" in text, text[-400:]
+    assert "nada ''" in text, text[-400:]
+    if os.path.isfile(empty):
+        assert "swap dt10_x64.cpk" in text, text[-400:]
     try:
         os.unlink(junk)
     except OSError:
