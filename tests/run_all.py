@@ -2119,6 +2119,12 @@ def test_gtk4_import_probe_identifies_the_release():
     empty = os.path.join(game, "Data", "dt00_4K_x64.cpk")
     script += ("print('swap', g.sibling_database(%r).split('/')[-1])\n"
                "print('nada', repr(g.sibling_database(%r)))\n") % (empty, junk)
+    # SP Football Life's download/ is 20+ 01_smkdb_* entries plus the one real database
+    smkdb = os.path.join(settings.game_dir() or "", "download", "01_smkdb_fa2.cpk")
+    if os.path.isfile(smkdb):
+        script += ("print('spfl swap', g.sibling_database(%r).split('/')[-1])\n"
+                   "print('spfl probe', g.probe_database(%r)[0])\n"
+                   ) % (smkdb, os.path.join(settings.game_dir(), "download", "data_s2627.cpk"))
     out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=600,
                          env=dict(os.environ, GDK_BACKEND="x11"))
     text = out.stdout + out.stderr
@@ -2126,6 +2132,9 @@ def test_gtk4_import_probe_identifies_the_release():
     assert "13,805" in text, text[-400:]
     assert "'unreadable'" in text, text[-400:]
     assert "nada ''" in text, text[-400:]
+    if os.path.isfile(smkdb):
+        assert "spfl swap data_s2627.cpk" in text, text[-400:]
+        assert "spfl probe pes2021" in text, text[-400:]
     if os.path.isfile(empty):
         assert "swap dt10_x64.cpk" in text, text[-400:]
     # a pick inside download/ must resolve to the pack that overrides the others

@@ -84,7 +84,8 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
 
     PES 2019's `Data/` ships 40+ CPKs and only the dt00_x64/dt10_x64 pair carries the
     tables, so a pick from the right folder is often one entry away from a working
-    database. Ranked: the base table, a mounted dt80 pack, then anything else.
+    database. Ranked: the base table (`dt10_x64`, an SP Football Life `data_s*`), a
+    mounted dt80 pack, then anything else.
     """
     folder = os.path.dirname(os.path.abspath(path))
     try:
@@ -96,7 +97,7 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
     order = {name: i for i, name in enumerate(packs)}      # the last mounted pack wins
 
     def rank(name):
-        if name in prefer:
+        if name in prefer or name.startswith("data_s"):
             return (0, 0)                  # the base table the game reads first
         if name in order:
             return (1, len(order) - order[name])   # later in DpFileList overrides earlier
@@ -104,12 +105,14 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
 
     for name in sorted(names, key=lambda n: (rank(n), n)):
         if name == os.path.basename(path):
-            continue
-        try:
-            if pes2019.Cpk2019(os.path.join(folder, name)).read_raw("Player")[0]:
-                return os.path.join(folder, name)
-        except Exception:
-            continue
+            continue                       # never re-offer the pick itself
+        if rank(name)[0] > 1:
+            # Only base tables and mounted packs are worth opening: SP Football Life's
+            # download/ holds 20+ 01_smkdb_* entries next to the one that has the tables.
+            break
+        vintage, _note = probe_database(os.path.join(folder, name))
+        if vintage not in ("no player table", "unreadable"):
+            return os.path.join(folder, name)
     return ""
 
 
@@ -917,7 +920,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 name = os.path.basename(path)
                 vintage, note = probe_database(path)
         if vintage != "pes2019":
-            self._status(f"{name}: {vintage} — {note}. This build edits PES 2019 "
+            where = f"{name} ({swapped} had no player table)" if swapped else name
+            self._status(f"{where}: {vintage} — {note}. This build edits PES 2019 "
                          f"({pes2019.REC}-byte records); the Tk editor has the rest.")
             return False
         db = pes2019.Cpk2019(path)
