@@ -492,6 +492,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _cell_setup(self, _f, item):
         label = Gtk.Label(xalign=0)
         label.add_css_class("cell")
+        click = Gtk.GestureClick()
+        click.connect("released", self._row_clicked, item)
+        label.add_controller(click)
         item.set_child(label)
 
     def _cell_bind(self, _f, item, attr):
@@ -505,6 +508,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _check_setup(self, _f, item):
         check = Gtk.CheckButton()
         check.set_halign(Gtk.Align.CENTER)
+        click = Gtk.GestureClick()
+        click.connect("released", self._row_clicked, item)
+        check.add_controller(click)
         item.set_child(check)
 
     def _check_bind(self, _f, item):
@@ -996,6 +1002,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return self._selftest_empty()
         if mode == "cycle":
             return self._selftest_cycle()
+        if mode == "select":
+            return self._selftest_select()
         if not self.rows or len(self.store) != len(self.rows):
             return self._selftest_fail(f"list holds {len(self.store)} rows, table has {len(self.rows)}")
         if self.index is None or not self.name_entries["Name"].get_text().strip():
@@ -1021,6 +1029,38 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         print(f"SELFTEST OK players={total} selected={self.index} "
               f"abilities={len(self.abilities)} chips={len(self.chips)} "
               f"source={self.source_name}", flush=True)
+        self.close()
+        return False
+
+    def _selftest_select(self):
+        """Clicking a player shows that player: GTK's selection-changed reports the *previous*
+        position, which used to leave the form one click behind."""
+        try:
+            if self.table is None:
+                self.load_database(default_database(os.environ.get("PES2019_DIR", "")))
+            if self.table is None:
+                return self._selftest_fail(f"no database: {self.status.get_text()}")
+
+            def shown():
+                return self.index          # the table row the form is holding
+
+            checks = []
+            self.show_row(7)
+            checks.append(("a click shows the row it hit", shown(), 7))
+            self.selection.select_item(3, False)      # GTK reports this one as pos=0
+            checks.append(("a selection change shows that row", shown(), 3))
+            self.selection.select_item(1, False)      # False = add, leaving the rest ticked
+            self.selection.select_item(2, False)
+            self.show_row(4)                          # a click among ticked rows
+            checks.append(("a click among ticked rows still shows it", shown(), 4))
+            checks.append(("the ticks are still counted", len(self.selected_indexes()), 3))
+            for label, got, want in checks:
+                if got != want:
+                    return self._selftest_fail(f"{label}: got {got}, want {want}")
+                print(f"SELECT {label}: {got}", flush=True)
+            print("SELFTEST SELECT OK", flush=True)
+        except Exception as exc:
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
         self.close()
         return False
 
@@ -1167,12 +1207,26 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         return False
 
     def _on_select(self, _sel, _pos, _n):
-        """The clicked row drives the form; the tick column drives the batch ops."""
-        if _pos != Gtk.INVALID_LIST_POSITION:
-            row = self.sorted.get_item(_pos)
-            if row is not None:
-                self._load(row.index)
+        """A single-row selection (arrows, a plain click, a tick) drives the form.
+
+        `_pos` is *not* the row that was clicked — GTK reports the previous position — which
+        is why the form used to lag a click behind. With several rows ticked the form stays on
+        the current player; a click inside any row is handled by that row's own gesture.
+        """
+        indexes = self.selected_indexes()
+        if len(indexes) == 1 and indexes[0] != self.index:
+            self._load(indexes[0])
         self._update_bulk()
+
+    def _row_clicked(self, _gesture, _n_press, _x, _y, item):
+        """Show the row that was clicked, whatever the selection was doing."""
+        self.show_row(item.get_position())
+
+    def show_row(self, pos):
+        """Show the player at view position `pos` (a click, or a check being ticked)."""
+        row = self.sorted.get_item(pos) if pos != Gtk.INVALID_LIST_POSITION else None
+        if row is not None and row.index != self.index:
+            self._load(row.index)
 
     # ---- form <-> record
     def _load(self, index):

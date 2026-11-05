@@ -2172,6 +2172,25 @@ def test_gtk4_import_cycle_across_installs():
         assert "pes2015 —" in text or "pes2015 -" in text, text[-700:]
 
 
+def test_gtk4_clicking_a_player_shows_that_player():
+    """The form follows the row that was clicked, not the previous selection.
+
+    GtkSelectionModel::selection-changed hands over the position that was current *before*
+    the change, so reading it left the form one click behind — reported as "not loading some
+    players when selected". The click itself now drives the form.
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="select", PES2019_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST SELECT OK" in text, text[-600:]
+    assert "a click shows the row it hit: 7" in text, text[-600:]
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
