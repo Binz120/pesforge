@@ -2080,6 +2080,22 @@ def test_gtk4_bulk_matrix_stages_and_commits():
     shutil.rmtree(box, ignore_errors=True)
 
 
+def test_gtk4_starts_empty_and_imports_on_demand():
+    """The GTK4 window reads nothing until a database is imported, then fills itself."""
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="empty")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST EMPTY OK" in text, text[-600:]
+    found = re.search(r"SELFTEST EMPTY OK rows=(\d+) source=(\S+)", text)
+    assert found, text[-300:]
+    assert int(found.group(1)) > 10000, found.group(1)
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

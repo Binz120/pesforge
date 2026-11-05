@@ -24,6 +24,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pes2015  # noqa: E402
 import pes2019  # noqa: E402
 import settings  # noqa: E402
 import theme  # noqa: E402
@@ -31,6 +32,48 @@ import theme  # noqa: E402
 SELFTEST_FAILURES = []            # filled by --selftest runs, turned into an exit code by main()
 GAME = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
 TOK = theme.tokens("amber")
+
+
+def install_of(path):
+    """The install a database CPK lives in, for finding the other copies a save must write."""
+    folder = os.path.dirname(os.path.abspath(path))              # .../download or .../Data
+    return os.path.dirname(folder) if os.path.basename(folder) in ("download", "Data") else folder
+
+
+def probe_database(path):
+    """(vintage, note) for a database CPK, judged by the shape of its Player table.
+
+    The record size is the release's signature: 180 bytes PES 2015, 188 PES 2019,
+    312 PES 2020/2021. Detection has to read the table: filenames moved between
+    releases and a PES 2015 pack also ships a Player.bin.
+    """
+    try:
+        payload = pes2019.Cpk2019(path).read_raw("Player")[0]
+    except Exception as exc:                                     # not a CPK we understand
+        return "unreadable", str(exc)
+    size = len(payload)
+    if size % pes2019.REC == 0 and size % pes2015.REC != 0:
+        return "pes2019", f"{size:,} bytes of player data, {size // pes2019.REC:,} players"
+    if size % pes2015.REC == 0 and size % pes2019.REC != 0:
+        return "pes2015", f"{size:,} bytes of player data, {size // pes2015.REC:,} players"
+    if size % 312 == 0:
+        return "pes2021", f"{size:,} bytes of player data, {size // 312:,} players"
+    return "unknown", f"{size:,} bytes of player data, no vintage matches"
+
+
+def db_arg():
+    """`--db <cpk>`: open straight into a database instead of the empty start."""
+    args = sys.argv[1:]
+    if "--db" in args and args.index("--db") + 1 < len(args):
+        return args[args.index("--db") + 1]
+    return ""
+
+
+def default_database(game_dir):
+    """The CPK the game itself loads from an install: the mounted pack, else the base table."""
+    packs = pes2019.database_cpks(game_dir) if game_dir else []
+    return next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")),
+                packs[0] if packs else "")
 
 
 def field_range(label):
@@ -203,7 +246,8 @@ class AbilityBar(Gtk.DrawingArea):
 
 # ---------------------------------------------------------------- the window
 class PesForgeGtk(Gtk.ApplicationWindow):
-    def __init__(self, app, table, table_source, teams, assign):
+    def __init__(self, app, table=None, table_source=None, teams=None, assign=None):
+        """Starts with no database: nothing is read until the user imports one."""
         super().__init__(application=app, title="PESForge GTK4")
         self.set_default_size(1504, 946)
         self.table = table
@@ -212,21 +256,26 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.clubs = {}
         self.index = None
         self.source = table_source                       # full path: this is what Save writes
-        self.source_name = os.path.basename(str(table_source))
+        self.source_name = os.path.basename(str(table_source)) if table_source else ""
+        self.game = install_of(table_source) if table_source else None
         self.binding = False                    # guards the checkbox <-> selection loop
         self.rows = []
         self.dirty = set()
         self.loading = True                     # until the first record is loaded
-        self.packs = pes2019.database_cpks(GAME) if GAME else []
+        self.packs = pes2019.database_cpks(self.game) if self.game else []
         self.assign_by_pid = {}
-        for i in range(len(assign)):
-            self.assign_by_pid.setdefault(assign.player(i), []).append(i)
+        if assign is not None:
+            for i in range(len(assign)):
+                self.assign_by_pid.setdefault(assign.player(i), []).append(i)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root)
         root.append(self._header())
         root.append(self._tabs())
-        root.append(self._body())
+        self.stack = Gtk.Stack()
+        self.stack.set_vexpand(True)
+        self.stack.add_named(self._empty_state(), "empty")
+        root.append(self.stack)
         root.append(self._batch_bar())
         root.append(self._footer(table_source))
 
@@ -236,7 +285,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.sorted = Gtk.SortListModel(model=self.filtered)
         self.selection = Gtk.MultiSelection(model=self.sorted)
         self.selection.connect("selection-changed", self._on_select)
-        self.column_view.set_model(self.selection)
+        if self.table is not None:               # a caller handed us a database (tests)
+            self._build_panes()
+            self.column_view.set_model(self.selection)
+            self.load_rows()
+            self.populate()
 
     # ---- header
     def _header(self):
@@ -248,10 +301,15 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         brand = Gtk.Label(label="PESForge")
         brand.add_css_class("brand")
         bar.append(brand)
+        self.import_btn = Gtk.Button(label="Import database…")
+        self.import_btn.set_tooltip_text("open a database CPK (nothing is loaded until you do)")
+        self.import_btn.connect("clicked", lambda _b: self.import_database())
+        bar.append(self.import_btn)
         self.search = Gtk.SearchEntry()
         self.search.set_hexpand(True)
         self.search.set_placeholder_text("Search players, clubs, IDs…")
         self.search.connect("search-changed", lambda _e: self._refilter())
+        self.search.set_sensitive(False)                         # nothing loaded to search yet
         bar.append(self.search)
         for label, cls in (("Undo", None), ("Redo", None), ("Discard", None), ("Save to game", "accent")):
             b = Gtk.Button(label=label)
@@ -286,17 +344,45 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         else:
             self.status.set_text(f"{label}: not in the GTK4 build yet, the Tk editor has it")
 
-    # ---- list | form | bio
-    def _body(self):
-        body = Gtk.Box(spacing=12)
-        body.set_margin_start(12)
-        body.set_margin_end(12)
-        body.set_margin_bottom(8)
-        body.set_vexpand(True)
-        body.append(self._list())
-        body.append(self._form())
-        body.append(self._bio())
-        return body
+    # ---- empty state: shown until a database is imported
+    def _empty_state(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        title = Gtk.Label(label="No database loaded")
+        title.add_css_class("hero")
+        box.append(title)
+        hint = Gtk.Label(label="Import the CPK the game reads:\n"
+                               "Data/dt10_x64.cpk, or a mounted download/dt80_*_x64.cpk",
+                         justify=Gtk.Justification.CENTER)
+        hint.add_css_class("hint")
+        box.append(hint)
+        button = Gtk.Button(label="Import database…")
+        button.add_css_class("accent")
+        button.set_halign(Gtk.Align.CENTER)
+        button.connect("clicked", lambda _b: self.import_database())
+        box.append(button)
+        version = Gtk.Label(label=f"PES 2019 map · {len(self.BULK_FIELDS)} batch fields · "
+                                  f"record size {pes2019.REC} bytes")
+        version.add_css_class("hint")
+        box.append(version)
+        return box
+
+    def _build_panes(self):
+        """Build the list / form / bio panes and make them the visible page."""
+        panes = Gtk.Box(spacing=12)
+        panes.set_margin_start(12)
+        panes.set_margin_end(12)
+        panes.set_margin_bottom(8)
+        panes.set_vexpand(True)
+        panes.append(self._list())
+        panes.append(self._form())
+        panes.append(self._bio())
+        old = self.stack.get_child_by_name("data")
+        if old is not None:
+            self.stack.remove(old)
+        self.stack.add_named(panes, "data")
+        self.stack.set_visible_child_name("data")
 
     def _list(self):
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -684,9 +770,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         revert = Gtk.Button(label="Revert")
         revert.set_tooltip_text("drop the pending edits and re-read the database")
         revert.connect("clicked", lambda _b: self._reload())
+        revert.set_sensitive(False)
+        self.revert_btn = revert
         bar.append(revert)
-        self.status = Gtk.Label(label=f"PES 2019 · loading {os.path.basename(str(source))} …",
-                                xalign=0)
+        self.status = Gtk.Label(label=("PES 2019 · " + os.path.basename(str(source))) if source
+                                else "no database loaded · Import database… to pick one", xalign=0)
         self.status.add_css_class("hint")
         self.status.set_hexpand(True)
         bar.append(self.status)
@@ -697,8 +785,66 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.save_btn = Gtk.Button(label="Save to game")
         self.save_btn.add_css_class("accent")
         self.save_btn.connect("clicked", lambda _b: self._save())
+        self.save_btn.set_sensitive(False)
         bar.append(self.save_btn)
         return bar
+
+    # ---- import
+    def import_database(self):
+        """Pick the CPK the game reads; what it is decides whether this build can open it."""
+        chooser = Gtk.FileChooserNative(title="Import a database CPK", transient_for=self,
+                                        action=Gtk.FileChooserAction.OPEN)
+        filters = Gtk.FileFilter()
+        filters.set_name("CRI CPK database")
+        filters.add_pattern("*.cpk")
+        chooser.add_filter(filters)
+        start = (self.game and (os.path.join(self.game, "download")
+                                if os.path.isdir(os.path.join(self.game, "download"))
+                                else os.path.join(self.game, "Data"))) or GAME or None
+        if start and os.path.isdir(start):
+            chooser.set_current_folder(Gio.File.new_for_path(start))
+        chooser.connect("response", self._on_import_response)
+        chooser.show()
+
+    def _on_import_response(self, chooser, response):
+        path = chooser.get_file().get_path() if response == Gtk.ResponseType.ACCEPT else None
+        chooser.destroy()
+        if path:
+            self.load_database(path)
+
+    def load_database(self, path):
+        """Probe a CPK and load it, or say precisely why this build will not."""
+        vintage, note = probe_database(path)
+        name = os.path.basename(path)
+        if vintage != "pes2019":
+            self.status.set_text(f"{name}: {vintage} — {note}. This build edits PES 2019 "
+                                 f"({pes2019.REC}-byte records); the Tk editor has the rest.")
+            return False
+        db = pes2019.Cpk2019(path)
+        self.table = db.read_table("Player")
+        self.teams = pes2019.TeamTable(*db.read_raw("Team"))
+        self.assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+        self.source = path
+        self.source_name = name
+        self.game = install_of(path)
+        self.packs = pes2019.database_cpks(self.game)
+        self.clubs = {self.teams.id(i): self.teams.name(i) for i in range(len(self.teams))}
+        self.assign_by_pid = {}
+        for i in range(len(self.assign)):
+            self.assign_by_pid.setdefault(self.assign.player(i), []).append(i)
+        self.dirty.clear()
+        self.index = None
+        self.rows = []
+        self.store.remove_all()
+        self._build_panes()
+        self.column_view.set_model(self.selection)
+        self.load_rows()
+        self.populate()
+        self.save_btn.set_sensitive(True)
+        self.revert_btn.set_sensitive(True)
+        self.search.set_sensitive(True)
+        self.status.set_text(f"PES 2019 · {len(self.rows):,} players from {name} · {note}")
+        return True
 
     # ---- data
     def load_rows(self):
@@ -747,8 +893,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         """`PESFORGE_GTK_SELFTEST=1`: prove the screen built against real data, then quit.
 
         Guards the two failures a traceback never shows: an empty detail pane beside a selected
-        row, and a list model that does not match the table behind it.
+        row, and a list model that does not match the table behind it. `=empty` checks the other
+        half instead: nothing is read until it is asked for.
         """
+        if os.environ.get("PESFORGE_GTK_SELFTEST", "").lower() == "empty":
+            return self._selftest_empty()
         if not self.rows or len(self.store) != len(self.rows):
             return self._selftest_fail(f"list holds {len(self.store)} rows, table has {len(self.rows)}")
         if self.index is None or not self.name_entries["Name"].get_text().strip():
@@ -773,6 +922,35 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return self._selftest_write()
         print(f"SELFTEST OK players={total} selected={self.index} "
               f"abilities={len(self.abilities)} chips={len(self.chips)}", flush=True)
+        self.close()
+        return False
+
+    def _selftest_empty(self):
+        """The window must start with nothing loaded, and import a database on demand."""
+        try:
+            if self.table is not None or self.rows or self.store.get_n_items():
+                return self._selftest_fail("a database was loaded without being asked")
+            if self.stack.get_visible_child_name() != "empty":
+                return self._selftest_fail(f"visible page is "
+                                           f"{self.stack.get_visible_child_name()!r}, want 'empty'")
+            if self.save_btn.get_sensitive() or self.revert_btn.get_sensitive():
+                return self._selftest_fail("Save/Revert are live with no database")
+            if self.search.get_sensitive():
+                return self._selftest_fail("the search box is live with no database")
+            want = default_database(GAME)
+            if not want or not self.load_database(want):
+                return self._selftest_fail(f"importing {want or 'nothing'} failed: "
+                                           f"{self.status.get_text()!r}")
+            if self.stack.get_visible_child_name() != "data":
+                return self._selftest_fail("the panes did not come up after the import")
+            if len(self.rows) < 10000 or self.store.get_n_items() != len(self.rows):
+                return self._selftest_fail(f"{len(self.rows)} rows, "
+                                           f"{self.store.get_n_items()} in the model")
+            if not (self.save_btn.get_sensitive() and self.revert_btn.get_sensitive()):
+                return self._selftest_fail("Save/Revert stayed disabled after the import")
+            print(f"SELFTEST EMPTY OK rows={len(self.rows)} source={self.source_name}", flush=True)
+        except Exception as exc:
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
         self.close()
         return False
 
@@ -930,7 +1108,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         edits = self._edited_values()
         backup = settings.backups_dir()
         written, failed = [], []
-        for path in pes2019.database_cpks(GAME):
+        others = pes2019.database_cpks(self.game) if self.game else []
+        for path in [self.source] + [p for p in others if p != self.source]:
             try:
                 db = pes2019.Cpk2019(path)
                 table = db.read_table("Player")
@@ -1073,28 +1252,19 @@ def main():
     app = Gtk.Application(application_id=app_id)
 
     def on_activate(_app):
-        if not GAME:
-            win = Gtk.ApplicationWindow(application=_app, title="PESForge — no install found")
-            win.set_child(Gtk.Label(label="No PES 2019 install found (set PES2019_DIR)."))
-            win.present()
-            return
-        packs = pes2019.database_cpks(GAME)
-        source = next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")), packs[0])
-        db = pes2019.Cpk2019(source)
-        table = db.read_table("Player")
-        teams = pes2019.TeamTable(*db.read_raw("Team"))
-        assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
         display = Gdk.Display.get_default()
         if display is None:
             print("editor_gtk: no display to draw on (is DISPLAY/WAYLAND_DISPLAY set?)", flush=True)
             return
         install_css(display)
-        win = PesForgeGtk(_app, table, source, teams, assign)
-        win.clubs = {teams.id(i): teams.name(i) for i in range(len(teams))}
-        win.load_rows()
-        win.populate()
+        win = PesForgeGtk(_app)                      # empty: nothing is read until it is asked
         win.present()
-        if os.environ.get("PESFORGE_GTK_SELFTEST"):
+        mode = os.environ.get("PESFORGE_GTK_SELFTEST", "").lower()
+        # --db, and the checks that need data, open one; a normal start waits for the user
+        want = db_arg() or (default_database(GAME) if mode in ("1", "2", "write") else "")
+        if want:
+            win.load_database(want)
+        if mode:
             GLib.timeout_add(700, win.selftest)      # after the first frame
 
     app.connect("activate", on_activate)      # without this the app shows nothing and exits
