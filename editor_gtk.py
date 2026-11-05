@@ -26,6 +26,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pes2015  # noqa: E402
 import pes2019  # noqa: E402
+import pesdb  # noqa: E402
 import settings  # noqa: E402
 import theme  # noqa: E402
 
@@ -43,13 +44,28 @@ def install_of(path):
 def probe_database(path):
     """(vintage, note) for a database CPK, judged by the shape of its Player table.
 
-    The record size is the release's signature: 180 bytes PES 2015, 188 PES 2019,
-    312 PES 2020/2021. Detection has to read the table: filenames moved between
-    releases and a PES 2015 pack also ships a Player.bin.
+    Each vintage has its own container quirks, so the readers are tried in turn and the
+    first that yields a whole table wins. The record size is the release's signature:
+    180 bytes PES 2015, 188 PES 2019, 312 PES 2020/2021. Detection has to read the
+    table: filenames moved between releases and a PES 2015 pack also ships a Player.bin.
     """
-    try:
-        payload = pes2019.Cpk2019(path).read_raw("Player")[0]
-    except KeyError:
+    attempts = (("pes2019", pes2019.REC, lambda q: pes2019.Cpk2019(q).read_raw("Player")[0]),
+                ("pes2015", pes2015.REC, lambda q: pes2015.Cpk2015(q).read_raw("Player")[0]),
+                ("pes2021", pesdb.REC, lambda q: pesdb.table_rows(pesdb.table_blob(q, "Player"))))
+    missing, reasons = 0, []
+    for vintage, rec, read in attempts:
+        try:
+            payload = read(path)
+        except KeyError:                     # the container opened, it has no Player entry
+            missing += 1
+            continue
+        except Exception as exc:
+            reasons.append(f"{vintage} reader: {str(exc).splitlines()[0][:70]}")
+            continue
+        if payload and len(payload) % rec == 0:
+            return vintage, f"{len(payload):,} bytes of player data, {len(payload) // rec:,} players"
+        reasons.append(f"{vintage} reader returned {len(payload):,} bytes, not whole records")
+    if missing == len(attempts):
         folder = os.path.dirname(os.path.abspath(path))
         try:
             others = [f for f in sorted(os.listdir(folder))
@@ -60,24 +76,7 @@ def probe_database(path):
         if others:
             note += f"; in that folder try {', '.join(others[:3])}"
         return "no player table", note
-    except Exception as exc:                                     # not a CPK we understand
-        return "unreadable", str(exc)
-    size = len(payload)
-    if size % pes2019.REC == 0 and size % pes2015.REC != 0:
-        return "pes2019", f"{size:,} bytes of player data, {size // pes2019.REC:,} players"
-    if size % pes2015.REC == 0 and size % pes2019.REC != 0:
-        return "pes2015", f"{size:,} bytes of player data, {size // pes2015.REC:,} players"
-    if size % 312 == 0:
-        return "pes2021", f"{size:,} bytes of player data, {size // 312:,} players"
-    return "unknown", f"{size:,} bytes of player data, no vintage matches"
-
-
-def db_arg():
-    """`--db <cpk>`: open straight into a database instead of the empty start."""
-    args = sys.argv[1:]
-    if "--db" in args and args.index("--db") + 1 < len(args):
-        return args[args.index("--db") + 1]
-    return ""
+    return "unreadable", reasons[0] if reasons else "no reader could open it"
 
 
 def sibling_database(path, prefer=("dt10_x64.cpk",)):
@@ -111,6 +110,14 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
                 return os.path.join(folder, name)
         except Exception:
             continue
+    return ""
+
+
+def db_arg():
+    """`--db <cpk>`: open straight into a database instead of the empty start."""
+    args = sys.argv[1:]
+    if "--db" in args and args.index("--db") + 1 < len(args):
+        return args[args.index("--db") + 1]
     return ""
 
 
@@ -351,6 +358,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.import_btn.set_tooltip_text("open a database CPK (nothing is loaded until you do)")
         self.import_btn.connect("clicked", lambda _b: self.import_database())
         bar.append(self.import_btn)
+        self.unload_btn = Gtk.Button(label="Unload")
+        self.unload_btn.set_tooltip_text("drop the loaded database and go back to the start")
+        self.unload_btn.connect("clicked", lambda _b: self.unload_database())
+        bar.append(self.unload_btn)
         self.search = Gtk.SearchEntry()
         self.search.set_hexpand(True)
         self.search.set_placeholder_text("Search players, clubs, IDs…")
@@ -839,7 +850,33 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         """Write the footer line. Everything it reports names the database it is about."""
         self.status.set_text(f"{self.provenance} · {text}" if self.provenance else text)
 
-    # ---- import
+    # ---- import / unload
+    def unload_database(self):
+        """Drop the loaded database and go back to the empty window (the Tk build's Unmount)."""
+        if self.table is None:
+            self._status("nothing loaded")
+            return
+        if self.dirty:
+            self._status(f"{len(self.dirty)} unsaved edit(s) — save or Revert before unloading")
+            return
+        self.table = self.teams = self.assign = None
+        self.source = self.source_name = ""
+        self.game = None
+        self.packs = []
+        self.clubs, self.assign_by_pid = {}, {}
+        self.rows, self.dirty = [], set()
+        self.index = None
+        self.provenance = ""
+        self.loading = True
+        self.store.remove_all()
+        self.stack.set_visible_child_name("empty")
+        self.save_btn.set_sensitive(False)
+        self.revert_btn.set_sensitive(False)
+        self.search.set_sensitive(False)
+        self.search.set_text("")
+        self.status.set_text("no database loaded · Import database… to pick one")
+        self._update_bulk()
+
     def import_database(self):
         """Pick the CPK the game reads; what it is decides whether this build can open it."""
         chooser = Gtk.FileChooserNative(title="Import a database CPK", transient_for=self,
@@ -954,8 +991,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         row, and a list model that does not match the table behind it. `=empty` checks the other
         half instead: nothing is read until it is asked for.
         """
-        if os.environ.get("PESFORGE_GTK_SELFTEST", "").lower() == "empty":
+        mode = os.environ.get("PESFORGE_GTK_SELFTEST", "").lower()
+        if mode == "empty":
             return self._selftest_empty()
+        if mode == "cycle":
+            return self._selftest_cycle()
         if not self.rows or len(self.store) != len(self.rows):
             return self._selftest_fail(f"list holds {len(self.store)} rows, table has {len(self.rows)}")
         if self.index is None or not self.name_entries["Name"].get_text().strip():
@@ -981,6 +1021,44 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         print(f"SELFTEST OK players={total} selected={self.index} "
               f"abilities={len(self.abilities)} chips={len(self.chips)} "
               f"source={self.source_name}", flush=True)
+        self.close()
+        return False
+
+    def _selftest_cycle(self):
+        """Import PES 2019, unload, import SP Football Life, unload, import PES 2015."""
+        try:
+            spfl = settings.database_path(os.environ.get("SPFL_DIR", "")) \
+                if os.environ.get("SPFL_DIR") else ""
+            legs = (("pes2019", default_database(os.environ.get("PES2019_DIR", "")), "loaded"),
+                    ("spfl", spfl, "refused"),
+                    ("pes2015", os.path.join(os.environ.get("PES2015_DIR", ""), "Data", "dt10.cpk"),
+                     "refused"))
+            for n, (name, path, expect) in enumerate(legs, 1):
+                if not path or not os.path.isfile(path):
+                    print(f"CYCLE step={n} name={name} result=skipped (no install)", flush=True)
+                    continue
+                self.load_database(path)
+                loaded = self.table is not None
+                if loaded and len(self.rows) < 1000:
+                    return self._selftest_fail(f"{name}: loaded {len(self.rows)} rows")
+                result = "loaded" if loaded else "refused"
+                print(f"CYCLE step={n} name={name} result={result} file={os.path.basename(path)} "
+                      f"status={self.status.get_text()[:90]!r}", flush=True)
+                if result != expect:
+                    return self._selftest_fail(f"{name}: {result}, expected {expect}")
+                if not loaded and name in ("spfl", "pes2015") and name.replace("spfl", "pes2021") not in self.status.get_text():
+                    return self._selftest_fail(f"{name}: refused without naming the vintage: "
+                                               f"{self.status.get_text()!r}")
+                self.unload_database()
+                if self.table is not None or self.rows or self.store.get_n_items():
+                    return self._selftest_fail(f"{name}: unload left the database loaded")
+                if self.stack.get_visible_child_name() != "empty":
+                    return self._selftest_fail(f"{name}: unload did not return to the empty page")
+                if self.save_btn.get_sensitive() or self.revert_btn.get_sensitive():
+                    return self._selftest_fail(f"{name}: controls stayed live after unload")
+            print("SELFTEST CYCLE OK", flush=True)
+        except Exception as exc:
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
         self.close()
         return False
 

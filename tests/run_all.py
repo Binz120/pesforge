@@ -2142,6 +2142,36 @@ def test_gtk4_import_probe_identifies_the_release():
         pass
 
 
+def test_gtk4_import_cycle_across_installs():
+    """Import PES 2019, unload, import SP Football Life, unload, import PES 2015.
+
+    The sequence as driven by hand, asserted: this build loads its own vintage, identifies
+    the others by record size instead of mis-reading them, and unloads cleanly each time.
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="cycle", PES2019_DIR=game,
+               SPFL_DIR=settings.game_dir() or "")
+    try:
+        env["PES2015_DIR"] = pes2015_install()
+    except FileNotFoundError:
+        env["PES2015_DIR"] = ""
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST CYCLE OK" in text, text[-700:]
+    assert "step=1 name=pes2019 result=loaded" in text, text[-700:]
+    assert "step=1 name=pes2019 result=skipped" not in text, text[-700:]
+    if env["SPFL_DIR"]:
+        assert "step=2 name=spfl result=refused" in text, text[-700:]
+        assert "pes2021" in text, text[-700:]
+    if env["PES2015_DIR"]:
+        assert "step=3 name=pes2015 result=refused" in text, text[-700:]
+        assert "pes2015 —" in text or "pes2015 -" in text, text[-700:]
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
