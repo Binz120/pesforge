@@ -34,6 +34,52 @@ SELFTEST_FAILURES = []            # filled by --selftest runs, turned into an ex
 GAME = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
 TOK = theme.tokens("amber")
 
+# One entry per release this build can edit. Everything the panel shows derives from the
+# vintage's map module — the widgets are the same, only the field lists and offsets differ.
+VINTAGES = {
+    "pes2019": {"label": "PES 2019", "module": pes2019, "env": "PES2019_DIR",
+                "cfg_key": "pes2019_dir", "exe": "PES2019.exe",
+                "game_file": os.path.join("Data", "dt10_x64.cpk")},
+    "pes2015": {"label": "PES 2015", "module": pes2015, "env": "PES2015_DIR",
+                "cfg_key": "pes2015_dir", "exe": "PES2015.exe",
+                "game_file": os.path.join("Data", "dt10.cpk")},
+}
+EDITABLE = tuple(VINTAGES)
+
+
+def game_dir(vintage):
+    """One release's install: its environment variable, the remembered folder, then a search."""
+    spec = VINTAGES[vintage]
+    found = os.environ.get(spec["env"]) or settings.load().get(spec["cfg_key"], "")
+    return found if found and os.path.isdir(found) else (spec["module"].find_game_dir() or "")
+
+
+def vintage_database(vintage):
+    """The CPK the game itself loads for a release."""
+    game = game_dir(vintage)
+    return os.path.join(game, VINTAGES[vintage]["game_file"]) if game else ""
+
+
+def ability_order(mod):
+    """The abilities in the order the map lists them (23 for PES 2019, 19 for PES 2015)."""
+    return tuple(mod.ABILITIES)
+
+
+def bulk_fields(mod):
+    """The tray's fields: every ability, then the bio numbers the release actually carries."""
+    bios = ("Age", "Height", "Weight", "Form", "Weak Foot Usage", "Weak Foot Accuracy",
+            "Injury Resistance", "Reputation")
+    return ability_order(mod) + tuple(n for n in bios if n in mod.FIELD_BY_LABEL)
+
+
+def field_range(mod, label):
+    """(low, high) for a numeric field: abilities stop at 99 even if their bits allow more."""
+    _bit, width, add = mod.FIELD_BY_LABEL[label]
+    hi = add + (1 << width) - 1
+    if label in ability_order(mod):
+        hi = min(hi, 99)
+    return add, hi
+
 
 def install_of(path):
     """The install a database CPK lives in, for finding the other copies a save must write."""
@@ -118,8 +164,9 @@ def sibling_database(path, prefer=("dt10_x64.cpk",)):
 
 VINTAGE_NAMES = {"pes2019": "PES 2019", "pes2015": "PES 2015",
                  "pes2021": "SP Football Life / PES 2021"}
-NOT_READ = ("Reads CRI CPK databases — PES 2019, PES 2015 and SP Football Life. EDIT0000 "
-            "option files, .ted/.ced containers and spreadsheets are not read by this build.")
+NOT_READ = ("Reads CRI CPK databases and edits PES 2019 (188-byte) and PES 2015 (180-byte) "
+            "records. SP Football Life is read here but not edited yet; EDIT0000 option files, "
+            ".ted/.ced containers and spreadsheets are not read at all.")
 
 
 def describe_database(path):
@@ -131,11 +178,12 @@ def describe_database(path):
     vintage, note = probe_database(path)
     details = [f"file: {os.path.basename(path)}",
                f"detected: {VINTAGE_NAMES.get(vintage, vintage)} — {note}"]
-    can_load = vintage == "pes2019"
+    can_load = vintage in VINTAGES
     if can_load:
+        mod = VINTAGES[vintage]["module"]
         try:
-            teams = pes2019.TeamTable(*pes2019.Cpk2019(path).read_raw("Team"))
-            details.append(f"contents: {len(teams):,} clubs, {pes2019.REC}-byte player records")
+            teams = mod.TeamTable(*mod.Cpk(path).read_raw("Team"))
+            details.append(f"contents: {len(teams):,} clubs, {mod.REC}-byte player records")
         except Exception:
             pass
     return details, can_load
@@ -166,15 +214,6 @@ def default_database(game_dir):
     packs = pes2019.database_cpks(game_dir) if game_dir else []
     return next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")),
                 packs[0] if packs else "")
-
-
-def field_range(label):
-    """(low, high) for a numeric field: abilities stop at 99 even if their bits allow more."""
-    _bit, width, add = pes2019.FIELD_BY_LABEL[label]
-    hi = add + (1 << width) - 1
-    if label in PesForgeGtk.ABILITY_ORDER:
-        hi = min(hi, 99)
-    return add, hi
 
 
 def country_names():
@@ -419,7 +458,7 @@ class ImportHub(Gtk.Window):
         self.summary.set_text("\n".join(details))
         self.load_btn.set_sensitive(can_load)
         self.load_btn.set_tooltip_text("" if can_load else
-                                       "this build edits PES 2019 tables only")
+                                       "this build edits PES 2019 and PES 2015 tables")
 
     def _load(self):
         if self.path:
@@ -443,10 +482,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.binding = False                    # guards the checkbox <-> selection loop
         self.provenance = ""                    # the file being edited, for the footer line
         self.last_folder = ""                   # where the last pick came from, for the chooser
+        self.vintage = "pes2019"                # replaced by whatever is imported
+        self.mod = VINTAGES["pes2019"]["module"]
         self.rows = []
         self.dirty = set()
         self.loading = True                     # until the first record is loaded
-        self.packs = pes2019.database_cpks(self.game) if self.game else []
+        self.packs = self.mod.database_cpks(self.game) if self.game else []
         self.assign_by_pid = {}
         if assign is not None:
             for i in range(len(assign)):
@@ -541,8 +582,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         title.add_css_class("hero")
         box.append(title)
         hint = Gtk.Label(label="Import the CPK that carries the player tables — for example\n"
-                               "PES 2019's Data/dt10_x64.cpk or an SP Football Life "
-                               "download/data_s*.cpk",
+                               "PES 2019's Data/dt10_x64.cpk, PES 2015's Data/dt10.cpk or "
+                               "an SP Football Life download/data_s*.cpk",
                          justify=Gtk.Justification.CENTER)
         hint.add_css_class("hint")
         box.append(hint)
@@ -552,7 +593,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         button.connect("clicked", lambda _b: self.import_database())
         box.append(button)
         version = Gtk.Label(label="reads PES 2019, PES 2015 and SP Football Life CPKs · "
-                                  f"record size {pes2019.REC} bytes")
+                                  "edits 180-byte (2015) and 188-byte (2019) records")
         version.add_css_class("hint")
         box.append(version)
         return box
@@ -567,6 +608,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         panes.append(self._list())
         panes.append(self._form())
         panes.append(self._bio())
+        if hasattr(self, "bulk_field"):            # the tray's fields differ per release
+            self.bulk_field.set_model(Gtk.StringList.new(list(bulk_fields(self.mod))))
         old = self.stack.get_child_by_name("data")
         if old is not None:
             self.stack.remove(old)
@@ -725,7 +768,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         inner.append(self._section("ABILITIES", "40 - 99"))
         self.abilities = {}
         grid = Gtk.Grid(column_spacing=18, row_spacing=1)
-        for n, label in enumerate(self.ABILITY_ORDER):
+        for n, label in enumerate(ability_order(self.mod)):
             col = 0 if n % 2 == 0 else 1
             r = n // 2
             cell = Gtk.Box(spacing=8)
@@ -746,26 +789,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         pos_lab.add_css_class("dim")
         pos_lab.set_size_request(136, -1)
         pos_cell.append(pos_lab)
-        self.position = Gtk.DropDown.new_from_strings(pes2019.POSITION_NAMES)
+        self.position = Gtk.DropDown.new_from_strings(self.mod.POSITION_NAMES)
         self.position.connect("notify::selected", self._on_position_changed)
         pos_cell.append(self.position)
-        grid.attach(pos_cell, 1, (len(self.ABILITY_ORDER) + 1) // 2, 1, 1)
+        grid.attach(pos_cell, 1, (len(ability_order(self.mod)) + 1) // 2, 1, 1)
         inner.append(grid)
         return box
 
     BULK_OPS = (("Set to", "set"), ("Add", "add"), ("Subtract", "sub"))
-    BULK_FIELDS = ("Attacking Prowess", "Ball Control", "Dribbling", "Low Pass", "Lofted Pass",
-                   "Finishing", "Header", "Place Kicking", "Swerve", "Speed", "Explosive Power",
-                   "Kicking Power", "Jump", "Physical Contact", "Unwavering Balance", "Stamina",
-                   "Defensive Prowess", "Ball Winning", "Goalkeeping", "GK Catch", "Clearing",
-                   "Reflexes", "Coverage", "Age", "Height", "Weight", "Form",
-                   "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance", "Reputation")
-
-    ABILITY_ORDER = (
-        "Attacking Prowess", "Ball Control", "Dribbling", "Low Pass", "Lofted Pass", "Finishing",
-        "Header", "Place Kicking", "Swerve", "Speed", "Explosive Power", "Kicking Power", "Jump",
-        "Physical Contact", "Unwavering Balance", "Stamina", "Defensive Prowess", "Ball Winning",
-        "Goalkeeping", "GK Catch", "Clearing", "Reflexes", "Coverage")
+    # The bio rows both releases share, with the ranges the panel has always used; the map
+    # module decides which of them exist (PES 2015 has no Reputation).
+    BIO_LABELS = ("Height", "Weight", "Age", "Nationality", "Form", "Weak Foot Usage",
+                  "Weak Foot Accuracy", "Injury Resistance", "Reputation")
+    BIO_RANGES = {"Height": (150, 215), "Weight": (55, 110), "Age": (15, 50),
+                  "Nationality": (0, 511), "Form": (1, 8), "Weak Foot Usage": (1, 4),
+                  "Weak Foot Accuracy": (1, 4), "Injury Resistance": (1, 4),
+                  "Reputation": (1, 8)}
 
     def _bio(self):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -785,12 +824,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         inner.append(self._section("BIO", ""))
 
         self.bio = {}
-        rows = (("Height", 150, 215, "Height"), ("Weight", 55, 110, "Weight"),
-                ("Age", 15, 50, "Age"), ("Nationality", 0, 511, "Nationality"),
-                ("Form", 1, 8, "Form"), ("Weak Foot Usage", 1, 4, "Weak Foot Usage"),
-                ("Weak Foot Accuracy", 1, 4, "Weak Foot Accuracy"),
-                ("Injury Resistance", 1, 4, "Injury Resistance"),
-                ("Reputation", 1, 8, "Reputation"))
+        rows = tuple((label,) + self.BIO_RANGES[label] + (label,)
+                     for label in self.BIO_LABELS if label in self.mod.FIELD_BY_LABEL)
         grid = Gtk.Grid(column_spacing=8, row_spacing=2)
         for n, (label, lo, hi, key) in enumerate(rows):
             lab = Gtk.Label(label=label, xalign=1)
@@ -817,9 +852,15 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         lab.add_css_class("dim")
         lab.set_size_request(122, -1)
         style_row.append(lab)
-        self.style = Gtk.DropDown.new_from_strings(pes2019.STYLE_NAMES)
+        names = getattr(self.mod, "STYLE_NAMES", None)
+        if names:
+            self.style = Gtk.DropDown.new_from_strings(names)
+            self.style.connect("notify::selected", self._on_style_changed)
+        else:                                 # PES 2015 numbers its playing styles
+            lo, hi = field_range(self.mod, "Playing Style")
+            self.style = Gtk.SpinButton.new_with_range(lo, hi, 1)
+            self.style.connect("value-changed", self._on_bio_changed, "Playing Style")
         self.style.set_hexpand(True)
-        self.style.connect("notify::selected", self._on_style_changed)
         style_row.append(self.style)
         inner.append(style_row)
 
@@ -844,8 +885,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.chips = {}
         # the modules key their skill/style flags as "Skill: X" / "Style: X"; the chip shows
         # the bare name, the table lookup uses the label
-        for label in ([f"Style: {n}" for n in pes2019.COM_STYLES]
-                      + [f"Skill: {n}" for n in pes2019.SKILLS]):
+        for label in ([f"Style: {n}" for n in self.mod.COM_STYLES]
+                      + [f"Skill: {n}" for n in self.mod.SKILLS]):
             chip = Gtk.ToggleButton(label=label.split(": ", 1)[1])
             chip.add_css_class("chip")
             chip.connect("toggled", self._on_skill_toggled, label)
@@ -881,7 +922,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.batch_label = Gtk.Label(label="", xalign=0)
         self.batch_label.add_css_class("hint")
         self.batch.append(self.batch_label)
-        self.bulk_field = Gtk.DropDown.new_from_strings(self.BULK_FIELDS)
+        self.bulk_field = Gtk.DropDown.new_from_strings(bulk_fields(self.mod))
         self.bulk_field.set_tooltip_text("field to change")
         self.bulk_field.set_size_request(186, -1)
         self.batch.append(self.bulk_field)
@@ -916,10 +957,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         indexes = self.selected_indexes()
         if not indexes:
             return
-        label = self.BULK_FIELDS[self.bulk_field.get_selected()]
+        label = bulk_fields(self.mod)[self.bulk_field.get_selected()]
         op = self.BULK_OPS[self.bulk_op.get_selected()][1]
         amount = int(self.bulk_amount.get_value())
-        lo, hi = field_range(label)
+        lo, hi = field_range(self.mod, label)
         for i in indexes:
             old = self.table.get(i, label)
             new = amount if op == "set" else (old + amount if op == "add" else old - amount)
@@ -946,7 +987,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             old = self.rows[i]
             t = self.table
             batch.append((i, Row(index=i, pid=old.pid, name=t.name(i), club=old.club,
-                                 pos=pes2019.POSITION_NAMES[t.get(i, "Position")],
+                                 pos=self.mod.POSITION_NAMES[t.get(i, "Position")],
                                  spd=t.get(i, "Speed"), bc=t.get(i, "Ball Control"),
                                  fin=t.get(i, "Finishing"), sta=t.get(i, "Stamina"),
                                  edited=True)))
@@ -1051,19 +1092,21 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 swapped, path = name, better
                 name = os.path.basename(path)
                 vintage, note = probe_database(path)
-        if vintage != "pes2019":
+        if vintage not in VINTAGES:
             where = f"{name} ({swapped} had no player table)" if swapped else name
-            self._status(f"{where}: {vintage} — {note}. This build edits PES 2019 "
-                         f"({pes2019.REC}-byte records); the Tk editor has the rest.")
+            self._status(f"{where}: {vintage} — {note}. This build edits PES 2019 and PES 2015 "
+                         f"records; SP Football Life is read here but not edited yet.")
             return False
-        db = pes2019.Cpk2019(path)
+        self.vintage = vintage
+        self.mod = VINTAGES[vintage]["module"]
+        db = self.mod.Cpk(path)
         self.table = db.read_table("Player")
-        self.teams = pes2019.TeamTable(*db.read_raw("Team"))
-        self.assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+        self.teams = self.mod.TeamTable(*db.read_raw("Team"))
+        self.assign = self.mod.AssignmentTable(*db.read_raw("PlayerAssignment"))
         self.source = path
         self.source_name = name
         self.game = install_of(path)
-        self.packs = pes2019.database_cpks(self.game)
+        self.packs = self.mod.database_cpks(self.game)
         self.clubs = {self.teams.id(i): self.teams.name(i) for i in range(len(self.teams))}
         self.assign_by_pid = {}
         for i in range(len(self.assign)):
@@ -1080,7 +1123,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.revert_btn.set_sensitive(True)
         self.search.set_sensitive(True)
         self.provenance = name + (f" ({swapped} had no player table)" if swapped else "")
-        self._status(f"PES 2019 · {len(self.rows):,} players · {note}")
+        self._status(f"{VINTAGES[vintage]['label']} · {len(self.rows):,} players · {note}")
         return True
 
     # ---- data
@@ -1093,7 +1136,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             if rows:
                 club = self.clubs.get(self.assign.team(rows[0]), "")
             self.rows.append(Row(index=i, pid=pid, name=t.name(i), club=club,
-                                 pos=pes2019.POSITION_NAMES[t.get(i, "Position")],
+                                 pos=self.mod.POSITION_NAMES[t.get(i, "Position")],
                                  spd=t.get(i, "Speed"), bc=t.get(i, "Ball Control"),
                                  fin=t.get(i, "Finishing"), sta=t.get(i, "Stamina")))
 
@@ -1142,6 +1185,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return self._selftest_select()
         if mode == "hub":
             return self._selftest_hub()
+        if mode == "write2015":
+            return self._selftest_write2015()
         if not self.rows or len(self.store) != len(self.rows):
             return self._selftest_fail(f"list holds {len(self.store)} rows, table has {len(self.rows)}")
         if self.index is None or not self.name_entries["Name"].get_text().strip():
@@ -1211,6 +1256,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 details, can_load = describe_database(pack)
                 checks.append(("a PES 2019 pack is loadable", can_load, True))
                 checks.append(("its players are counted", any("players" in d for d in details), True))
+            db15 = vintage_database("pes2015")
+            if db15 and os.path.isfile(db15):
+                details, can_load = describe_database(db15)
+                checks.append(("a PES 2015 database is loadable", can_load, True))
+                checks.append(("and counted", any("players" in d for d in details), True))
             spfl = os.path.join(os.environ.get("SPFL_DIR", ""), "download", "data_s2627.cpk")
             if os.path.isfile(spfl):
                 details, can_load = describe_database(spfl)
@@ -1238,15 +1288,65 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.close()
         return False
 
+    def _selftest_write2015(self):
+        """Load a copy of the PES 2015 database, edit it, save, and read the edits back.
+
+        The copy lives in a scratch folder shaped like an install, so the save writes that
+        and never the game — the released file's hash is checked before it finishes.
+        """
+        import hashlib
+        import shutil
+        try:
+            src = vintage_database("pes2015")
+            if not src or not os.path.isfile(src):
+                return self._selftest_fail(f"no PES 2015 database (set PES2015_DIR): {src!r}")
+            before = hashlib.sha256(open(src, "rb").read()).hexdigest()
+            root = os.path.join(os.environ.get("TMPDIR") or "/tmp", "pesforge-2015-check")
+            copy = os.path.join(root, "Data", "dt10.cpk")
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copyfile(src, copy)
+            self.load_database(copy)
+            if self.table is None:
+                return self._selftest_fail(f"could not load the copy: {self.status.get_text()}")
+            if self.vintage != "pes2015" or len(self.rows) < 1000:
+                return self._selftest_fail(f"loaded {self.vintage} with {len(self.rows)} rows")
+            i = 3
+            pid = self.table.pid(i)
+            label = "Speed" if "Speed" in self.mod.FIELD_BY_LABEL else ability_order(self.mod)[0]
+            was = self.table.get(i, label)
+            want = min(99, was + 3)
+            self.table.set(i, label, want)
+            self._mark_dirty(i, label)
+            self.table.set_name(i, shirt="SELFTEST")
+            self._mark_dirty(i, "name:shirt")
+            self._save()
+            if "saved" not in self.status.get_text():
+                return self._selftest_fail(f"save said {self.status.get_text()!r}")
+            back = self.mod.Cpk(copy).read_table("Player")
+            hits = back.find(str(pid))
+            if not hits:
+                return self._selftest_fail(f"player {pid} vanished from the copy")
+            j = hits[0]
+            if back.get(j, label) != want or back.shirt(j) != "SELFTEST":
+                return self._selftest_fail(f"read back {back.get(j, label)!r}/{back.shirt(j)!r}, "
+                                           f"want {want}/'SELFTEST'")
+            if hashlib.sha256(open(src, "rb").read()).hexdigest() != before:
+                return self._selftest_fail("the game's own database was modified")
+            print(f"SELFTEST WRITE2015 OK players={len(self.rows)} pid={pid} "
+                  f"{label}={was}->{want} shirt=SELFTEST", flush=True)
+        except Exception as exc:
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
+        self.close()
+        return False
+
     def _selftest_cycle(self):
         """Import PES 2019, unload, import SP Football Life, unload, import PES 2015."""
         try:
             spfl = settings.database_path(os.environ.get("SPFL_DIR", "")) \
                 if os.environ.get("SPFL_DIR") else ""
-            legs = (("pes2019", default_database(os.environ.get("PES2019_DIR", "")), "loaded"),
+            legs = (("pes2019", vintage_database("pes2019"), "loaded"),
                     ("spfl", spfl, "refused"),
-                    ("pes2015", os.path.join(os.environ.get("PES2015_DIR", ""), "Data", "dt10.cpk"),
-                     "refused"))
+                    ("pes2015", vintage_database("pes2015"), "loaded"))
             for n, (name, path, expect) in enumerate(legs, 1):
                 if not path or not os.path.isfile(path):
                     print(f"CYCLE step={n} name={name} result=skipped (no install)", flush=True)
@@ -1260,8 +1360,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                       f"status={self.status.get_text()[:90]!r}", flush=True)
                 if result != expect:
                     return self._selftest_fail(f"{name}: {result}, expected {expect}")
-                if not loaded and name in ("spfl", "pes2015") and name.replace("spfl", "pes2021") not in self.status.get_text():
-                    return self._selftest_fail(f"{name}: refused without naming the vintage: "
+                want_name = {"spfl": "pes2021", "pes2015": "PES 2015"}.get(name)
+                if want_name and want_name not in self.status.get_text():
+                    return self._selftest_fail(f"{name}: the status does not name it: "
                                                f"{self.status.get_text()!r}")
                 self.unload_database()
                 if self.table is not None or self.rows or self.store.get_n_items():
@@ -1320,12 +1421,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         path = self.source
         before = hashlib.sha256(open(path, "rb").read()).hexdigest()
         backup_dir = settings.backups_dir()
-        pre = set(pes2019.backup_list(backup_dir))
+        pre = set(self.mod.backup_list(backup_dir))
         picks = [0, 1, 2]
         for pos in picks:
             self.selection.select_item(pos, False)
         label = "Speed"
-        self.bulk_field.set_selected(self.BULK_FIELDS.index(label))
+        self.bulk_field.set_selected(bulk_fields(self.mod).index(label))
         self.bulk_op.set_selected(1)                                  # Add
         self.bulk_amount.set_value(5)
         old = {i: self.table.get(i, label) for i in picks}
@@ -1346,15 +1447,15 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         print(f"WRITE stage=saved status={self.status.get_text()!r}", flush=True)
         if "saved" not in self.status.get_text():
             return self._selftest_fail(f"save said {self.status.get_text()!r}")
-        back = pes2019.Cpk2019(path).read_table("Player")
+        back = self.mod.Cpk(path).read_table("Player")
         for i, was in old.items():
             if not self._reads_back(back, back.pid(i), {label: min(99, was + 5)}):
                 return self._selftest_fail(f"player {back.pid(i)}: {label} missing after save")
-        fresh = [n for n in pes2019.backup_list(backup_dir) if n not in pre]
+        fresh = [n for n in self.mod.backup_list(backup_dir) if n not in pre]
         if not fresh:
             return self._selftest_fail("the save took no backup")
         for name in fresh:
-            pes2019.restore_backup(name)
+            self.mod.restore_backup(name)
         if hashlib.sha256(open(path, "rb").read()).hexdigest() != before:
             return self._selftest_fail("restoring the backups did not return the original bytes")
         print(f"SELFTEST WRITE OK players={len(self.rows)} edited={len(picks)} "
@@ -1429,7 +1530,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         for key, spin in self.bio.items():
             spin.set_value(t.get(index, key))
         self.country.set_text(COUNTRIES.get(t.get(index, "Nationality"), ""))
-        self.style.set_selected(min(t.get(index, "Playing Style"), len(pes2019.STYLE_NAMES) - 1))
+        style = t.get(index, "Playing Style")
+        if hasattr(self.style, "set_selected"):          # 2019 names its styles
+            self.style.set_selected(min(style, len(self.mod.STYLE_NAMES) - 1))
+        else:                                            # 2015 numbers them
+            self.style.set_value(style)
         self.foot.set_selected(t.get(index, "Foot"))
         for label, chip in self.chips.items():
             chip.set_active(bool(t.get(index, label)))
@@ -1466,16 +1571,16 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         if not self.dirty:
             self._status("nothing to save · edit a field first")
             return
-        if not GAME:
-            self._status("no install to write to (set PES2019_DIR)")
+        if not self.game:
+            self._status(f"no install to write to (set {VINTAGES[self.vintage]['env']})")
             return
         edits = self._edited_values()
         backup = settings.backups_dir()
         written, failed = [], []
-        others = pes2019.database_cpks(self.game) if self.game else []
+        others = self.mod.database_cpks(self.game) if self.game else []
         for path in [self.source] + [p for p in others if p != self.source]:
             try:
-                db = pes2019.Cpk2019(path)
+                db = self.mod.Cpk(path)
                 table = db.read_table("Player")
             except (KeyError, OSError, ValueError):
                 continue                      # a pack without a player table
@@ -1491,14 +1596,15 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             if not hit:
                 continue                      # this copy does not carry the player
             db.patch("Player", table.to_payload(), backup_dir=backup)
-            back = pes2019.Cpk2019(path).read_table("Player")     # saved is not written
+            back = self.mod.Cpk(path).read_table("Player")        # saved is not written
             wrong = [pid for pid, fields in edits.items() if not self._reads_back(back, pid, fields)]
             name = os.path.basename(path)
             if wrong:
                 failed.append(f"{name}: {len(wrong)} player(s) did not read back")
             else:
                 written.append(f"{name} ({hit})")
-        running = subprocess.run(["pgrep", "-f", "PES2019.exe"], capture_output=True).returncode == 0
+        running = subprocess.run(["pgrep", "-f", VINTAGES[self.vintage]["exe"]],
+                                 capture_output=True).returncode == 0
         head = "game is running, it reloads the table when you restart it · " if running else ""
         if failed:
             self._status(f"{head}partial save: " + "; ".join(failed))
@@ -1516,7 +1622,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _reload(self):
         """Drop the pending edits and re-read the database from disk."""
         try:
-            self.table = pes2019.Cpk2019(self.source).read_table("Player")
+            self.table = self.mod.Cpk(self.source).read_table("Player")
         except (KeyError, OSError, ValueError) as exc:
             self._status(f"reload failed: {exc}")
             return
@@ -1559,7 +1665,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return
         self.table.set(self.index, "Position", dd.get_selected())
         row = self.rows[self.index]
-        row.pos = pes2019.POSITION_NAMES[dd.get_selected()]
+        row.pos = self.mod.POSITION_NAMES[dd.get_selected()]
         self._mark_dirty(self.index, "Position")
 
     def _on_style_changed(self, dd, _p):
@@ -1595,14 +1701,17 @@ def check():
     """`--check`: report what the app would open, without opening a window."""
     print(f"GTK {Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()}, "
           f"PyGObject {'.'.join(str(v) for v in gi.version_info)}")
-    if not GAME:
-        print("PES 2019 install: not found (set PES2019_DIR)")
-        return 1
-    packs = pes2019.database_cpks(GAME)
-    source = next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")), packs[0] if packs else "")
-    print(f"PES 2019 install: {GAME}")
-    print(f"player table    : {source or 'none found'}")
-    return 0 if source else 1
+    missing = 0
+    for vintage in EDITABLE:
+        game = game_dir(vintage)
+        packs = VINTAGES[vintage]["module"].database_cpks(game) if game else []
+        source = next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")),
+                      packs[0] if packs else "")
+        where = game or "not found (set " + VINTAGES[vintage]["env"] + ")"
+        print(f"{VINTAGES[vintage]['label']:<9} install: {where}")
+        print(f"          table  : {source or 'none found'}")
+        missing += 1 if not source else 0
+    return 1 if missing == len(EDITABLE) else 0
 
 
 def main():

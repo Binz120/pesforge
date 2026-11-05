@@ -2181,8 +2181,8 @@ def test_gtk4_import_cycle_across_installs():
         assert "step=2 name=spfl result=refused" in text, text[-700:]
         assert "pes2021" in text, text[-700:]
     if env["PES2015_DIR"]:
-        assert "step=3 name=pes2015 result=refused" in text, text[-700:]
-        assert "pes2015 —" in text or "pes2015 -" in text, text[-700:]
+        assert "step=3 name=pes2015 result=loaded" in text, text[-700:]
+        assert "PES 2015 · 10,091 players" in text, text[-700:]
 
 
 def test_gtk4_clicking_a_player_shows_that_player():
@@ -2216,8 +2216,27 @@ def test_gtk4_import_hub_describes_a_pick():
     text = out.stdout + out.stderr
     assert "SELFTEST HUB OK" in text, text[-600:]
     assert "a PES 2019 pack is loadable: True" in text, text[-600:]
+    assert "a PES 2015 database is loadable: True" in text, text[-600:]
     if os.path.isfile(os.path.join(settings.game_dir() or "", "download", "data_s2627.cpk")):
         assert "SP Football Life is refused: False" in text, text[-600:]
+
+
+def test_gtk4_edits_and_saves_pes2015():
+    """PES 2015 is editable: load the install, change a player, save into a copy, read it back.
+
+    The check copies Data/dt10.cpk into a scratch folder shaped like an install first, and
+    asserts the game's own database is byte-identical when it finishes.
+    """
+    game = pes2015_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2015", PES2015_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE2015 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
 
 
 def main():
