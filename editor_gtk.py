@@ -49,6 +49,17 @@ def probe_database(path):
     """
     try:
         payload = pes2019.Cpk2019(path).read_raw("Player")[0]
+    except KeyError:
+        folder = os.path.dirname(os.path.abspath(path))
+        try:
+            others = [f for f in sorted(os.listdir(folder))
+                      if f.endswith(".cpk") and ("dt10" in f or "dt80" in f)]
+        except OSError:
+            others = []
+        note = "this CPK carries no Player table"
+        if others:
+            note += f"; in that folder try {', '.join(others[:3])}"
+        return "no player table", note
     except Exception as exc:                                     # not a CPK we understand
         return "unreadable", str(exc)
     size = len(payload)

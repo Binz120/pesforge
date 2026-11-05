@@ -2096,6 +2096,29 @@ def test_gtk4_starts_empty_and_imports_on_demand():
     assert int(found.group(1)) > 10000, found.group(1)
 
 
+def test_gtk4_import_probe_identifies_the_release():
+    """The importer reads the release out of the table, and explains a file it cannot use."""
+    game = pes2019_install()
+    py = gtk4_python()
+    junk = f"/tmp/pesforge-notacpk-{os.getpid()}.txt"
+    script = (
+        "import sys; sys.path.insert(0, %r); import editor_gtk as g\n"
+        "print('good', g.probe_database(%r))\n"
+        "open(%r, 'w').write('not a cpk')\n"
+        "print('junk', g.probe_database(%r))\n"
+    ) % (ROOT, os.path.join(game, "Data", "dt10_x64.cpk"), junk, junk)
+    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300,
+                         env=dict(os.environ, GDK_BACKEND="x11"))
+    text = out.stdout + out.stderr
+    assert "('pes2019'" in text, text[-400:]
+    assert "13,805" in text, text[-400:]
+    assert "'unreadable'" in text, text[-400:]
+    try:
+        os.unlink(junk)
+    except OSError:
+        pass
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
