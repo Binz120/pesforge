@@ -80,6 +80,7 @@ Comment=Edit players in the PES 2019 database (GTK4 build)
 Exec=$LAUNCHER_GTK4
 TryExec=$LAUNCHER_GTK4
 Icon=pesforge
+StartupWMClass=dev.pesforge.gtk4
 Terminal=false
 Categories=Game;
 Keywords=pes;pesdb;football;pes2019;editor;gtk4;

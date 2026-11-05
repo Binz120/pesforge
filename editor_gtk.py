@@ -93,6 +93,7 @@ def css():
     button.tab {{ background-color: transparent; border: none; color: {t['dim']};
         padding: 2px 8px; min-height: 22px; }}
     button.tab.active {{ background-color: {t['sel']}; color: {t['accent']}; }}
+    button.tab.off {{ color: {t['bar']}; font-style: italic; }}
 
     .pill {{ background-color: {t['panel2']}; border: 1px solid {t['line']};
         border-radius: 999px; padding: 1px 10px; font-size: 11px; color: {t['fg']}; }}
@@ -183,7 +184,7 @@ class AbilityBar(Gtk.DrawingArea):
 # ---------------------------------------------------------------- the window
 class PesForgeGtk(Gtk.ApplicationWindow):
     def __init__(self, app, table, table_source, teams, assign):
-        super().__init__(application=app, title="PESForge — GTK4 spike")
+        super().__init__(application=app, title="PESForge GTK4")
         self.set_default_size(1504, 946)
         self.table = table
         self.teams = teams
@@ -242,17 +243,25 @@ class PesForgeGtk(Gtk.ApplicationWindow):
 
     # ---- tab row
     def _tabs(self):
+        """Players is the only view this build has; the rest say so instead of doing nothing."""
         bar = Gtk.Box(spacing=2)
         bar.set_margin_start(14)
         bar.set_margin_bottom(4)
-        for label, active in (("Players  16,762", False), ("Clubs  529", False),
-                              ("PES 2015", False), ("PES 2019  16,762", True)):
+        for label, here in (("Players", True), ("Clubs", False), ("PES 2015", False)):
             b = Gtk.Button(label=label)
             b.add_css_class("tab")
-            if active:
-                b.add_css_class("active")
+            b.add_css_class("active" if here else "off")
+            if not here:
+                b.set_tooltip_text("only in the Tk build (editor.py)")
+            b.connect("clicked", self._on_tab, label, here)
             bar.append(b)
         return bar
+
+    def _on_tab(self, _button, label, here):
+        if here:
+            self.status.set_text(f"Players · PES 2019 · {len(self.rows):,} players")
+        else:
+            self.status.set_text(f"{label}: not in the GTK4 build yet, the Tk editor has it")
 
     # ---- list | form | bio
     def _body(self):
@@ -563,7 +572,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _update_count(self):
         shown = self.filtered.get_n_items()
         total = self.store.get_n_items()
-        self.count.set_text(f"{shown:,} of {total:,} players — type to narrow")
+        query = self.search.get_text().strip()
+        if not shown and total and query:
+            self.count.set_text(f'no player matches "{query}" — clear the search to see all {total:,}')
+        else:
+            self.count.set_text(f"{shown:,} of {total:,} players — type to narrow")
 
     def selftest(self):
         """`PESFORGE_GTK_SELFTEST=1`: prove the screen built against real data, then quit.
@@ -581,6 +594,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         narrowed = self.filtered.get_n_items()
         if not 0 < narrowed < total:
             return self._selftest_fail(f"search for {self.rows[self.index].name!r} matched {narrowed} of {total}")
+        self.search.set_text("zzzznomatch")
+        self._refilter()
+        if self.filtered.get_n_items():
+            return self._selftest_fail("a query nothing can match still listed players")
+        if "no player matches" not in self.count.get_text():
+            return self._selftest_fail(f"an empty result read as: {self.count.get_text()!r}")
         self.search.set_text("")
         self._refilter()
         if self.filtered.get_n_items() != total:
@@ -609,7 +628,6 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         return False
 
     def _on_select(self, _sel, _pos, _n):
-        print("DBG on_select pos=", _pos, flush=True)
         row = self.selection.get_selected_item()
         if row is not None:
             self._load(row.index)
@@ -727,7 +745,12 @@ def check():
 def main():
     if "--check" in sys.argv[1:]:
         return check()
-    app = Gtk.Application(application_id="dev.pesforge.gtkspike")
+    # Gtk.Application is single-instance: a check run must not take over an app the user has open,
+    # so it registers an id of its own.
+    app_id = "dev.pesforge.gtk4"
+    if os.environ.get("PESFORGE_GTK_SELFTEST"):
+        app_id += f".selftest{os.getpid()}"
+    app = Gtk.Application(application_id=app_id)
 
     def on_activate(_app):
         if not GAME:
