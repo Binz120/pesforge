@@ -2051,6 +2051,35 @@ def test_gtk4_app_builds_and_searches():
     assert chips == expected, f"{chips} skill chips, the map holds {expected}"
 
 
+def test_gtk4_bulk_matrix_stages_and_commits():
+    """Tick rows, batch-edit one field across them, commit, restore — on a sandbox copy.
+
+    The app runs the whole cycle itself (`PESFORGE_GTK_SELFTEST=write`); the assertions are
+    that the staging is right, the file on disk really changed, and the backup put it back.
+    """
+    box = pes2019_box()                        # a copy of dt10_x64.cpk, never the install
+    game = os.path.join(box, "game")
+    cpk = os.path.join(game, "Data", "dt10_x64.cpk")
+    before = open(cpk, "rb").read()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, SPFL_STATE=os.path.join(box, "state"),
+               PESFORGE_GTK_SELFTEST="write")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE OK" in text, text[-600:]
+    found = re.search(r"SELFTEST WRITE OK players=(\d+) edited=(\d+) backups=(\d+) restored=(\d+)", text)
+    assert found, text[-300:]
+    players, edited, backups, restored = (int(g) for g in found.groups())
+    assert players > 10000, f"only {players} players listed"
+    assert edited == 3, f"{edited} players edited"
+    assert backups >= 1 and restored == 1, (backups, restored)
+    assert open(cpk, "rb").read() == before, "the sandbox was not restored byte for byte"
+    shutil.rmtree(box, ignore_errors=True)
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

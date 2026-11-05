@@ -14,6 +14,7 @@ judging the toolkit does not need a write path pointed at a real install.
 """
 import json
 import os
+import subprocess
 import sys
 
 import gi
@@ -24,11 +25,21 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pes2019  # noqa: E402
+import settings  # noqa: E402
 import theme  # noqa: E402
 
 SELFTEST_FAILURES = []            # filled by --selftest runs, turned into an exit code by main()
 GAME = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
 TOK = theme.tokens("amber")
+
+
+def field_range(label):
+    """(low, high) for a numeric field: abilities stop at 99 even if their bits allow more."""
+    _bit, width, add = pes2019.FIELD_BY_LABEL[label]
+    hi = add + (1 << width) - 1
+    if label in PesForgeGtk.ABILITY_ORDER:
+        hi = min(hi, 99)
+    return add, hi
 
 
 def country_names():
@@ -94,6 +105,10 @@ def css():
         padding: 2px 8px; min-height: 22px; }}
     button.tab.active {{ background-color: {t['sel']}; color: {t['accent']}; }}
     button.tab.off {{ color: {t['bar']}; font-style: italic; }}
+    .batch {{ background-color: {t['panel']}; border-top: 1px solid {t['line']};
+        padding: 6px 4px; }}
+    .batch spinbutton {{ min-width: 74px; }}
+    columnview label.cell {{ color: {t['fg']}; }}
 
     .pill {{ background-color: {t['panel2']}; border: 1px solid {t['line']};
         border-radius: 999px; padding: 1px 10px; font-size: 11px; color: {t['fg']}; }}
@@ -136,6 +151,11 @@ class Row(GObject.Object):
     bc = GObject.Property(type=int, default=0)
     fin = GObject.Property(type=int, default=0)
     sta = GObject.Property(type=int, default=0)
+    edited = GObject.Property(type=bool, default=False)
+
+    @property
+    def state(self):
+        return "edited" if self.edited else ""
 
 
 class AbilityBar(Gtk.DrawingArea):
@@ -191,6 +211,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.assign = assign
         self.clubs = {}
         self.index = None
+        self.source = table_source                       # full path: this is what Save writes
+        self.source_name = os.path.basename(str(table_source))
+        self.binding = False                    # guards the checkbox <-> selection loop
         self.rows = []
         self.dirty = set()
         self.loading = True                     # until the first record is loaded
@@ -204,14 +227,14 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         root.append(self._header())
         root.append(self._tabs())
         root.append(self._body())
+        root.append(self._batch_bar())
         root.append(self._footer(table_source))
 
         self.store = Gio.ListStore(item_type=Row)
         self.filter = Gtk.CustomFilter.new(self._matches, None)
         self.filtered = Gtk.FilterListModel(model=self.store, filter=self.filter)
         self.sorted = Gtk.SortListModel(model=self.filtered)
-        self.selection = Gtk.SingleSelection(model=self.sorted)
-        self.selection.set_autoselect(True)
+        self.selection = Gtk.MultiSelection(model=self.sorted)
         self.selection.connect("selection-changed", self._on_select)
         self.column_view.set_model(self.selection)
 
@@ -284,6 +307,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.column_view.set_show_column_separators(False)
         self.column_view.set_show_row_separators(False)
         self.column_view.add_css_class("rows")
+        check_factory = Gtk.SignalListItemFactory()
+        check_factory.connect("setup", self._check_setup)
+        check_factory.connect("bind", self._check_bind)
+        check_col = Gtk.ColumnViewColumn(title="✓", factory=check_factory)
+        check_col.set_fixed_width(36)
+        self.column_view.append_column(check_col)
         for title, width, attr, align, sortable in (
                 ("ID", 48, "pid", 1.0, True), ("NAME", 158, "name", 0.0, True),
                 ("CLUB", 106, "club", 0.0, True), ("POS", 36, "pos", 0.5, False),
@@ -299,6 +328,12 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 sorter = Gtk.CustomSorter.new(self._compare, attr)
                 col.set_sorter(sorter)
             self.column_view.append_column(col)
+        state_factory = Gtk.SignalListItemFactory()
+        state_factory.connect("setup", self._cell_setup)
+        state_factory.connect("bind", self._cell_bind, "state")
+        state_col = Gtk.ColumnViewColumn(title="STATE", factory=state_factory)
+        state_col.set_fixed_width(56)
+        self.column_view.append_column(state_col)
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_child(self.column_view)
@@ -323,6 +358,41 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         label.set_text(f"{value:,}" if attr == "pid" else str(value))
         label.set_xalign(1.0 if attr in ("pid", "spd", "bc", "fin", "sta") else 0.0)
         label.set_width_chars(0)
+
+    def _check_setup(self, _f, item):
+        check = Gtk.CheckButton()
+        check.set_halign(Gtk.Align.CENTER)
+        item.set_child(check)
+
+    def _check_bind(self, _f, item):
+        check = item.get_child()
+        self.binding = True
+        check.set_active(self.selection.is_selected(item.get_position()))
+        self.binding = False
+        check.connect("toggled", self._on_check, item)
+
+    def _on_check(self, check, item):
+        if self.binding:
+            return                                  # set_active() above, not a click
+        pos = item.get_position()
+        if check.get_active():
+            self.selection.select_item(pos, False)
+        elif self.selection.is_selected(pos):
+            self.selection.unselect_item(pos)
+
+    def selected_indexes(self):
+        """Record indexes of every ticked row, in table order.
+
+        shortcut: asks the model per position (Gtk.Bitset has no indexed getter here),
+        which is fine at 16k rows; move to the bitset iterator if the list grows.
+        """
+        out = []
+        for pos in range(self.selection.get_n_items()):
+            if self.selection.is_selected(pos):
+                row = self.sorted.get_item(pos)
+                if row is not None:
+                    out.append(row.index)
+        return out
 
     def _compare(self, a, b, attr):
         av, bv = getattr(a, attr), getattr(b, attr)
@@ -401,6 +471,14 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         grid.attach(pos_cell, 1, (len(self.ABILITY_ORDER) + 1) // 2, 1, 1)
         inner.append(grid)
         return box
+
+    BULK_OPS = (("Set to", "set"), ("Add", "add"), ("Subtract", "sub"))
+    BULK_FIELDS = ("Attacking Prowess", "Ball Control", "Dribbling", "Low Pass", "Lofted Pass",
+                   "Finishing", "Header", "Place Kicking", "Swerve", "Speed", "Explosive Power",
+                   "Kicking Power", "Jump", "Physical Contact", "Unwavering Balance", "Stamina",
+                   "Defensive Prowess", "Ball Winning", "Goalkeeping", "GK Catch", "Clearing",
+                   "Reflexes", "Coverage", "Age", "Height", "Weight", "Form",
+                   "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance", "Reputation")
 
     ABILITY_ORDER = (
         "Attacking Prowess", "Ball Control", "Dribbling", "Low Pass", "Lofted Pass", "Finishing",
@@ -512,6 +590,90 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             box.append(h)
         return box
 
+    def _batch_bar(self):
+        """The mockup's tray: one operation across every ticked player, staged in memory."""
+        self.batch = Gtk.Box(spacing=8)
+        self.batch.add_css_class("batch")
+        self.batch.set_margin_start(14)
+        self.batch.set_margin_end(14)
+        self.batch.set_margin_top(2)
+        self.batch_label = Gtk.Label(label="", xalign=0)
+        self.batch_label.add_css_class("hint")
+        self.batch.append(self.batch_label)
+        self.bulk_field = Gtk.DropDown.new_from_strings(self.BULK_FIELDS)
+        self.bulk_field.set_tooltip_text("field to change")
+        self.bulk_field.set_size_request(186, -1)
+        self.batch.append(self.bulk_field)
+        self.bulk_op = Gtk.DropDown.new_from_strings([label for label, _ in self.BULK_OPS])
+        self.bulk_op.set_selected(1)
+        self.batch.append(self.bulk_op)
+        self.bulk_amount = Gtk.SpinButton.new_with_range(-99, 99, 1)
+        self.bulk_amount.set_value(1)
+        self.batch.append(self.bulk_amount)
+        apply_btn = Gtk.Button(label="Apply to selected")
+        apply_btn.add_css_class("accent")
+        apply_btn.connect("clicked", lambda _b: self._bulk_apply())
+        self.batch.append(apply_btn)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        self.batch.append(spacer)
+        clear = Gtk.Button(label="Clear selection")
+        clear.connect("clicked", lambda _b: self.selection.unselect_all())
+        self.batch.append(clear)
+        self.batch.set_visible(False)
+        self._bulk_widgets = (self.bulk_field, self.bulk_op, self.bulk_amount, apply_btn)
+        return self.batch
+
+    def _update_bulk(self):
+        n = len(self.selected_indexes())
+        self.batch.set_visible(bool(n))
+        if n:
+            self.batch_label.set_text(f"{n} selected · {len(self.dirty)} pending edit(s)")
+
+    def _bulk_apply(self):
+        """Set, add or subtract one field across every ticked player, clamped to its range."""
+        indexes = self.selected_indexes()
+        if not indexes:
+            return
+        label = self.BULK_FIELDS[self.bulk_field.get_selected()]
+        op = self.BULK_OPS[self.bulk_op.get_selected()][1]
+        amount = int(self.bulk_amount.get_value())
+        lo, hi = field_range(label)
+        for i in indexes:
+            old = self.table.get(i, label)
+            new = amount if op == "set" else (old + amount if op == "add" else old - amount)
+            self.table.set(i, label, max(lo, min(hi, new)))
+            self._mark_dirty(i, label)
+            self.rows[i].edited = True
+        self._refresh_cells(indexes)
+        if self.index in indexes:
+            self._load(self.index)              # the form shows the current player: reload it
+        done = f"set {label} to {max(lo, min(hi, amount))}" if op == "set" \
+            else f"{op} {amount:+d} {label}"
+        self.status.set_text(f"{done} on {len(indexes)} player(s) · "
+                             f"{len(self.dirty)} pending edit(s) · Save writes it")
+        self._update_bulk()
+
+    def _refresh_cells(self, indexes):
+        """Re-bind the edited rows: a GtkColumnView binds an item once, so writing a property
+        repaints nothing. Swapping the row object in the store is what refreshes the cell."""
+        seen, batch = set(), []
+        for i in sorted(indexes):
+            if i in seen:
+                continue
+            seen.add(i)
+            old = self.rows[i]
+            t = self.table
+            batch.append((i, Row(index=i, pid=old.pid, name=t.name(i), club=old.club,
+                                 pos=pes2019.POSITION_NAMES[t.get(i, "Position")],
+                                 spd=t.get(i, "Speed"), bc=t.get(i, "Ball Control"),
+                                 fin=t.get(i, "Finishing"), sta=t.get(i, "Stamina"),
+                                 edited=True)))
+        for i, row in batch:
+            self.rows[i] = row
+            self.store.splice(i, 1, [row])      # replace in place: the view re-binds that cell
+        self._update_count()
+
     def _footer(self, source):
         bar = Gtk.Box(spacing=8)
         bar.add_css_class("footer")
@@ -520,19 +682,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         bar.set_margin_top(4)
         bar.set_margin_bottom(10)
         revert = Gtk.Button(label="Revert")
-        revert.connect("clicked", lambda _b: self._load(self.index))
+        revert.set_tooltip_text("drop the pending edits and re-read the database")
+        revert.connect("clicked", lambda _b: self._reload())
         bar.append(revert)
-        self.status = Gtk.Label(label=f"PES 2019 · loading {source} …", xalign=0)
+        self.status = Gtk.Label(label=f"PES 2019 · loading {os.path.basename(str(source))} …",
+                                xalign=0)
         self.status.add_css_class("hint")
         self.status.set_hexpand(True)
         bar.append(self.status)
         apply_btn = Gtk.Button(label="Apply to player")
         apply_btn.set_sensitive(False)
+        apply_btn.set_tooltip_text("the form writes as you edit it; Save commits")
         bar.append(apply_btn)
-        save = Gtk.Button(label="Save to game")
-        save.add_css_class("accent")
-        save.set_sensitive(False)
-        bar.append(save)
+        self.save_btn = Gtk.Button(label="Save to game")
+        self.save_btn.add_css_class("accent")
+        self.save_btn.connect("clicked", lambda _b: self._save())
+        bar.append(self.save_btn)
         return bar
 
     # ---- data
@@ -604,8 +769,67 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self._refilter()
         if self.filtered.get_n_items() != total:
             return self._selftest_fail("clearing the search did not restore the list")
+        if os.environ.get("PESFORGE_GTK_SELFTEST", "").lower() in ("write", "2"):
+            return self._selftest_write()
         print(f"SELFTEST OK players={total} selected={self.index} "
               f"abilities={len(self.abilities)} chips={len(self.chips)}", flush=True)
+        self.close()
+        return False
+
+    def _selftest_write(self):
+        """Bulk apply, commit and restore against whatever PES2019_DIR points at.
+
+        Only ever run with that variable aimed at a copy: it does write the database.
+        """
+        try:
+            return self._selftest_write_run()
+        except Exception as exc:                     # a broken check must not hang the app
+            return self._selftest_fail(f"{type(exc).__name__}: {exc}")
+
+    def _selftest_write_run(self):
+        import hashlib
+        path = self.source
+        before = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        backup_dir = settings.backups_dir()
+        pre = set(pes2019.backup_list(backup_dir))
+        picks = [0, 1, 2]
+        for pos in picks:
+            self.selection.select_item(pos, False)
+        label = "Speed"
+        self.bulk_field.set_selected(self.BULK_FIELDS.index(label))
+        self.bulk_op.set_selected(1)                                  # Add
+        self.bulk_amount.set_value(5)
+        old = {i: self.table.get(i, label) for i in picks}
+        print(f"WRITE stage=selected picks={picks}", flush=True)
+        self._bulk_apply()
+        print(f"WRITE stage=applied dirty={len(self.dirty)}", flush=True)
+        for i, was in old.items():
+            want = min(99, was + 5)
+            if self.table.get(i, label) != want:
+                return self._selftest_fail(f"row {i}: {label} is {self.table.get(i, label)}, want {want}")
+        if len(self.dirty) != 3:
+            return self._selftest_fail(f"staged {len(self.dirty)} edits, want 3")
+        if not self.batch_label.get_text().startswith("3 selected"):
+            return self._selftest_fail(f"tray reads {self.batch_label.get_text()!r}")
+        if not all(self.rows[i].edited for i in picks):
+            return self._selftest_fail("a changed row is not flagged in the list")
+        self._save()
+        print(f"WRITE stage=saved status={self.status.get_text()!r}", flush=True)
+        if "saved" not in self.status.get_text():
+            return self._selftest_fail(f"save said {self.status.get_text()!r}")
+        back = pes2019.Cpk2019(path).read_table("Player")
+        for i, was in old.items():
+            if not self._reads_back(back, back.pid(i), {label: min(99, was + 5)}):
+                return self._selftest_fail(f"player {back.pid(i)}: {label} missing after save")
+        fresh = [n for n in pes2019.backup_list(backup_dir) if n not in pre]
+        if not fresh:
+            return self._selftest_fail("the save took no backup")
+        for name in fresh:
+            pes2019.restore_backup(name)
+        if hashlib.sha256(open(path, "rb").read()).hexdigest() != before:
+            return self._selftest_fail("restoring the backups did not return the original bytes")
+        print(f"SELFTEST WRITE OK players={len(self.rows)} edited={len(picks)} "
+              f"backups={len(fresh)} restored=1", flush=True)
         self.close()
         return False
 
@@ -616,21 +840,24 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         return False
 
     def _select_first(self):
-        """Load the selected row — autoselect already picks row 0, and re-selecting it emits
-        no selection-changed, so the form would otherwise sit empty."""
-        pos = self.selection.get_selected()
-        if pos == Gtk.INVALID_LIST_POSITION and self.selection.get_n_items():
-            self.selection.set_selected(0)
-            pos = self.selection.get_selected()
-        row = self.selection.get_selected_item() if pos != Gtk.INVALID_LIST_POSITION else None
-        if row is not None and self.index is None:
-            self._load(row.index)
+        """Load row 0 into the form: nothing is selected up front, and a selection that does not
+        change emits no signal, so the form would otherwise sit empty."""
+        if self.selection.get_n_items() and not self.selection.is_selected(0):
+            self.selection.select_item(0, False)
+        if self.selection.get_n_items() and self.index is None:
+            row = self.sorted.get_item(0)
+            if row is not None:
+                self._load(row.index)
+        self._update_bulk()
         return False
 
     def _on_select(self, _sel, _pos, _n):
-        row = self.selection.get_selected_item()
-        if row is not None:
-            self._load(row.index)
+        """The clicked row drives the form; the tick column drives the batch ops."""
+        if _pos != Gtk.INVALID_LIST_POSITION:
+            row = self.sorted.get_item(_pos)
+            if row is not None:
+                self._load(row.index)
+        self._update_bulk()
 
     # ---- form <-> record
     def _load(self, index):
@@ -668,10 +895,103 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             f"PES 2019 · {len(self.rows):,} players · showing {t.name(index)} (id {pid})"
             + (f" · {len(self.dirty)} edited" if self.dirty else ""))
 
+    # ---- commit
+    def _edited_values(self):
+        """pid -> {field: value}, the form's pending edits keyed by what the game matches on."""
+        edits = {}
+        for i, key in sorted(self.dirty):
+            pid = self.table.pid(i)
+            value = (self.table.name(i) if key == "name:full" else
+                     self.table.shirt(i) if key == "name:shirt" else
+                     self.table.japanese(i) if key == "name:japanese" else
+                     self.table.get(i, key))
+            edits.setdefault(pid, {})[key] = value
+        return edits
+
+    @staticmethod
+    def _reads_back(table, pid, fields):
+        """True when a patched table really carries the edited values for that player."""
+        for i in table.find(str(pid)):
+            if all((table.name(i) if k == "name:full" else
+                    table.shirt(i) if k == "name:shirt" else
+                    table.japanese(i) if k == "name:japanese" else
+                    table.get(i, k)) == v for k, v in fields.items()):
+                return True
+        return False
+
+    def _save(self):
+        """Write every pending edit into each copy of the table, backing each region up first."""
+        if not self.dirty:
+            self.status.set_text("nothing to save · edit a field first")
+            return
+        if not GAME:
+            self.status.set_text("no install to write to (set PES2019_DIR)")
+            return
+        edits = self._edited_values()
+        backup = settings.backups_dir()
+        written, failed = [], []
+        for path in pes2019.database_cpks(GAME):
+            try:
+                db = pes2019.Cpk2019(path)
+                table = db.read_table("Player")
+            except (KeyError, OSError, ValueError):
+                continue                      # a pack without a player table
+            hit = 0
+            for pid, fields in edits.items():
+                for i in table.find(str(pid)):
+                    hit += 1
+                    for key, value in fields.items():
+                        if key.startswith("name:"):
+                            table.set_name(i, **{key.split(":", 1)[1]: value})
+                        else:
+                            table.set(i, key, value)
+            if not hit:
+                continue                      # this copy does not carry the player
+            db.patch("Player", table.to_payload(), backup_dir=backup)
+            back = pes2019.Cpk2019(path).read_table("Player")     # saved is not written
+            wrong = [pid for pid, fields in edits.items() if not self._reads_back(back, pid, fields)]
+            name = os.path.basename(path)
+            if wrong:
+                failed.append(f"{name}: {len(wrong)} player(s) did not read back")
+            else:
+                written.append(f"{name} ({hit})")
+        running = subprocess.run(["pgrep", "-f", "PES2019.exe"], capture_output=True).returncode == 0
+        head = "game is running, it reloads the table when you restart it · " if running else ""
+        if failed:
+            self.status.set_text(f"{head}partial save: " + "; ".join(failed))
+            return
+        if not written:
+            self.status.set_text("no database copy carries these players — nothing written")
+            return
+        self.dirty.clear()
+        for r in self.rows:
+            r.edited = False
+        self.status.set_text(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
+                             + f" · backups in {backup}")
+        self._update_bulk()
+
+    def _reload(self):
+        """Drop the pending edits and re-read the database from disk."""
+        try:
+            self.table = pes2019.Cpk2019(self.source).read_table("Player")
+        except (KeyError, OSError, ValueError) as exc:
+            self.status.set_text(f"reload failed: {exc}")
+            return
+        self.dirty.clear()
+        self.index = None
+        self.rows = []
+        self.store.remove_all()
+        self.load_rows()
+        self.populate()
+        self.status.set_text(f"reloaded {self.source_name} · pending edits dropped")
+
     def _mark_dirty(self, index, label):
         self.dirty.add((index, label))
+        self.rows[index].edited = True
         self.status.set_text(f"PES 2019 · {len(self.rows):,} players · "
-                             f"{len(self.dirty)} unsaved field edit(s) — this spike writes nothing")
+                             f"{len(self.dirty)} pending edit(s) · Save writes it")
+        if hasattr(self, "batch"):
+            self._update_bulk()
 
     def _on_ability_changed(self, spin, label):
         if self.loading or self.index is None:
@@ -764,8 +1084,12 @@ def main():
         table = db.read_table("Player")
         teams = pes2019.TeamTable(*db.read_raw("Team"))
         assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
-        install_css(Gdk.Display.get_default())
-        win = PesForgeGtk(_app, table, os.path.basename(source), teams, assign)
+        display = Gdk.Display.get_default()
+        if display is None:
+            print("editor_gtk: no display to draw on (is DISPLAY/WAYLAND_DISPLAY set?)", flush=True)
+            return
+        install_css(display)
+        win = PesForgeGtk(_app, table, source, teams, assign)
         win.clubs = {teams.id(i): teams.name(i) for i in range(len(teams))}
         win.load_rows()
         win.populate()
