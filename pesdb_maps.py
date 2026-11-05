@@ -26,9 +26,6 @@ ALIASES = {
 }
 _ALIASES_BOTH = dict(ALIASES)
 _ALIASES_BOTH.update({dst: src for src, dst in ALIASES.items()})
-# In one game only; conversion reports these instead of guessing a value.
-# (PlaceKicking has no eFootball row but is reached from SetPieceTaking via ALIASES.)
-NO_COUNTERPART = {"DefensiveEngagement", "GKParrying", "GKClearing"}
 
 
 def abilities(version="PES2021"):
@@ -47,7 +44,9 @@ def _props(version):
 def convert_stats(values, src="EFootball", dst="PES2021"):
     """Map {stat name or PropertyName: value} between the two games.
 
-    Returns {"stats": {dst name: value}, "unmapped": [src names]}.
+    Returns {"stats": {dst name: value}, "unmapped": [src names]}. Three stats exist in one game
+    only — eFootball's Defensive Engagement and GK Parrying, PES 2021's GK Clearing — and they
+    are reported as unmapped rather than guessed at.
     """
     src_props = _props(src)
     dst_props = _props(dst)

@@ -660,6 +660,7 @@ def restore_backup(base):
 
 # ---------------------------------------------------------------- install discovery
 GAME_DIRS = (
+    "~/Games/Pro Evolution Soccer 2015",
     "~/.wine/drive_c/Program Files (x86)/Pro Evolution Soccer 2015",
     "~/.wine/drive_c/Program Files/Pro Evolution Soccer 2015",
     "~/.local/share/wineprefixes/*/drive_c/Program Files*/Pro Evolution Soccer 2015",

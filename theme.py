@@ -38,6 +38,30 @@ BASE = {
     },
 }
 
+# The same palettes for a light desktop: only amber has one so far, and any other name falls back
+# to it (its accent is the app's own). Everything else is derived by the same maths below, so a
+# light palette holds the same contrast floors.
+LIGHT = {
+    "amber": {
+        "bg": "#f6f3ee", "panel": "#fffefc", "panel2": "#ece5da", "fg": "#2b2117",
+        "dim": "#6d6152", "accent": "#b0741b", "green": "#2f8f4e", "magenta": "#a03a72",
+        "warn": "#b23b2e", "line": "#dbd1c3",
+    },
+}
+
+
+def light_base(name):
+    """A light base for any palette: the light amber surfaces carrying that palette's accent.
+
+    Only amber needed hand-tuning; the others take its surfaces and have their accent darkened
+    until it reads on them, so a light desktop can still pick crimson or ice.
+    """
+    if name in LIGHT:
+        return LIGHT[name]
+    base = dict(LIGHT[DEFAULT])
+    base["accent"] = away(BASE.get(name, BASE[DEFAULT])["accent"], base["panel2"], 4.5)
+    return base
+
 # Settings offers these in this order; the first is the default.
 CHOICES = (("amber", "Amber"), ("crimson", "Crimson"), ("ice", "Ice"), ("pitch", "Pitch"))
 DEFAULT = CHOICES[0][0]
@@ -120,9 +144,23 @@ def away(fg, ground, ratio):
     return out
 
 
-def tokens(name=DEFAULT):
-    """Flat token dict for one palette. Keys are the C_* names, lowercased."""
-    base = BASE.get(name) or BASE[DEFAULT]
+def ink_on(accent):
+    """Dark-or-light ink that reads on an accent fill, whichever pole is further from it.
+
+    A mid-tone accent (light ice at #306e84) is too dark for black ink and too light for white,
+    so the pole with more contrast is picked and then pushed until it clears 4.5:1.
+    """
+    start = BLACK if contrast(BLACK, accent) >= contrast(WHITE, accent) else WHITE
+    return away(start, accent, 4.5)
+
+
+def tokens(name=DEFAULT, mode="dark"):
+    """Flat token dict for one palette. Keys are the C_* names, lowercased.
+
+    `mode` picks the dark (default) or light base for that palette name; a palette with no light
+    variant of its own falls back to the light base, so a light desktop never gets a dark panel.
+    """
+    base = light_base(name) if mode == "light" else (BASE.get(name) or BASE[DEFAULT])
     bg, panel, panel2 = base["bg"], base["panel"], base["panel2"]
     accent, fg, dim = base["accent"], base["fg"], base["dim"]
     return {
@@ -133,7 +171,8 @@ def tokens(name=DEFAULT):
         "line_soft": toward(base["line"], bg, 1.6),      # a hairline that is still a line
         "hover": mix(panel2, fg, 0.07),
         "sel": mix(panel2, accent, 0.22),
-        "ink": mix(bg, accent, 0.10),                    # text on an accent fill
+        # text on an accent fill: dark ink on a dark theme, whichever pole reads for a light one
+        "ink": mix(bg, accent, 0.10) if mode != "light" else ink_on(accent),
         "fg": fg,
         "dim": dim,
         "hint": toward(dim, bg, FLOORS["hint"]),

@@ -196,17 +196,26 @@ def backups_dir(cfg=None, state=None):
 
 
 def prune_backups(directory, keep):
-    """Delete all but the newest `keep` files. 0 or less keeps everything."""
+    """Delete all but the newest `keep` backups. 0 or less keeps everything.
+
+    A backup is a base name plus every file beside it (the region dump and its `.json`
+    sidecar), so a pair is never split and a kept backup keeps its sidecar.
+    """
     if not keep or keep <= 0 or not os.path.isdir(directory):
         return 0
-    files = [os.path.join(directory, f) for f in os.listdir(directory)]
-    files = sorted((f for f in files if os.path.isfile(f)),
-                   key=os.path.getmtime, reverse=True)
+    groups = {}
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        if os.path.isfile(path):
+            groups.setdefault(name.rsplit(".", 1)[0], []).append(path)
+    order = sorted(groups.values(),
+                   key=lambda files: max(os.path.getmtime(p) for p in files), reverse=True)
     removed = 0
-    for path in files[keep:]:
-        try:
-            os.remove(path)
-            removed += 1
-        except OSError:
-            pass
+    for files in order[keep:]:
+        for path in files:
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
     return removed

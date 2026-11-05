@@ -604,6 +604,7 @@ class Editor(tk.Tk):
         self._radar_job = None
         self._radar_poly = None
         self._radar_axes = None
+        self._career_job = None
         self.index = None          # record index shown
         self.view_mode = tk.StringVar(value="players")   # the list's Players/Clubs tab
         self.reindex()
@@ -629,7 +630,8 @@ class Editor(tk.Tk):
         self._main_status = (f"{len(self.table.records):,} players loaded from {self.game_dir}"
                              f"{where}{shadow}")
         self.status(self._main_status)
-        self.after(150, self._update_career_note)     # one pass over the table, off the open path
+        # one pass over the table, off the open path; the id is kept so destroy() can drop it
+        self._career_job = self.after(150, self._update_career_note)
         self._park_if_asked()
 
     def _career_empties(self):
@@ -1828,7 +1830,9 @@ class Editor(tk.Tk):
         self.career_note.pack(fill="x", pady=(0, 3))
         self._wrap(self.career_note, cap=340)
         # a relayout rebuilds this section; the note's text has to be put back on the new label
-        self.after_idle(self._update_career_note)
+        if self._career_job is not None:
+            self.after_cancel(self._career_job)
+        self._career_job = self.after_idle(self._update_career_note)
         # one grid, so the date row shares its columns with every row below it
         fields = dates + others + list(pesdb.MOTIONS)
         self._career_grid = {"labels": [f[0] for f in fields], "cols": cols}
@@ -1992,7 +1996,9 @@ class Editor(tk.Tk):
             self.vars["Skill " + label] = v
             chip = Pill(grid, label, self._chip_font,
                         lambda l=label: self.toggle_skill(l))
-            chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
+            # padx 4, the same figure _filter_skills re-grids with: at 8 the 4-column grid
+            # needs 517px and overflows the 511px pane it is planned into
+            chip.grid(row=r, column=c, sticky="w", padx=(0, 4), pady=1)
             chip.bind("<Button-3>", lambda e, l=label: self.toggle_skill(l))
             self._skill_chips[label] = chip
             self._field_section["Skill " + label] = "skills"
@@ -3076,7 +3082,7 @@ class Editor(tk.Tk):
     def destroy(self):
         self._closing = True
         for attr in ("_portrait_job", "_radar_job", "_after", "_club_after",
-                     "_resize_repaint_job", "_one_page_job", "_fold_job"):
+                     "_resize_repaint_job", "_one_page_job", "_fold_job", "_career_job"):
             job = getattr(self, attr, None)
             if job:
                 setattr(self, attr, None)

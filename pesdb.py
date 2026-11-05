@@ -145,26 +145,31 @@ def country_name(nid):
     return COUNTRIES.get(nid, "")
 
 
+def encode_name(text, slot=NAME_SLOT):
+    """UTF-8 bytes for one fixed-width name slot: never split mid-codepoint, zero-padded."""
+    b = str(text).encode("utf-8")[:slot - 1]
+    while b:
+        try:
+            b.decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            b = b[:-1]
+    return b + b"\x00" * (slot - len(b))
+
+
 def is_wesys(buf):
     return len(buf) >= 16 and buf[3:8] == b"WESYS"
 
 
-def wesys_unpack(buf):
-    """Return (raw, compressed_size, declared_uncompressed_size, prefix)."""
-    if not is_wesys(buf):
-        raise ValueError("not a WESYS block")
-    csz, usz = struct.unpack("<II", buf[8:16])
-    out = zlib.decompressobj().decompress(buf[16:16 + csz])
-    return out, csz, usz, buf[:3]
+def wesys_pack(raw, prefix=b"\x00\x01\x01", level=9):
+    """WESYS block, level 9 only.
 
-
-def wesys_pack(raw, prefix=b"\x00\x01\x01", level=None):
-    """WESYS block. Tries several zlib levels and keeps the smallest — the CPK slots are tight."""
+    The old sweep over every zlib level cost 1.9s per save on an 8MB table and level 9 was always
+    the winner (measured on the shipped tables); a payload that outgrows its slot still takes
+    `patch_table`'s append path, so nothing depends on the last few bytes.
+    """
     raw = bytes(raw)
-    if level is None:
-        comp = min((zlib.compress(raw, lv) for lv in range(9, -1, -1)), key=len)
-    else:
-        comp = zlib.compress(raw, level)
+    comp = zlib.compress(raw, level)
     return prefix + b"WESYS" + struct.pack("<II", len(comp), len(raw)) + comp
 
 
@@ -176,31 +181,6 @@ def _find_block(data, offset, span=8192):
     end = min(len(data), offset + span)
     i = data.find(b"WESYS", offset, end)
     return (i - 3) if i > 0 else offset
-
-
-def read_pesdb(cpk_path, names=("Player", "Team", "PlayerAssignment")):
-    """Extract pesdb tables from a data CPK. Returns {name: raw decompressed bytes}."""
-    c = cpk.Cpk(cpk_path)
-    data = c.d
-    out = {}
-    for row in c.entries():
-        fn = row.get("FileName", "")
-        stem = fn[:-4] if fn.endswith(".bin") else fn
-        if stem not in names:
-            continue
-        off = _find_block(data, row["FileOffset"])
-        size = row["FileSize"]
-        # slack: some shipped files are stored longer than their TOC size claims
-        out[stem] = data[off:off + size + 4096]
-    return out
-
-
-def table_raw(blob):
-    """Decompressed bytes of a pesdb table file blob."""
-    idx = blob.find(b"WESYS")
-    if idx < 0:
-        return blob
-    return wesys_unpack(blob[idx - 3:])[0]
 
 
 def _wesys_starts(blob):
@@ -251,6 +231,12 @@ def _table_block(blob):
 def table_rows(blob):
     """Decompressed rows of a table file blob, eof checked."""
     return _table_block(blob)[1]
+
+
+def table_prefix(blob):
+    """The 3 bytes in front of the table's real WESYS magic (the re-pack prefix)."""
+    start = _table_block(blob)[0]
+    return blob[start:start + 3]
 
 
 def read_table(cpk_path, name):
@@ -334,9 +320,7 @@ class PlayerTable(LeadTable):
         for n, val in ((0, full), (1, shirt), (2, shirt), (3, full)):
             if val is None:
                 continue
-            b = val.encode("utf-8")[:NAME_SLOT - 1]
-            rec[NAME_OFF + n * NAME_SLOT:NAME_OFF + (n + 1) * NAME_SLOT] = \
-                b + b"\0" * (NAME_SLOT - len(b))
+            rec[NAME_OFF + n * NAME_SLOT:NAME_OFF + (n + 1) * NAME_SLOT] = encode_name(val, NAME_SLOT)
 
     # to_file() comes from LeadTable: lead block + re-packed WESYS rows.
 
@@ -423,6 +407,7 @@ def patch_table(cpk_path, name, blob, backup_dir=None, slots_path=None):
     new_off = (len(c.d) + 0x7FF) & ~0x7FF        # 2 KiB aligned, past everything else
     c.toc.set_row_int(index, "FileOffset", new_off)
     c.toc.set_row_int(index, "FileSize", len(blob))
+    c.toc.set_row_int(index, "ExtractSize", len(blob))   # the 2019/2015 writers keep it in step
     with open(cpk_path, "r+b") as f:
         f.seek(0)
         f.write(c.d)
@@ -430,27 +415,6 @@ def patch_table(cpk_path, name, blob, backup_dir=None, slots_path=None):
         f.write(blob)
         f.truncate()
     return new_off, len(blob)
-
-
-def livecpk_path(game_dir, filename):
-    return os.path.join(game_dir, "SiderAddons", "livecpk", "root",
-                        "common", "etc", "pesdb", filename)
-
-
-def livecpk_override_path(game_dir):
-    return livecpk_path(game_dir, "Player.bin")
-
-
-def current_player_file(game_dir):
-    """The file the game would load now: the live-CPK override if one exists, else the CPK."""
-    override = livecpk_override_path(game_dir)
-    return override if os.path.exists(override) else None
-
-
-def current_table_file(game_dir, filename):
-    """Live-CPK override for any pesdb table, or None when the game uses the shipped one."""
-    path = livecpk_path(game_dir, filename)
-    return path if os.path.exists(path) else None
 
 
 def squads(pa_raw):
@@ -461,14 +425,6 @@ def squads(pa_raw):
         if pid and team:
             out.setdefault(team, []).append(pid)
     return out
-
-
-def assignment_row(pa_raw, pid):
-    """Offset of the first 16-byte row for `pid` (the one player_teams() reports), or None."""
-    for i in range(0, len(pa_raw) - 15, 16):
-        if struct.unpack_from("<I", pa_raw, i + 4)[0] == pid:
-            return i
-    return None
 
 
 def assignment_rows(pa_raw, pid):
@@ -690,8 +646,7 @@ class TeamTable(LeadTable):
         return self.slot(i, 368, 70)
 
     def set_slot(self, i, offset, length, value):
-        b = value.encode("utf-8")[:length - 1]
-        self.records[i][offset:offset + length] = b + b"\0" * (length - len(b))
+        self.records[i][offset:offset + length] = encode_name(value, length)
 
     # the club's coach link and its home stadium live at the top of the team record
     def coach_id(self, i):
@@ -726,8 +681,7 @@ class CoachTable(LeadTable):
         return self.slot(i, 8)
 
     def set_slot(self, i, offset, value):
-        b = value.encode("utf-8")[:44]
-        self.records[i][offset:offset + 45] = b + b"\0" * (45 - len(b))
+        self.records[i][offset:offset + 45] = encode_name(value, 45)
 
     def set_name(self, i, value):
         self.set_slot(i, 54, value)

@@ -607,12 +607,9 @@ class CoachTable:
 
 # ------------------------------------------------- PlayerAssignment.bin (16-byte rows)
 ASSIGN_REC = 16
-ASSIGN_ROW_ID = 0            # u32: the row's own running id, not the player
 ASSIGN_PLAYER = 4            # u32: the player id
 ASSIGN_TEAM = 8              # u32: the team id (below 100 national, 100+ clubs)
 ASSIGN_NUMBER = 12           # byte: the shirt number, stored one below the shown one
-ASSIGN_SLOT = 13             # byte: 4 x the row's index inside its squad, not a position
-ASSIGN_FLAGS = 14            # byte: six single-bit flags, 0 through this install
 
 
 class AssignmentTable:

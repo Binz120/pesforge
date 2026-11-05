@@ -22,7 +22,7 @@ import pesdb
 import pesdb_maps as maps
 import pes2015
 import pes2019
-import settings
+import pes2021
 import settings
 
 # Any machine: SPFL_GAME wins, else whatever the editor would auto-detect.
@@ -1820,6 +1820,8 @@ def test_playing_style_enum():
                       (17, "Defensive Goalkeeper"), (18, "Roaming Flank"),
                       (20, "Orchestrator"), (21, "Full-back Finisher")):
         assert editor.PLAY_STYLES[idx] == name, (idx, editor.PLAY_STYLES[idx])
+    # the GTK build's 2021 adapter carries the same list, and the two must not drift apart
+    assert pes2021.STYLE_NAMES == tuple(editor.PLAY_STYLES), pes2021.STYLE_NAMES
 
 
 def test_pes2015_form_is_compact():
@@ -1884,6 +1886,148 @@ def pes2019_box():
     shutil.copy2(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"),
                  os.path.join(box, "game", "Data", "dt10_x64.cpk"))
     return box
+
+
+def pes2019_mounted_database(game):
+    """The CPK the GTK app opens by default: the mounted dt80 pack, else the base table."""
+    packs = pes2019.database_cpks(game)
+    return next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")),
+                packs[0] if packs else "")
+
+
+def pes2021_database():
+    """This machine's SP Football Life database (SPFL_DIR wins), or raise for a skip."""
+    folder = os.environ.get("SPFL_DIR") or settings.game_dir()
+    path = settings.database_path(folder) if folder else ""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(2, "no SP Football Life database", "data_s2627.cpk")
+    return path
+
+
+def test_pesdb_name_never_splits_a_codepoint():
+    """The 312-byte name slot is cut at a codepoint boundary, exactly like 2015/2019."""
+    box = sandbox()
+    table = pes2021.Cpk(box_cpk(box)).read_table("Player")
+    name = "\u6f22" * 19 + "ab" + "\u6f22" * 10          # 89 bytes: a naive cut splits char 21
+    table.set_name(3, full=name)
+    got = table.name(3)
+    assert "\ufffd" not in got, repr(got)
+    assert len(got.encode("utf-8")) <= pesdb.NAME_SLOT - 1, got
+    assert pesdb.encode_name(name).split(b"\x00")[0].decode("utf-8") == got, got
+
+
+def test_pes2021_reads_the_shipped_database():
+    """The 2021 adapter over the real FL27 bytes, in the vocabulary the panel asks for."""
+    db = pes2021.Cpk(pes2021_database())
+    table = db.read_table("Player")
+    teams = db.read_table("Team")
+    assign = db.read_table("PlayerAssignment")
+    assert (len(table), len(teams), len(assign)) == (26395, 745, 21240), \
+        (len(table), len(teams), len(assign))
+    i = table.find("7511")[0]
+    assert table.name(i) == "Lionel Messi", table.name(i)
+    assert (table.get(i, "Height"), table.get(i, "Age")) == (170, 39)
+    assert table.get(i, "Foot") == 1, "Messi is left-footed"
+    assert table.get(i, "Stronger Foot") == 1, "pesdb's own label reads the same field"
+    assert pes2021.STYLE_NAMES[table.get(i, "Playing Style")] == "Classic No. 10"
+    assert pes2021.POSITION_NAMES[table.get(i, "Position")] == "SS"
+    assert (len(pes2021.ABILITIES), len(pes2021.SKILLS)) == (25, 48)
+    assert len(pes2021.STYLE_NAMES) == 32, "the 5-bit style field, 22 of them named"
+    assert pes2021.STYLE_NAMES[21] == "Full-back Finisher"
+    assert table.japanese(i) == "", "a 312-byte record has no Japanese name slot"
+    assert "Height" in pes2021.FIELD_BY_LABEL and "Skill: Scissors Feint" in pes2021.FIELD_BY_LABEL
+    # the panel's own accessors land on the right rows
+    assert teams.id(0) == 1 and teams.name(0).lower() == "ireland"
+    rows = assign.find(7511)
+    assert len(rows) == 2 and all(assign.player(r) == 7511 for r in rows), rows
+    assert assign.number(rows[0]) >= 1
+    # a set/read round trip on a copy in memory: no file is touched here
+    was = table.get(i, "Speed")
+    table.set(i, "Speed", 99)
+    assert table.get(i, "Speed") == 99
+    table.set(i, "Speed", was)
+    assert table.get(i, "Speed") == was
+    table.set(i, "Speed", 250)                        # clamped, never wrapped around
+    assert table.get(i, "Speed") == 99, table.get(i, "Speed")
+
+
+def test_gtk4_theme_follows_the_system():
+    """The app paints light or dark as the desktop asks, with readable contrast either way."""
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    seen = {}
+    for mode in ("light", "dark"):
+        env = dict(os.environ, PESFORGE_THEME=mode, PESFORGE_GTK_SELFTEST="theme")
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                             text=True, env=env, timeout=300)
+        text = out.stdout + out.stderr
+        assert "SELFTEST THEME" in text, text[-500:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST THEME")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert line.split()[2] == mode, line
+        assert float(parts["contrast"]) >= 4.5, line
+        seen[mode] = parts["bg"]
+    assert seen["light"] != seen["dark"], seen          # the two modes are actually different
+
+
+def test_gtk4_compact_layout_fits_without_scrolling():
+    """The whole editor is on screen at the tiled size and at the default: no pane scrolls.
+
+    The panes sit in scroll areas as a safety net, so the check is that their content still fits
+    the page the scroller shows — this is what the user asked for (no scrolling, no resizing).
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    for size in ("917x1030", "941x1030", "1504x1030"):   # 941 is the size the app is used at
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="fit", PESFORGE_GTK_SIZE=size, SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST FIT OK" in text, text[-700:]
+    assert "scrolls" not in text, text[-400:]
+
+
+def test_gtk4_edits_and_saves_pes2021():
+    """SP Football Life is editable: load the install's database copy, edit, save, read it back.
+
+    The check copies the database into a scratch folder shaped like an install
+    (`download/data_s2627.cpk`), edits an ability, a skill and the shirt name, saves, and reads
+    all three back off disk — the app hashes the game's own file and asserts it is untouched.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2021", SPFL_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE2021 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+    found = re.search(r"SELFTEST WRITE2021 OK players=(\d+) pid=(\d+)", text)
+    assert found and int(found.group(1)) == 26395, text[-400:]
+    shutil.rmtree(os.path.join(os.environ.get("TMPDIR") or "/tmp", "pesforge-2021-check"),
+                  ignore_errors=True)
+
+
+def national_first_count(cpk_path):
+    """Players whose first assignment row is a national team.
+
+    The count the CLUB column has to get right: those rows used to read IRELAND where the
+    player's club belongs. Computed here from the CPK, independently of the app.
+    """
+    db = pes2019.Cpk2019(cpk_path)
+    players = db.read_table("Player")
+    assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    teams_of = {}
+    for i in range(len(assign)):
+        teams_of.setdefault(assign.player(i), []).append(assign.team(i))
+    return sum(1 for i in range(len(players))
+               if teams_of.get(players.pid(i))
+               and teams_of[players.pid(i)][0] <= pesdb.NATIONAL_MAX)
 
 
 def test_pes2019_reads_the_shipped_table():
@@ -2029,7 +2173,9 @@ def test_gtk4_app_builds_and_searches():
     """The GTK4 screen builds on the installed PES 2019 table and its search narrows the list.
 
     Drives the app through its own self-check (`PESFORGE_GTK_SELFTEST=1`): a window that opens is
-    not the same as a list holding the real rows with a record loaded into the form.
+    not the same as a list holding the real rows with a record loaded into the form. The same run
+    proves the two data/UI fixes: no CLUB cell shows a national team where the club belongs, and
+    the window carries no inert button (the spike's Undo/Redo/Discard/Save-to-game header row).
     """
     game = pes2019_install()
     py = gtk4_python()
@@ -2049,6 +2195,12 @@ def test_gtk4_app_builds_and_searches():
     assert abilities == 23, f"{abilities} ability rows"
     expected = len(pes2019.SKILLS) + len(pes2019.COM_STYLES)
     assert chips == expected, f"{chips} skill chips, the map holds {expected}"
+    assert "CHROME OK buttons=6" in text, text[-600:]
+    found = re.search(r"nations=(\d+)", text)
+    assert found, text[-300:]
+    wanted = national_first_count(pes2019_mounted_database(game))
+    assert int(found.group(1)) == wanted and wanted > 0, (
+        f"the app repaired {found.group(1)} national-first club rows, the CPK says {wanted}")
 
 
 def test_gtk4_bulk_matrix_stages_and_commits():
@@ -2072,6 +2224,7 @@ def test_gtk4_bulk_matrix_stages_and_commits():
     assert "SELFTEST WRITE OK" in text, text[-600:]
     found = re.search(r"SELFTEST WRITE OK players=(\d+) edited=(\d+) backups=(\d+) restored=(\d+)", text)
     assert found, text[-300:]
+    assert "state=clean" in text, "the saved rows still read as edited in the list"
     players, edited, backups, restored = (int(g) for g in found.groups())
     assert players > 10000, f"only {players} players listed"
     assert edited == 3, f"{edited} players edited"
@@ -2102,53 +2255,81 @@ def test_gtk4_starts_empty_and_imports_on_demand():
                             env=dict(env, PESFORGE_GTK_SELFTEST="1"))
         picked = out.stdout + out.stderr
         assert "source=dt10_x64.cpk" in picked, picked[-400:]
+    # and a folder pick: the install itself resolves to the pack the game loads
+    pack = pes2019_mounted_database(game)
+    if pack and os.path.isfile(pack):
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, timeout=900,
+                             env=dict(env, PESFORGE_GTK_SELFTEST="1"))
+        picked = out.stdout + out.stderr
+        assert "SELFTEST OK" in picked, picked[-400:]
+        assert f"source={os.path.basename(pack)}" in picked, picked[-400:]
 
 
 def test_gtk4_import_probe_identifies_the_release():
-    """The importer reads the release out of the table, and explains a file it cannot use."""
+    """The importer reads the release out of the table, and explains a file it cannot use.
+
+    A pick also resolves: the folder the file sits in, then the install around it. SP Football
+    Life's `Data/dt10_x64.cpk` is an 86 KB stub with no player table, so a filename is never
+    enough — the resolver probes the candidates and takes the one that really carries a table.
+    """
     game = pes2019_install()
     py = gtk4_python()
     junk = f"/tmp/pesforge-notacpk-{os.getpid()}.txt"
+    pack = pes2019_mounted_database(game)
     script = (
         "import sys; sys.path.insert(0, %r); import editor_gtk as g\n"
         "print('good', g.probe_database(%r))\n"
         "open(%r, 'w').write('not a cpk')\n"
         "print('junk', g.probe_database(%r))\n"
-    ) % (ROOT, os.path.join(game, "Data", "dt10_x64.cpk"), junk, junk)
+        "print('junk-dir', g.find_database(%r)[0] == '')\n"
+    ) % (ROOT, os.path.join(game, "Data", "dt10_x64.cpk"), junk, junk, os.path.dirname(junk))
     # a pick that lands on a CPK without the tables must find the one that has them
     empty = os.path.join(game, "Data", "dt00_4K_x64.cpk")
-    script += ("print('swap', g.sibling_database(%r).split('/')[-1])\n"
-               "print('nada', repr(g.sibling_database(%r)))\n") % (empty, junk)
-    # SP Football Life's download/ is 20+ 01_smkdb_* entries plus the one real database
-    smkdb = os.path.join(settings.game_dir() or "", "download", "01_smkdb_fa2.cpk")
-    if os.path.isfile(smkdb):
-        # the chooser opens where you last picked, so a pick is not pushed at you
-        script += ("print('folder', g.import_start_folder(%r))\n"
-                   ) % os.path.join(settings.game_dir(), "download")
-        script += ("print('spfl swap', g.sibling_database(%r).split('/')[-1])\n"
-                   "print('spfl probe', g.probe_database(%r)[0])\n"
-                   ) % (smkdb, os.path.join(settings.game_dir(), "download", "data_s2627.cpk"))
-    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=600,
+    if os.path.isfile(empty):
+        script += ("print('file-pick', g.describe_pick(%r)[2].split('/')[-1])\n"
+                   "print('data-folder', g.find_database(%r)[0].split('/')[-1])\n"
+                   ) % (empty, os.path.dirname(empty))
+    if pack and os.path.isfile(pack):
+        script += ("print('install', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('install-vintage', g.find_database(%r)[1])\n"
+                   "print('install-ok', g.describe_pick(%r)[1])\n"
+                   ) % (game, game, game)
+    # SP Football Life's Data/ holds no database at all: the answer is one shelf up in download/
+    spfl = settings.game_dir() or ""
+    if spfl and os.path.isfile(os.path.join(spfl, "download", "data_s2627.cpk")):
+        script += ("print('spfl-root', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('spfl-vintage', g.find_database(%r)[1])\n"
+                   "print('spfl-loadable', g.describe_pick(%r)[1])\n"
+                   "print('spfl-data-pick', g.describe_pick(%r)[2].split('/')[-1])\n"
+                   ) % (spfl, spfl, spfl, os.path.join(spfl, "Data"))
+    pes15 = os.environ.get("PES2015_DIR") or ""
+    if pes15 and os.path.isfile(os.path.join(pes15, "Data", "dt10.cpk")):
+        script += ("print('pes2015-root', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('pes2015-vintage', g.find_database(%r)[1])\n"
+                   ) % (pes15, pes15)
+    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=900,
                          env=dict(os.environ, GDK_BACKEND="x11"))
     text = out.stdout + out.stderr
     assert "('pes2019'" in text, text[-400:]
     assert "13,805" in text, text[-400:]
     assert "'unreadable'" in text, text[-400:]
-    assert "nada ''" in text, text[-400:]
-    if os.path.isfile(smkdb):
-        assert "SP Football Life 2027/download" in text, text[-400:]
-        assert "spfl swap data_s2627.cpk" in text, text[-400:]
-        assert "spfl probe pes2021" in text, text[-400:]
+    assert "junk-dir True" in text, text[-400:]
     if os.path.isfile(empty):
-        assert "swap dt10_x64.cpk" in text, text[-400:]
-    # a pick inside download/ must resolve to the pack that overrides the others
-    script = ("import sys; sys.path.insert(0, %r); import editor_gtk as g\n"
-              "print('mounted', g.sibling_database(%r).split('/')[-1])\n"
-              ) % (ROOT, os.path.join(game, "download", "zz-missing.cpk"))
-    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300)
-    mounted = [l for l in out.stdout.splitlines() if l.startswith("mounted")]
-    if mounted:
-        assert mounted[0].endswith("dt80_200E_x64.cpk"), mounted[0]
+        assert "file-pick dt10_x64.cpk" in text, text[-400:]
+        assert "data-folder dt10_x64.cpk" in text, text[-400:]
+    if pack and os.path.isfile(pack):
+        assert f"install {os.path.basename(pack)}" in text, text[-500:]
+        assert "install-vintage pes2019" in text, text[-500:]
+        assert "install-ok True" in text, text[-500:]
+    if spfl and os.path.isfile(os.path.join(spfl, "download", "data_s2627.cpk")):
+        assert "spfl-root data_s2627.cpk" in text, text[-500:]
+        assert "spfl-vintage pes2021" in text, text[-500:]
+        assert "spfl-loadable True" in text, text[-500:]
+        assert "spfl-data-pick data_s2627.cpk" in text, text[-500:]
+    if pes15 and os.path.isfile(os.path.join(pes15, "Data", "dt10.cpk")):
+        assert "pes2015-root dt10.cpk" in text, text[-500:]
+        assert "pes2015-vintage pes2015" in text, text[-500:]
     try:
         os.unlink(junk)
     except OSError:
@@ -2178,8 +2359,8 @@ def test_gtk4_import_cycle_across_installs():
     assert "step=1 name=pes2019 result=loaded" in text, text[-700:]
     assert "step=1 name=pes2019 result=skipped" not in text, text[-700:]
     if env["SPFL_DIR"]:
-        assert "step=2 name=spfl result=refused" in text, text[-700:]
-        assert "pes2021" in text, text[-700:]
+        assert "step=2 name=spfl result=loaded" in text, text[-700:]
+        assert "PES 2021" in text, text[-700:]
     if env["PES2015_DIR"]:
         assert "step=3 name=pes2015 result=loaded" in text, text[-700:]
         assert "PES 2015 · 10,091 players" in text, text[-700:]
@@ -2218,7 +2399,7 @@ def test_gtk4_import_hub_describes_a_pick():
     assert "a PES 2019 pack is loadable: True" in text, text[-600:]
     assert "a PES 2015 database is loadable: True" in text, text[-600:]
     if os.path.isfile(os.path.join(settings.game_dir() or "", "download", "data_s2627.cpk")):
-        assert "SP Football Life is refused: False" in text, text[-600:]
+        assert "SP Football Life is loadable: True" in text, text[-600:]
 
 
 def test_gtk4_edits_and_saves_pes2015():

@@ -46,8 +46,14 @@ fi
 # Fill in the session variables only when the desktop has not provided them.
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
-if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
-  export WAYLAND_DISPLAY=wayland-0
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+  # Hyprland and friends do not always call it wayland-0: take the first socket there is
+  for sock in "$XDG_RUNTIME_DIR"/wayland-*; do
+    case "$sock" in *.lock) continue ;; esac
+    [ -S "$sock" ] || continue
+    export WAYLAND_DISPLAY="${sock##*/}"
+    break
+  done
 fi
 
 cd "$APP_DIR" || exit 1
