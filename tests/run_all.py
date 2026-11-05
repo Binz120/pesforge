@@ -21,6 +21,7 @@ sys.path.insert(0, ROOT)
 import pesdb
 import pesdb_maps as maps
 import pes2015
+import pes2019
 import settings
 import settings
 
@@ -1696,15 +1697,18 @@ def test_import_database_validates_foreign_files():
         pass
     else:
         raise AssertionError("a non-CPK file passed database validation")
-    folder = pes2015.find_game_dir()
-    if folder and os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+    for module, folder, pack, vintage in ((pes2015, pes2015.find_game_dir(), "dt10.cpk", "PES 2015"),
+                                          (pes2019, pes2019.find_game_dir(), "dt10_x64.cpk", "PES 2019")):
+        path = os.path.join(folder, "Data", pack) if folder else ""
+        if not path or not os.path.isfile(path):
+            continue
         try:
-            editor.validate_database(os.path.join(folder, "Data", "dt10.cpk"))
+            editor.validate_database(path)
         except ValueError as exc:
-            assert "PES 2015" in str(exc), exc          # the refusal names the vintage
-            assert "PES 2015 database" in str(exc), exc  # and points at the window
+            assert vintage in str(exc), exc                  # the refusal names the vintage
+            assert f"{vintage} database" in str(exc), exc    # and points at the tab
         else:
-            raise AssertionError("a PES 2015 CPK passed as a PES 2021 database")
+            raise AssertionError(f"a {vintage} CPK passed as a PES 2021 database")
 
 
 def test_pes2015_window_edits_a_sandbox():
@@ -1862,6 +1866,175 @@ def test_pes2015_teams_coaches_squads_roundtrip():
     assert open(cpk_path, "rb").read() == original, "restore did not return the original bytes"
 
 
+
+# ---------------------------------------------------------------- PES 2019
+def pes2019_install():
+    """The PES 2019 install, or a skip when this machine has none (set PES2019_DIR)."""
+    folder = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10_x64.cpk")):
+        raise FileNotFoundError(2, "no PES 2019 install (set PES2019_DIR)", "dt10_x64.cpk")
+    return folder
+
+
+def pes2019_box():
+    """A private copy of dt10_x64.cpk — a patch writes in place, so a link would hit the game."""
+    box = tempfile.mkdtemp(prefix="pesforge-2019-")
+    os.makedirs(os.path.join(box, "game", "Data"))
+    os.makedirs(os.path.join(box, "game", "download"))
+    shutil.copy2(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"),
+                 os.path.join(box, "game", "Data", "dt10_x64.cpk"))
+    return box
+
+
+def test_pes2019_reads_the_shipped_table():
+    """The map against the real bytes: ids, names, bio and the pesdb.net card for Messi."""
+    db = pes2019.Cpk2019(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"))
+    table = db.read_table("Player")
+    assert len(table) == 13805, len(table)
+    found = table.find("7511")
+    assert found, "L. Messi is not in the shipped table"
+    i = found[0]
+    assert (table.name(i), table.shirt(i)) == ("L. MESSI", "MESSI"), table.name(i)
+    assert (table.get(i, "Height"), table.get(i, "Weight"), table.get(i, "Age")) == (170, 72, 31)
+    assert table.get(i, "Foot") == 1, "Messi is left-footed"
+    assert table.get(i, "Nationality") == 144, "country code 144 is Argentina"
+    assert pes2019.STYLE_NAMES[table.get(i, "Playing Style")] == "Creative Playmaker"
+    assert pes2019.POSITION_NAMES[table.get(i, "Position")] == "SS"
+    card = {"Attacking Prowess": 95, "Ball Control": 97, "Dribbling": 96, "Low Pass": 88,
+            "Lofted Pass": 86, "Finishing": 95, "Place Kicking": 90, "Swerve": 89,
+            "Speed": 86, "Explosive Power": 92, "Unwavering Balance": 95,
+            "Physical Contact": 66, "Jump": 67, "Stamina": 76, "Ball Winning": 48,
+            "Goalkeeping": 40, "GK Catch": 40, "Reflexes": 40}
+    got = {k: table.get(i, k) for k in card}
+    assert got == card, {k: (got[k], card[k]) for k in card if got[k] != card[k]}
+    # the goalie copy of the same map: Neuer's two skills are the two pesdb lists
+    neu = table.find("33185")[0]
+    assert (table.get(neu, "Height"), table.get(neu, "Weight")) == (193, 92)
+    skills = [label for label, _bit in pes2019.FLAG_FIELDS.items() if table.get(neu, label)]
+    assert sorted(skills) == ["Skill: GK Long Throw", "Skill: GK Low Punt"], skills
+
+
+def test_pes2019_teams_coaches_and_squads_line_up():
+    """Every foreign key resolves: assignment -> team, team -> coach, and the real squad."""
+    db = pes2019.Cpk2019(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"))
+    teams = pes2019.TeamTable(*db.read_raw("Team"))
+    coaches = pes2019.CoachTable(*db.read_raw("Coach"))
+    assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    stadiums = pes2019.StadiumTable(*db.read_raw("Stadium"))
+    assert (len(teams), len(coaches), len(assign), len(stadiums)) == (529, 529, 14368, 44)
+    barca = teams.by_id()[108]
+    assert teams.name(barca) == "BARCELONA"
+    assert coaches.name(coaches.by_id()[teams.coach_id(barca)]) == "E. VALVERDE"
+    assert stadiums.name(stadiums.find("2")[0]) == "Camp Nou"
+    rows = assign.find(7511)
+    assert sorted((teams.name(teams.by_id()[assign.team(r)]), assign.number(r))
+                  for r in rows) == [("ARGENTINA", 10), ("BARCELONA", 10)], rows
+    known = set(teams.by_id())
+    unknown = {assign.team(r) for r in range(len(assign))} - known
+    assert not unknown, f"{len(unknown)} squad rows point at no team: {sorted(unknown)[:5]}"
+
+
+def test_pes2019_default_targets_include_the_mounted_packs():
+    """The writer's default list: the database pack first, then what DpFileList mounts."""
+    folder = pes2019_install()
+    paths = [os.path.basename(p) for p in pes2019.database_cpks(folder)]
+    assert paths[0] == "dt10_x64.cpk", paths
+    packs = pes2019.mounted_packs(folder)
+    assert packs, "DpFileList.bin names no packs"
+    assert paths[1:] == packs, paths
+    live = [p for p in pes2019.database_cpks(folder) if p.endswith("dt80_200E_x64.cpk")]
+    if live:                      # the live-update pack carries a superset of the base table
+        assert len(pes2019.Cpk2019(live[0]).read_table("Player")) == 16762
+
+
+def test_pes2019_patch_round_trip_and_restore():
+    """One ability and one name change; every other row and field stays byte-identical."""
+    box = pes2019_box()
+    path = os.path.join(box, "game", "Data", "dt10_x64.cpk")
+    original = open(path, "rb").read()
+    db = pes2019.Cpk2019(path)
+    table = db.read_table("Player")
+    i = table.find("7511")[0]
+    before = bytes(table.records[i])
+    table.set(i, "Ball Control", 80)
+    table.set_name(i, shirt="MESSI-X")
+    db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+    back = pes2019.Cpk2019(path).read_table("Player")
+    assert len(back) == len(table), "the row count changed"
+    assert back.get(i, "Ball Control") == 80 and back.shirt(i) == "MESSI-X"
+    # Ball Control is a 6-bit field at bit 134 and the shirt name ends at +102: a few bytes
+    moved = [k for k in range(pes2019.REC) if before[k] != back.records[i][k]]
+    assert len(moved) <= 6, f"{len(moved)} bytes moved: {moved}"
+    for j in range(len(back)):
+        if j != i:
+            assert bytes(back.records[j]) == bytes(table.records[j]), f"row {j} moved"
+    backups = pes2019.backup_list(os.path.join(box, "backups"))
+    assert backups, "no backup was taken"
+    for name in backups:
+        pes2019.restore_backup(name)
+    assert open(path, "rb").read() == original, "restore did not return the original bytes"
+    shutil.rmtree(box, ignore_errors=True)
+
+
+def test_pes2019_tab_swaps_the_body_and_shows_players():
+    """The tab drives the shared panel: body swap, search, select, and back again."""
+    folder = pes2019_install()
+    with gui() as app:
+        app.cfg["pes2019_dir"] = folder
+        app.set_view_mode("pes2019")
+        app.update()
+        panel = app._pes2019_panel
+        assert panel.winfo_ismapped(), "the PES 2019 panel is not on screen"
+        assert not app._one_page_body.winfo_manager(), "the PES 2021 body is still packed"
+        assert panel.copies, "the panel read no player copies"
+        panel.q.set("messi")
+        panel.fill()
+        rows = panel.tree.get_children()
+        assert rows, "the panel list came up empty"
+        panel.tree.selection_set(rows[0])
+        panel.pick()
+        assert panel.pid == 7511, panel.pid
+        assert panel.name_vars["Name"].get() == "L. MESSI", panel.name_vars["Name"].get()
+        app.set_view_mode("players")
+        app.update()
+        assert not panel.winfo_ismapped(), "the panel stayed on screen"
+        assert app._one_page_body.winfo_manager(), "the PES 2021 body did not come back"
+        app.set_view_mode("pes2019")
+        app.update()
+        assert panel.winfo_ismapped(), "the panel did not come back"
+
+
+
+def test_gtk4_app_builds_and_searches():
+    """The GTK4 screen builds on the installed PES 2019 table and its search narrows the list.
+
+    Drives the app through its own self-check (`PESFORGE_GTK_SELFTEST=1`): a window that opens is
+    not the same as a list holding the real rows with a record loaded into the form.
+    """
+    game = pes2019_install()
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401
+    except (ImportError, ValueError) as exc:
+        raise RuntimeError(f"no GTK4 for the GTK4 app ({exc})")
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="1")
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "editor_gtk.py")],
+                         capture_output=True, text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST OK" in text, text[-600:]
+    assert out.returncode == 0, f"the app exited {out.returncode}: {text[-400:]}"
+    found = re.search(r"SELFTEST OK players=(\d+) selected=(\d+) abilities=(\d+) chips=(\d+)", text)
+    assert found, text[-300:]
+    players, selected, abilities, chips = (int(g) for g in found.groups())
+    assert players > 10000, f"only {players} players listed"
+    assert selected < players, f"row {selected} selected of {players}"
+    assert abilities == 23, f"{abilities} ability rows"
+    assert chips >= 48, f"{chips} skill chips"
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
@@ -1875,6 +2048,8 @@ def main():
         except AssertionError as exc:
             failures += 1
             print(f"FAIL {name}: {exc}")
+        except RuntimeError as exc:                  # a skip for a missing optional runtime
+            print(f"skip {name}: {exc}")
     print(f"{len(tests) - failures}/{len(tests)} passed")
     return 1 if failures else 0
 

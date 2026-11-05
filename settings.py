@@ -41,6 +41,7 @@ DEFAULTS = {
     "game_dir": DEFAULT_GAME_DIR,
     "database": "",             # an imported CPK (Database row's Import…); wins over game_dir
     "pes2015_dir": "",          # the PES 2015 install folder; empty = found automatically
+    "pes2019_dir": "",          # the PES 2019 install folder, same deal
     "backups_dir": "",          # empty = <state>/backups
     "max_backups": 50,          # 0 keeps everything
     "confirm_save": True,

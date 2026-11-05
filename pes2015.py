@@ -398,6 +398,10 @@ class Cpk2015:
         self._flush(self.header, 0x10)
 
 
+# Cpk is the vintage-agnostic name the shared panel/CLI asks for.
+Cpk = Cpk2015
+
+
 # ---------------------------------------------------------------- Team.bin (700-byte rows)
 TEAM_REC = 700
 TEAM_ALT_ID = 0            # u16: the id the shipped edit data uses

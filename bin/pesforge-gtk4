@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# PESForge GTK4 — portable launcher for the GTK4 build of the editor.
+#
+# GTK4 draws through Wayland directly, so none of the Tk build's XWayland setup is needed here:
+# no cursor theme, no DISPLAY probing, no DPI workarounds. Set PESFORGE_GTK4_DIR to point at the
+# checkout if it is not found automatically, and PESFORGE_GTK4_PYTHON to force an interpreter.
+set -uo pipefail
+
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+here=$(dirname "$self")
+
+find_app() {
+  local candidate
+  for candidate in "${PESFORGE_GTK4_DIR:-}" "$here" "$here/.." \
+                   "$HOME/Code/pesforge-gtk4" "$HOME/pesforge-gtk4"; do
+    [ -n "$candidate" ] && [ -f "$candidate/editor_gtk.py" ] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
+APP_DIR=$(find_app) || {
+  echo "pesforge-gtk4: editor_gtk.py not found. Set PESFORGE_GTK4_DIR to its folder." >&2
+  exit 1
+}
+
+has_gtk() {
+  "$1" -c 'import gi; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk' >/dev/null 2>&1
+}
+
+PY=""
+# The distro interpreter first: it carries the system GTK4 and fontconfig.
+for candidate in "${PESFORGE_GTK4_PYTHON:-}" /usr/bin/python3 python3 python; do
+  [ -n "$candidate" ] || continue
+  command -v "$candidate" >/dev/null 2>&1 || continue
+  if has_gtk "$candidate"; then PY="$candidate"; break; fi
+done
+
+if [ -z "$PY" ]; then
+  echo "pesforge-gtk4: no Python with GTK4 (PyGObject) found." >&2
+  echo "  Arch:          sudo pacman -S python-gobject gtk4" >&2
+  echo "  Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0" >&2
+  echo "  Fedora:        sudo dnf install python3-gobject gtk4" >&2
+  exit 1
+fi
+
+# Fill in the session variables only when the desktop has not provided them.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+  export WAYLAND_DISPLAY=wayland-0
+fi
+
+cd "$APP_DIR" || exit 1
+exec "$PY" "$APP_DIR/editor_gtk.py" "$@"

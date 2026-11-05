@@ -24,6 +24,7 @@ from tkinter import ttk, messagebox, filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pes2015
+import pes2019
 import pesdb
 import settings
 import theme
@@ -463,11 +464,28 @@ def load_tables(cpk_path):
 
 
 def pes2015_vintage(path):
-    """True when the file is a PES 2015-vintage CPK with a player table (dt10 / DT80 packs)."""
+    """True when the file is a PES 2015-vintage CPK with a player table (dt10 / DT80 packs).
+
+    The record size is what tells the vintages apart: every release from 2015 on ships a
+    Player.bin, only PES 2015's divides by 180 (PES 2019's divides by 188).
+    """
     try:
         db = pes2015.Cpk2015(path)
-        return bool(db.entry("Player"))
-    except (OSError, ValueError):
+        return bool(db.entry("Player")) and len(db.read_raw("Player")[0]) % pes2015.REC == 0
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def pes2019_vintage(path):
+    """True when the file is a PES 2019 database CPK (dt10_x64.cpk / the dt80_*_x64 packs).
+
+    Checks the player table's own record size — a PES 2015 CPK carries a Player.bin too, and
+    only the 188-byte record marks this release.
+    """
+    try:
+        db = pes2019.Cpk2019(path)
+        return bool(db.entry("Player")) and len(db.read_raw("Player")[0]) % pes2019.REC == 0
+    except (OSError, ValueError, KeyError):
         return False
 
 
@@ -475,7 +493,8 @@ def validate_database(path):
     """A CPK the editor can load: readable Player/Team/PlayerAssignment in PES 2021 shapes.
 
     Raises ValueError with a short reason when the file cannot drive the editor — a foreign
-    vintage (PES 2015's tables are 180-byte records) or a file that is not a database at all.
+    vintage (PES 2015's tables are 180-byte records, PES 2019's 188) or a file that is not a
+    database at all.
     """
     if not path or not os.path.isfile(path):
         raise ValueError("file not found")
@@ -488,6 +507,10 @@ def validate_database(path):
         except (ValueError, OSError) as exc:
             raise ValueError(str(exc) or exc.__class__.__name__) from None
         if not rows or len(rows) % rec:
+            if name == "Player" and pes2019_vintage(path):
+                raise ValueError("this is a PES 2019 database (188-byte records) — the editor "
+                                 "speaks PES 2021 / SP Football Life; edit PES 2019 from the "
+                                 "\"PES 2019\" tab")
             if name == "Player" and pes2015_vintage(path):
                 raise ValueError("this is a PES 2015 database (180-byte records) — the editor "
                                  "speaks PES 2021 / SP Football Life; edit PES 2015 from the "
@@ -834,6 +857,7 @@ class Editor(tk.Tk):
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         # the "PES 2015" tab swaps this in place of the body (it is packed only while active)
         self._pes2015_host = tk.Frame(self, bg=C_BG)
+        self._pes2019_host = tk.Frame(self, bg=C_BG)
         # The list pane is built once and re-gridded, never rebuilt: relaying it out used to
         # re-scan all 26,395 players and recreate the tree on every fold, which is what made a
         # resize blank the window for most of a second.
@@ -1050,6 +1074,7 @@ class Editor(tk.Tk):
         menu.add_command(label="Reload database", command=self._later(self.reload))
         menu.add_command(label="Import database…", command=self._later(self.import_database))
         menu.add_command(label="PES 2015 database…", command=self._later(self.open_pes2015))
+        menu.add_command(label="PES 2019 database…", command=self._later(self.open_pes2019))
         menu.add_command(label="Restore vanilla", command=self._later(self.restore_vanilla))
         menu.add_separator()
         menu.add_command(label="Export roster CSV…", command=self._later(self._export_dialog))
@@ -1464,6 +1489,10 @@ class Editor(tk.Tk):
                                     cursor="hand2", font=self.F_LABEL)
         self.tab_pes2015.pack(side="left", padx=(4, 0))
         self.tab_pes2015.bind("<Button-1>", lambda e: self.set_view_mode("pes2015"))
+        self.tab_pes2019 = tk.Label(tabs, text="PES 2019", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                    cursor="hand2", font=self.F_LABEL)
+        self.tab_pes2019.pack(side="left", padx=(4, 0))
+        self.tab_pes2019.bind("<Button-1>", lambda e: self.set_view_mode("pes2019"))
 
         cols = ("id", "name", "club", "pos", "ovr", "age")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="extended")
@@ -2315,13 +2344,22 @@ class Editor(tk.Tk):
             win.destroy()
         self._app_win = AppearanceWindow(self)
 
-    def open_pes2015(self):
-        win = getattr(self, "_pes2015_win", None)
+    def open_vintage(self, mode):
+        """Open (or raise) one vintage's database window — one per vintage, never two."""
+        spec = vintage_spec(mode)
+        attr = f"_{mode}_win"
+        win = getattr(self, attr, None)
         if win is not None and win.winfo_exists():
             win.lift()
             win.focus_set()
             return
-        self._pes2015_win = Pes2015Window(self)
+        setattr(self, attr, spec["window"](self))
+
+    def open_pes2015(self):
+        self.open_vintage("pes2015")
+
+    def open_pes2019(self):
+        self.open_vintage("pes2019")
 
     def load_club(self, i, pid):
         rows = self.assign_by_pid.get(pid, [])
@@ -2691,11 +2729,11 @@ class Editor(tk.Tk):
         players that match the club stay listed, the club rows are one click away, and the
         counts on the tabs make the choice visible.
         """
-        if self.view_mode.get() == "pes2015":
-            # the PES 2015 tab owns the body: keep it shown and leave the PES 2021 list alone
-            self._show_pes2015()
+        if self.view_mode.get() in VINTAGE_MODES:
+            # a vintage tab owns the body: keep it shown and leave the PES 2021 list alone
+            self._show_vintage(self.view_mode.get())
             return
-        self._hide_pes2015()
+        self._hide_vintage()
         q = query.strip().lower()
         club_rows = []
         if q and not q.isdigit():
@@ -2757,47 +2795,58 @@ class Editor(tk.Tk):
 
     def set_view_mode(self, mode):
         self.view_mode.set(mode)
-        if mode == "pes2015":
-            self._show_pes2015()
+        if mode in VINTAGE_MODES:
+            self._show_vintage(mode)
         self.populate(self.q.get())
 
-    def _show_pes2015(self):
-        """Swap the PES 2021 list/form body for the PES 2015 panel (built on first use)."""
-        if getattr(self, "_pes2015_panel", None) is None:
-            self._pes2015_panel = Pes2015Panel(self._pes2015_host, self)
-            self._pes2015_panel.pack(fill="both", expand=True)
-            self._apply_cursors(self._pes2015_host)
+    def _show_vintage(self, mode):
+        """Swap the PES 2021 list/form body for a vintage's panel (built on first use)."""
+        spec = vintage_spec(mode)
+        host, attr = getattr(self, spec["host"]), spec["panel_attr"]
+        if getattr(self, attr, None) is None:
+            panel = spec["panel"](host, self)
+            setattr(self, attr, panel)
+            panel.pack(fill="both", expand=True)
+            self._apply_cursors(host)
+        for other in VINTAGE_MODES:                     # one vintage body at a time
+            if other != mode and getattr(self, vintage_spec(other)["host"]).winfo_manager():
+                getattr(self, vintage_spec(other)["host"]).pack_forget()
         self._one_page_body.pack_forget()
         # before=…: the body normally sits above the status bar, and re-packing it later would
         # otherwise land it after the bar in the pack order
-        self._pes2015_host.pack(fill="both", expand=True, padx=12, pady=(0, 8),
-                                before=self.statusbar.master)
+        host.pack(fill="both", expand=True, padx=12, pady=(0, 8), before=self.statusbar.master)
         self._update_mode_tabs()
-        panel = self._pes2015_panel
+        panel = getattr(self, attr)
         self.status(
-            f"PES 2015 view: {len(panel.copies):,} players from Data/dt10.cpk + the mounted "
-            "data pack — its Save writes those files, not the SP Football database"
-            if panel.copies else "PES 2015 view: no database imported yet")
+            f"{spec['label']} view: {len(panel.copies):,} players from {spec['file']} + the "
+            "mounted data packs — its Save writes those files, not the SP Football database"
+            if panel.copies else f"{spec['label']} view: no database imported yet")
 
-    def _hide_pes2015(self):
-        host = getattr(self, "_pes2015_host", None)
-        if host is None or not host.winfo_manager():    # pack_info() raises when not packed
+    def _hide_vintage(self):
+        """Put the PES 2021 body back when no vintage tab is showing."""
+        packed = [m for m in VINTAGE_MODES
+                  if getattr(self, vintage_spec(m)["host"]).winfo_manager()]
+        if not packed:
             return
-        host.pack_forget()
+        for mode in packed:
+            getattr(self, vintage_spec(mode)["host"]).pack_forget()
         self._one_page_body.pack(fill="both", expand=True, padx=12, pady=(0, 8),
                                  before=self.statusbar.master)
         self.status(getattr(self, "_main_status", ""))
 
     def _update_mode_tabs(self):
         counts = getattr(self, "_mode_counts", {"players": 0, "clubs": 0})
-        panel = getattr(self, "_pes2015_panel", None)
-        p15 = (f"PES 2015  {len(panel.copies):,}"
-               if panel is not None and panel.copies else "PES 2015")
-        for mode, lab, text in (("players", getattr(self, "tab_players", None),
-                                 f"Players  {counts.get('players', 0):,}"),
-                                ("clubs", getattr(self, "tab_clubs", None),
-                                 f"Clubs  {counts.get('clubs', 0):,}"),
-                                ("pes2015", getattr(self, "tab_pes2015", None), p15)):
+        entries = [("players", getattr(self, "tab_players", None),
+                    f"Players  {counts.get('players', 0):,}"),
+                   ("clubs", getattr(self, "tab_clubs", None),
+                    f"Clubs  {counts.get('clubs', 0):,}")]
+        for mode in VINTAGE_MODES:
+            spec = vintage_spec(mode)
+            panel = getattr(self, spec["panel_attr"], None)
+            entries.append((mode, getattr(self, spec["tab_attr"]),
+                            f"{spec['label']}  {len(panel.copies):,}"
+                            if panel is not None and panel.copies else spec["label"]))
+        for mode, lab, text in entries:
             if lab is None:
                 continue
             active = self.view_mode.get() == mode
@@ -4184,24 +4233,33 @@ class Editor(tk.Tk):
         self.statusbar.configure(text=msg, fg=colours.get(level, C_DIM))
 
 
-class Pes2015Panel(tk.Frame):
-    """PES 2015's player tables — the body of the "PES 2015" tab and of the popup window.
+class VintagePanel(tk.Frame):
+    """A pre-2021 vintage's player tables — the body of its tab and of its popup window.
 
-    The main window speaks PES 2021 (312-byte records, ~97 fields); retail PES 2015 stores 19
-    abilities, the primary position, three name slots, a bio block (height/weight/age/foot/
-    weak foot/form/injury/playing style/nationality) and one bit per skill / COM style, so it
-    gets its own panel. An applied edit lands in EVERY copy of the player — base Player.bin
-    and each numbered update slot, in dt10.cpk and in the mounted data pack — because the
-    slots override by id and a base-only edit can be shadowed. Save writes through
-    pes2015.Cpk2015.patch() and keeps the same region backups the CLI uses
-    (state/backups/pes2015, restorable byte for byte).
+    The main window speaks PES 2021 (312-byte records, ~97 fields); the older releases store
+    fewer abilities, the primary position, three name slots, a bio block (height/weight/age/
+    foot/weak foot/form/injury/playing style/nationality) and one bit per skill / COM style,
+    so each vintage gets its own panel body. Everything here is driven by the subclass's
+    module: MOD is the table module (its ABILITIES / POSITION_NAMES / SKILLS / COM_STYLES /
+    FIELD_BY_LABEL names drive the widgets), LABEL the tab title, ENV the folder override,
+    CFG_KEY the remembered folder and GAME_FILE the pack that identifies an install.
+
+    An applied edit lands in EVERY copy of the player — base Player.bin and each numbered
+    update slot, in the base pack and in the mounted data packs — because the slots override
+    by id and a base-only edit can be shadowed. Save writes through MOD.Cpk.patch() and keeps
+    the same region backups the CLI uses (state/backups/<module>, restorable byte for byte).
     """
 
-    ABILITIES = tuple(pes2015.ABILITIES)          # the game's own field order
+    MOD = pes2015
+    LABEL = "PES 2015"
+    ENV = "PES2015_DIR"
+    CFG_KEY = "pes2015_dir"
+    GAME_FILE = os.path.join("Data", "dt10.cpk")
 
     def __init__(self, parent, app):
         super().__init__(parent, bg=C_BG)
         self.app = app
+        self.ABILITIES = tuple(self.MOD.ABILITIES)   # the game's own field order
         self.dirty = set()                         # pids applied to memory, not yet written
         self.applied = {}                          # pid -> {label: value}, for the save verify
         self.copies = {}                           # pid -> [(cpk, stem, table, row), ...]
@@ -4214,27 +4272,27 @@ class Pes2015Panel(tk.Frame):
         if self.dir:
             self.load()
         else:
-            self.note.configure(text="No PES 2015 database yet — press Import database…")
+            self.note.configure(text=f"No {self.LABEL} database yet — press Import database…")
 
     # ---- install
     def _game_dir(self):
         """PES2015_DIR, then the remembered folder, then the usual wine/Steam places."""
-        for cand in (os.environ.get("PES2015_DIR"), self.app.cfg.get("pes2015_dir")):
+        for cand in (os.environ.get(self.ENV), self.app.cfg.get(self.CFG_KEY)):
             cand = os.path.expanduser(cand or "")
-            if cand and os.path.isfile(os.path.join(cand, "Data", "dt10.cpk")):
+            if cand and os.path.isfile(os.path.join(cand, self.GAME_FILE)):
                 return cand
-        return pes2015.find_game_dir()
+        return self.MOD.find_game_dir()
 
     def choose_dir(self):
         folder = filedialog.askdirectory(
-            title="Select the PES 2015 folder (the one with Data/dt10.cpk)", parent=self)
+            title=f"Select the {self.LABEL} folder (the one with {self.GAME_FILE})", parent=self)
         if not folder:
             return
         folder = os.path.expanduser(folder)
-        if not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
-            self.note.configure(text=f"no Data/dt10.cpk inside {folder}")
+        if not os.path.isfile(os.path.join(folder, self.GAME_FILE)):
+            self.note.configure(text=f"no {self.GAME_FILE} inside {folder}")
             return
-        self.app.cfg["pes2015_dir"] = folder
+        self.app.cfg[self.CFG_KEY] = folder
         settings.save(self.app.cfg)
         self.dir = folder
         self.load()
@@ -4245,11 +4303,11 @@ class Pes2015Panel(tk.Frame):
         Like the main window's Unmount, the button stays live when nothing was imported and
         the note says what the panel is using instead.
         """
-        if not self.app.cfg.get("pes2015_dir"):
+        if not self.app.cfg.get(self.CFG_KEY):
             self.note.configure(text="nothing imported — already using "
                                      + (self.dir or "nothing found"))
             return
-        self.app.cfg["pes2015_dir"] = ""
+        self.app.cfg[self.CFG_KEY] = ""
         settings.save(self.app.cfg)
         self.dir = self._game_dir()                # the fallback, not the folder we just dropped
         self.load()
@@ -4341,7 +4399,7 @@ class Pes2015Panel(tk.Frame):
         tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
                  font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
         self.pos_var = tk.StringVar()
-        pos = ttk.Combobox(grid, textvariable=self.pos_var, values=list(pes2015.POSITION_NAMES),
+        pos = ttk.Combobox(grid, textvariable=self.pos_var, values=list(self.MOD.POSITION_NAMES),
                            state="readonly", width=8, font=self.app.F_VALUE)
         pos.grid(row=0, column=1, columnspan=2, sticky="w", pady=2)
         self.stat_vars = {}
@@ -4392,16 +4450,16 @@ class Pes2015Panel(tk.Frame):
         self.flag_vars = {}
         grid_b = tk.Frame(sk, bg=C_BG)
         grid_b.pack(fill="x")
-        for n, name in enumerate(pes2015.SKILLS):
+        for n, name in enumerate(self.MOD.SKILLS):
             v = tk.BooleanVar()
             self.flag_vars[("Skill", name)] = v
             CheckPill(grid_b, name, self.app._chip_font, v).grid(
                 row=n // 3, column=n % 3, sticky="w", padx=(0, 8), pady=2)
-        com_row = (len(pes2015.SKILLS) + 2) // 3
+        com_row = (len(self.MOD.SKILLS) + 2) // 3
         tk.Label(grid_b, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
                  font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=3, sticky="w",
                                             pady=(6, 0))
-        for n, name in enumerate(pes2015.COM_STYLES):
+        for n, name in enumerate(self.MOD.COM_STYLES):
             v = tk.BooleanVar()
             self.flag_vars[("Style", name)] = v
             CheckPill(grid_b, name, self.app._chip_font, v).grid(
@@ -4427,26 +4485,26 @@ class Pes2015Panel(tk.Frame):
         self.dirty.clear()
         self.applied.clear()
         self.pid = None
-        self.paths = pes2015.database_cpks(self.dir) if self.dir else []
+        self.paths = self.MOD.database_cpks(self.dir) if self.dir else []
         self.team_names = {}                       # roster id -> team name
         self.club_of = {}                          # pid -> (club team id, squad number)
         for path in self.paths:
-            db = pes2015.Cpk2015(path)
-            for stem in pes2015.TEAM_STEMS:
+            db = self.MOD.Cpk(path)
+            for stem in self.MOD.TEAM_STEMS:
                 if not db.entry(stem):
                     continue
-                teams = pes2015.TeamTable(*db.read_raw(stem))
+                teams = self.MOD.TeamTable(*db.read_raw(stem))
                 for i in range(len(teams)):
                     if teams.name(i):
                         self.team_names.setdefault(teams.id(i), teams.name(i))
-            for stem in pes2015.ASSIGN_STEMS:
+            for stem in self.MOD.ASSIGN_STEMS:
                 if not db.entry(stem):
                     continue
-                assign = pes2015.AssignmentTable(*db.read_raw(stem))
+                assign = self.MOD.AssignmentTable(*db.read_raw(stem))
                 for i in range(len(assign)):
                     if assign.team(i) >= 100:      # the club row; national rows sit below 100
                         self.club_of[assign.player(i)] = (assign.team(i), assign.number(i))
-            for stem in pes2015.PLAYER_STEMS:
+            for stem in self.MOD.PLAYER_STEMS:
                 if not db.entry(stem):
                     continue
                 table = db.read_table(stem)
@@ -4454,7 +4512,7 @@ class Pes2015Panel(tk.Frame):
                     self.copies.setdefault(table.pid(i), []).append((path, stem, table, i))
         for pid, copies in self.copies.items():     # show the newest update slot, else base
             self.display[pid] = max(
-                copies, key=lambda c: (self.paths.index(c[0]), pes2015.PLAYER_STEMS.index(c[1])))
+                copies, key=lambda c: (self.paths.index(c[0]), self.MOD.PLAYER_STEMS.index(c[1])))
         self.fill()
         if self.dir:
             src = ", ".join(os.path.basename(p) for p in self.paths)
@@ -4506,7 +4564,7 @@ class Pes2015Panel(tk.Frame):
             pos = table.get(i, "Position")
             self.tree.insert("", "end", iid=str(pid), values=(
                 pid, table.name(i), self._club_text(pid),
-                pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
+                self.MOD.POSITION_NAMES[pos] if pos < len(self.MOD.POSITION_NAMES) else "?",
                 table.get(i, "Speed"), table.get(i, "Ball Control"),
                 table.get(i, "Finishing"), table.get(i, "Stamina")),
                 tags=("edited",) if pid in self.dirty else ())
@@ -4537,8 +4595,8 @@ class Pes2015Panel(tk.Frame):
             self.chips[name].set_text(f"{name} {table.get(i, name)}")
         self.chips["Foot"].set_text("Left" if table.get(i, "Foot") else "Right")
         pos = table.get(i, "Position")
-        self.pos_var.set(pes2015.POSITION_NAMES[pos]
-                         if pos < len(pes2015.POSITION_NAMES) else pes2015.POSITION_NAMES[0])
+        self.pos_var.set(self.MOD.POSITION_NAMES[pos]
+                         if pos < len(self.MOD.POSITION_NAMES) else self.MOD.POSITION_NAMES[0])
         for label, v in self.stat_vars.items():
             v.set(str(table.get(i, label)))
         for label, v in self.bio_vars.items():
@@ -4557,7 +4615,7 @@ class Pes2015Panel(tk.Frame):
         pos = table.get(i, "Position")
         self.tree.item(str(pid), values=(
             pid, table.name(i), self._club_text(pid),
-            pes2015.POSITION_NAMES[pos] if pos < len(pes2015.POSITION_NAMES) else "?",
+            self.MOD.POSITION_NAMES[pos] if pos < len(self.MOD.POSITION_NAMES) else "?",
             table.get(i, "Speed"), table.get(i, "Ball Control"),
             table.get(i, "Finishing"), table.get(i, "Stamina")),
             tags=("edited",) if pid in self.dirty else ())
@@ -4585,7 +4643,7 @@ class Pes2015Panel(tk.Frame):
                 self.note.configure(text=f"{label} needs a number (40-99)")
                 return
         try:
-            wanted["Position"] = pes2015.POSITION_NAMES.index(self.pos_var.get())
+            wanted["Position"] = self.MOD.POSITION_NAMES.index(self.pos_var.get())
         except ValueError:
             self.note.configure(text="pick a position from the list")
             return
@@ -4595,7 +4653,7 @@ class Pes2015Panel(tk.Frame):
             except ValueError:
                 self.note.configure(text=f"{label} needs a number")
                 return
-            bit, width, add = pes2015.FIELD_BY_LABEL[label]
+            bit, width, add = self.MOD.FIELD_BY_LABEL[label]
             wanted[label] = max(add, min(add + (1 << width) - 1, value))
         wanted["Foot"] = 1 if self.foot_var.get() == "Left" else 0
         for (family, name), v in self.flag_vars.items():
@@ -4658,7 +4716,7 @@ class Pes2015Panel(tk.Frame):
         dbs = {}
         for (path, stem), table in targets.items():
             if path not in dbs:
-                dbs[path] = pes2015.Cpk2015(path)
+                dbs[path] = self.MOD.Cpk(path)
             dbs[path].patch(stem, table.to_payload(), backup_dir=backup_dir)
         applied = dict(self.applied)
         self.load()                               # re-read from disk and verify
@@ -4697,21 +4755,60 @@ class Pes2015Panel(tk.Frame):
         return True
 
 
-class Pes2015Window(tk.Toplevel):
-    """The popup around Pes2015Panel (Menu → "PES 2015 database…").
+class Pes2015Panel(VintagePanel):
+    """PES 2015: the base class's own defaults (180-byte records, 19 abilities)."""
 
-    The same panel also lives in the main window's "PES 2015" tab; this shell adds the title
-    bar and asks before discarding applied edits.
+
+class Pes2019Panel(VintagePanel):
+    """PES 2019: 188-byte records, 23 abilities, the 15 playability flags and 48 skill bits.
+
+    Its own module carries the map (pes2019.py, recovered from the Ejogc editor's PES 2019
+    schema and checked field for field against the shipped tables and pesdb.net's cards), and
+    its own install — a CPY disc under Wine, unless PES2019_DIR or the remembered folder says
+    otherwise. Only the identifiers change; the widgets come from the base class.
     """
+
+    MOD = pes2019
+    LABEL = "PES 2019"
+    ENV = "PES2019_DIR"
+    CFG_KEY = "pes2019_dir"
+    GAME_FILE = os.path.join("Data", "dt10_x64.cpk")
+
+
+def vintage_spec(mode):
+    """What the tab machinery needs for one vintage, resolved when it runs.
+
+    The panel and window classes are defined below Editor, so this cannot be a class table.
+    """
+    if mode == "pes2019":
+        return {"label": "PES 2019", "host": "_pes2019_host", "panel_attr": "_pes2019_panel",
+                "tab_attr": "tab_pes2019", "panel": Pes2019Panel, "window": Pes2019Window,
+                "file": "Data/dt10_x64.cpk", "module": pes2019}
+    return {"label": "PES 2015", "host": "_pes2015_host", "panel_attr": "_pes2015_panel",
+            "tab_attr": "tab_pes2015", "panel": Pes2015Panel, "window": Pes2015Window,
+            "file": "Data/dt10.cpk", "module": pes2015}
+
+
+VINTAGE_MODES = ("pes2015", "pes2019")
+
+
+class VintageWindow(tk.Toplevel):
+    """The popup around a VintagePanel (Menu → "<vintage> database…").
+
+    The same panel also lives in the main window's own tab; this shell adds the title bar and
+    asks before discarding applied edits. The panel class supplies the title.
+    """
+
+    PANEL = Pes2015Panel
 
     def __init__(self, app):
         super().__init__(app)
         ui = app.ui
-        self.title("PES 2015 — player tables")
+        self.title(f"{self.PANEL.LABEL} — player tables")
         self.geometry(f"{int(1080 * ui)}x{int(890 * ui)}")
         self.minsize(int(640 * ui), int(480 * ui))
         self.transient(app)
-        self.panel = Pes2015Panel(self, app)
+        self.panel = self.PANEL(self, app)
         self.panel.pack(fill="both", expand=True)
         app._apply_cursors(self)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -4725,6 +4822,16 @@ class Pes2015Window(tk.Toplevel):
     def on_close(self):
         if self.panel.confirm_close():
             self.destroy()
+
+
+class Pes2015Window(VintageWindow):
+    """PES 2015's popup shell."""
+
+
+class Pes2019Window(VintageWindow):
+    """PES 2019's popup shell."""
+
+    PANEL = Pes2019Panel
 
 
 class CoachWindow(tk.Toplevel):

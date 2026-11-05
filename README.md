@@ -1,4 +1,24 @@
-# PESForge
+# PESForge GTK4
+
+The GTK4 build of PESForge, forked from [pesforge](https://github.com/Binz120/pesforge). The data
+layer, the file format work, the CLIs and the test suite are shared with the original; the desktop
+window is rebuilt on GTK4 and libadwaita instead of Tk.
+
+**Status: the main screen is real, the write path is not.** The player list is the table the game
+itself reads, search and column sorting are live, every field in the form comes from the selected
+record, and edits land in its in memory copy. Save, undo/redo, the photo fetch and the PES 2021 and
+PES 2015 tabs exist only in the Tk build, which this fork keeps as `editor.py`.
+
+## Run
+
+    ./bin/pesforge-gtk4          # or: python3 editor_gtk.py
+    ./bin/pesforge-gtk4 --check  # report the table it would open, without a window
+
+GTK4 and PyGObject ship with every current desktop, so there is nothing to install and no venv.
+The window talks Wayland directly, which is why none of the Tk build's XWayland workarounds (cursor
+theme, DISPLAY probing, DPI scaling) appear here.
+
+## The PESForge editor
 
 A player editor for **SP Football Life 2027** (PES 2021 engine) on Linux — GUI and headless CLI.
 Everything is done on files: the game never needs to be running, and nothing touches the game
