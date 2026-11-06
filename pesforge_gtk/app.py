@@ -82,7 +82,7 @@ def main():
         if want:
             win.load_database(want)
         if mode:
-            GLib.timeout_add(700, win.selftest)      # after the first frame
+            GLib.timeout_add(1200, win.selftest)     # after the layout has settled
 
     app.connect("activate", on_activate)      # without this the app shows nothing and exits
     status = app.run([sys.argv[0]])

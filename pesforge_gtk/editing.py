@@ -30,6 +30,7 @@ class EditingMixin:
         t = self.table
         self.loading = True
         self.hero.set_text(t.name(index))
+        self.hero.set_tooltip_text(t.name(index))
         self.meta.set_text(self._meta_text(index))
         self._paint_ovr(index)
         self._paint_profile(index)

@@ -37,8 +37,11 @@ class FormPaneMixin:
         scroller.set_min_content_width(0)    # the pane's width is _size_panes' call, not its rows'
         scroller.set_vexpand(True)
         box.append(scroller)
-        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        for m, side in ((8, "start"), (8, "end"), (6, "top"), (8, "bottom")):
+        # spacing 3 / margins 4-6: with the theme's 34px spinbuttons the
+        # section stack is the tallest thing in the editor, and these few pixels are what make
+        # the panes fit 941x1030 without a scrollbar (measured, see docs/testing.md)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        for m, side in ((8, "start"), (8, "end"), (4, "top"), (6, "bottom")):
             inner.set_margin_start(m) if side == "start" else (
                 inner.set_margin_end(m) if side == "end" else
                 inner.set_margin_top(m) if side == "top" else inner.set_margin_bottom(m))
@@ -47,6 +50,10 @@ class FormPaneMixin:
         inner.append(self._section("PLAYER", ""))
         self.hero = Gtk.Label(label="no player", xalign=0)
         self.hero.add_css_class("hero")
+        # ellipsized like the meta line: an unconstrained label reports its whole text as its
+        # minimum width, and a long player name would then be what decides whether the editor
+        # fits beside the list (the layout measures the panes' content)
+        self.hero.set_ellipsize(Pango.EllipsizeMode.END)
         inner.append(self.hero)
         self.meta = Gtk.Label(label="", xalign=0)
         self.meta.add_css_class("meta")
@@ -91,11 +98,14 @@ class FormPaneMixin:
                                    " · ".join(name for name, _labels in ABILITY_GROUPS)))
         self.abilities = {}
         cols = 3 if narrow else 2
-        grid = Gtk.Grid(column_spacing=6, row_spacing=0)
+        # label 110 + spacing 4 in the grid: 16px less than the old 114/6, which is the
+        # difference between the form pane fitting beside the list at a 917px window (the
+        # size a tiled window gets on this desktop) and being 13px short of it
+        grid = Gtk.Grid(column_spacing=2, row_spacing=0)
         order = grouped_ability_order(self.mod)
         for n, label in enumerate(order):
             cell = Gtk.Box(spacing=6)
-            cell.append(dim_label(label, 114, 20))
+            cell.append(dim_label(label, 110, 20))
             spin = Gtk.SpinButton.new_with_range(40, 99, 1)
             spin.set_width_chars(4)          # without this the entry reserves ~112px
             spin.set_size_request(72, 28)    # one box size for every value control in the grid
@@ -171,8 +181,8 @@ class FormPaneMixin:
         box.set_min_content_width(0)        # the pane's width is _size_panes' call, not its rows'
         box.set_vexpand(True)
         pane.append(box)
-        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        inner.set_margin_top(6)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        inner.set_margin_top(4)
         inner.set_margin_bottom(6)
         inner.set_margin_start(8)
         inner.set_margin_end(8)
@@ -259,8 +269,10 @@ class FormPaneMixin:
         inner.append(self._section("SKILLS & COM STYLES", self.chip_filter))
         # A grid, not a FlowBox: the flow reports six widest-in-a-row as its minimum width, which
         # no amount of font shrinking fixed, and a grid's columns are the pane's to divide.
-        cols = 6 if getattr(self, "narrow", False) else 4
-        grid2 = Gtk.Grid(column_spacing=2, row_spacing=2)
+        # Seven columns in the compact shape: 46 chips land in 7 rows instead of 8, which is the
+        # difference between the bio pane fitting its page at 941x1030 and scrolling (measured).
+        cols = 7 if getattr(self, "narrow", False) else 4
+        grid2 = Gtk.Grid(column_spacing=2, row_spacing=1)
         self.chips = {}
         # the modules key their skill/style flags as "Skill: X" / "Style: X"; the chip shows
         # the bare name, the table lookup uses the label
@@ -299,6 +311,10 @@ class FormPaneMixin:
             h = Gtk.Label(label=hint, xalign=1)
             h.add_css_class("hint")
             h.set_hexpand(True)
+            # the ability-group hint is a long string; unconstrained it is the widest thing in
+            # the editor and would decide the layout on its own, so it elides with a tooltip
+            h.set_ellipsize(Pango.EllipsizeMode.END)
+            h.set_tooltip_text(hint)
             box.append(h)
         return box
 
