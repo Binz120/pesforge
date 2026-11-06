@@ -13,7 +13,7 @@ import shutil
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 import pes2021  # noqa: E402
 import pesdb  # noqa: E402
@@ -75,6 +75,78 @@ def _selftest_fit(win):
     print(f"SELFTEST FIT OK window={win.get_width()}x{win.get_height()} "
           + " ".join(sizes), flush=True)
     win.close()
+    return False
+
+
+def _selftest_sweep(win):
+    """`PESFORGE_GTK_SELFTEST=sweep`: the layout is a function of size, not of history.
+
+    Walks the live window up through its boundaries, checking at each size that the list is
+    never handed less width than the columns it is showing, that the list never squeezes a
+    column (which is what a blank column looks like), and that the editor panes fit their page
+    wherever the split layout is in use. Then it asks the policy again for each size on the way
+    back down: a size seen twice must decide the same thing. The way back is asked of
+    `_size_panes` rather than performed, because a window without a window manager will not
+    shrink — the decision is what the sweep compares, and the geometry follows it.
+    """
+    widths, height = [], win.get_height() or 1030
+    first, bad, lines = {}, [], []
+    state = {"i": 0, "resized": False}
+
+    def measure(width):
+        cols = tuple(col.get_title() for col, need in win._col_min if col.get_visible())
+        cols_w = 36 + sum(int(col.get_fixed_width()) for col, need in win._col_min
+                          if col.get_visible())
+        scroller = win._list_pane.get_first_child()
+        ha = scroller.get_hadjustment() if scroller is not None else None
+        list_w = win._list_pane.get_width()
+        if list_w < cols_w:
+            bad.append(f"{width}: the list is {list_w}px, its columns need {cols_w}px")
+        if ha is not None and ha.get_upper() > ha.get_page_size() + 0.5:
+            bad.append(f"{width}: the list squeezes a column")
+        paned = win._paned[0]
+        if paned == "h" and width >= 917:
+            for label, pane in (("form", win._form_pane), ("bio", win._bio_pane)):
+                inner = pane.get_first_child()
+                if inner is None or inner.get_width() <= 1:
+                    continue
+                h2, v2 = inner.get_hadjustment(), inner.get_vadjustment()
+                if (h2.get_upper() > h2.get_page_size() + 0.5
+                        or v2.get_upper() > v2.get_page_size() + 0.5):
+                    bad.append(f"{width}: the {label} pane scrolls in the split layout")
+        answer = (paned, cols)
+        if width in first and first[width] != answer:
+            bad.append(f"{width}: {answer[0]}/{len(answer[1])}cols on the way back, "
+                       f"{first[width][0]}/{len(first[width][1])}cols before")
+        first.setdefault(width, answer)
+        lines.append(f"{width}->{paned}/{len(cols)}cols")
+
+    def tick():
+        if not widths:
+            widths.extend(w for w in (880, 960, 1100, 1400) if w > win.get_width())
+            widths.insert(0, win.get_width() or 700)
+        if state["i"] < len(widths):
+            width = widths[state["i"]]
+            if not state["resized"]:
+                win.set_size_request(width, height)
+                state["resized"] = True
+                return True
+            measure(width)
+            state["i"] += 1
+            state["resized"] = False
+            return True
+        for width in reversed(widths):          # the way back: same sizes, same decisions
+            win._size_panes(width, height)      # twice: one call turns the page, the next
+            win._size_panes(width, height)      # applies the column policy for the new shape
+            measure(width)
+        if bad:
+            return _fail(win, "layout sweep: " + "; ".join(bad))
+        print(f"SELFTEST SWEEP OK sizes={'x'.join(str(w) for w in widths)} "
+              + " ".join(lines), flush=True)
+        win.close()
+        return False
+
+    GLib.timeout_add(200, tick)
     return False
 
 
@@ -521,6 +593,8 @@ def run(win):
         return _selftest_write2021(win)
     if mode == "fit":
         return _selftest_fit(win)
+    if mode == "sweep":
+        return _selftest_sweep(win)
     if mode == "theme":
         return _selftest_theme(win)
     if not win.rows or len(win.store) != len(win.rows):

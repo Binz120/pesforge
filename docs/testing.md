@@ -29,8 +29,31 @@ reported a failure that had nothing to do with the code under test. Verified wit
 
 Consequence for the fit gate: it asserts against the size the harness *asked for*. Under a
 WM-less Xvfb the window maps at exactly `PESFORGE_GTK_SIZE`. Under a real compositor the
-tile size is what matters; on this machine the user's tile (917x1030) is 13px short of the
-side-by-side form pane, which is a real layout finding for Phase 4, not a test artifact.
+tile size is what matters; on this machine the user's tile is 917x1030, and the layout
+policy was changed in Phase 4 to hold there too (see below).
+
+## Layout: how the panes are decided
+
+`PESFORGE_GTK_SELFTEST=fit` samples at 1.2 s, after the layout has settled — a pane measured
+on the first frame can be a few pixels short of what it needs a second later, which is how
+the old 0.7 s gate passed while the bio pane was scrolling. It asserts both editor panes fit
+their scroller at 941x1030, 917x1030 and 1504x1030.
+
+`PESFORGE_GTK_SELFTEST=sweep` (run at `PESFORGE_GTK_SIZE=700x1030`) resizes the live window up
+across the split layout's boundary — 700, 880, 960, 1100, 1400 — and then asks the policy
+again for each size on the way back. It fails on a size deciding differently the second time,
+a list narrower than the columns it shows, a squeezed list column (which is what a blank
+column looks like), or an editor pane scrolling while the split layout is in use. The way
+back is *asked* rather than performed because a window without a window manager will not
+shrink; the decision is what the sweep compares, and the geometry follows it.
+
+The decision itself (`pesforge_gtk/layout.py`) is a function of (width, height, the measured
+minima): the list's width comes from its own column policy, the editor's minimum from
+`measure(...)[0]` on the panes' content, and the vertical signal from the panes' scroll
+adjustments. The boundary it produces on this machine is 914px — the old hard-coded 910 was a
+fair guess, and is now gone. Two measured figures are remembered (`_editor_min_w`, and the
+height band `_tight_below` at which the split layout was last seen costing a scrollbar); both
+are used on both crossings, so the layout cannot chatter or become a one-way door.
 
 ## What the suite covers
 
@@ -48,8 +71,9 @@ counts them as skipped; read the skip lines, not just the "N/N passed" tail.
 ## Self-check modes (GTK4)
 
 `PESFORGE_GTK_SELFTEST=` `1` | `empty` | `cycle` | `select` | `hub` | `write` | `write2015` |
-`write2021` | `fit` | `theme`, plus `PESFORGE_GTK_SIZE=WxH` and `--db <cpk|folder>`.
+`write2021` | `fit` | `sweep` | `theme`, plus `PESFORGE_GTK_SIZE=WxH` and `--db <cpk|folder>`.
 `fit` is the layout gate: it fails when either editor pane's content exceeds its scroller.
+`sweep` is the geometry-and-history gate: see the layout section above.
 The write modes never touch the game: they copy to a scratch install, hash the source CPK
 before and after, and fail if it moved.
 

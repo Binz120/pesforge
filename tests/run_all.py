@@ -1983,16 +1983,37 @@ def test_gtk4_compact_layout_fits_without_scrolling():
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         raise RuntimeError("no display for the GTK4 app")
-    # 941 is the size the app is used at; 917 is one tile narrower, where the list's six columns and
-    # the editor's 607px minimum cannot both be honoured, so the app trades a vertical scrollbar for
-    # the slice instead — that trade is checked by hand, the promise is checked here
-    for size in ("941x1030", "1504x1030"):
+    # 941 is the size the app is used at; 917 is one tile narrower on this desktop and the app
+    # keeps the split layout there too (the form's grid is 584px wide, not 607), so the promise
+    # holds at both — see test_gtk4_layout_is_a_function_of_size for the way back
+    for size in ("941x1030", "917x1030", "1504x1030"):
         env = dict(os.environ, PESFORGE_GTK_SELFTEST="fit", PESFORGE_GTK_SIZE=size, SPFL_DIR=game)
         out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
                              capture_output=True, text=True, env=env, timeout=600)
         text = out.stdout + out.stderr
         assert "SELFTEST FIT OK" in text, text[-700:]
     assert "scrolls" not in text, text[-400:]
+
+
+def test_gtk4_layout_is_a_function_of_size():
+    """A window that has grown arranges itself the same way as one born that size (Phase 4).
+
+    The sweep resizes the live window up across the split layout's boundary and then re-asks the
+    policy at each size on the way back down. It fails on: a size deciding differently the second
+    time, a list narrower than the columns it shows, a squeezed list column (which is what a
+    blank column looks like), or an editor pane scrolling while the split layout is in use.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="sweep", PESFORGE_GTK_SIZE="700x1030",
+               SPFL_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                         capture_output=True, text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST SWEEP OK" in text, text[-900:]
+    assert "layout sweep" not in text, text[-900:]
 
 
 def test_gtk4_edits_and_saves_pes2021():
