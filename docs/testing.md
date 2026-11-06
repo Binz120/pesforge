@@ -76,7 +76,11 @@ and `--db <cpk|folder>`.
 `fit` is the layout gate: it fails when either editor pane's content exceeds its scroller.
 `sweep` is the geometry-and-history gate: see the layout section above.
 The write modes never touch the game: they copy to a scratch install, hash the source CPK
-before and after, and fail if it moved.
+before and after, and fail if it moved. `write` (the PES 2019 bulk matrix) goes further and
+*refuses* to run at all unless the file it would write sits under the temporary directory —
+it is the one mode that is pointed at a file by the caller rather than building its own copy,
+and a real install is not its to touch (this is what the sandbox in
+`test_gtk4_bulk_matrix_stages_and_commits` provides).
 
 ## CI
 

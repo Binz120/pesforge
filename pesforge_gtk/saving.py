@@ -8,6 +8,7 @@ reported in the status line and a dialog, and the pending edits stay.
 """
 import os
 import subprocess
+import time
 
 import gi
 
@@ -135,6 +136,7 @@ class SavingMixin:
             self._alert("Save did not finish", f"{head}{kind}" + "; ".join(failed))
             return
         saved = sorted({i for i, _label in self.dirty})
+        report = self._change_report(edits, written)          # before the edits are forgotten
         self.dirty.clear()
         self.originals.clear()                     # the game holds these now: no "was …" left
         self._refresh_cells(saved, edited=False)   # the STATE cell only repaints on a re-bind
@@ -143,9 +145,37 @@ class SavingMixin:
         pruned = settings.prune_backups(backup, settings.load()["max_backups"])
         self._status(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
                      + f" · backups in {backup}" + (f" ({pruned} old pruned)" if pruned else "")
+                     + (f" · changes in {os.path.basename(report)}" if report else "")
                      + (" · EDIT00000000 is present and overrides this file in game"
                         if settings.edit_save_files() else ""))
         self._update_bulk()
+
+    def _change_report(self, edits, written):
+        """A human-readable record of what this save changed, beside the backup it made.
+
+        The backup holds the bytes; this holds the intent — one line per player and field with
+        the value that was there and the one written — so a save can be checked, or undone by
+        hand, without the app. Returns the file's path, or "" when it could not be written
+        (which is reported but does not fail the save: the data is already on disk).
+        """
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(settings.backups_dir(), f"changes-{stamp}.txt")
+        lines = [f"# PESForge GTK4 save, {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                 f"# release: {VINTAGES[self.vintage]['label']}",
+                 f"# written: {', '.join(written)}",
+                 f"# players: {len(edits)}"]
+        for i, key in sorted(self.dirty):
+            was = self.originals.get((i, key), "?")
+            now = edits.get(self.table.pid(i), {}).get(key, "?")
+            field = "name (" + key.split(":", 1)[1] + ")" if key.startswith("name:") else key
+            lines.append(f"pid {self.table.pid(i)}\t{field}\t{was} -> {now}")
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+        except OSError as exc:
+            self._status(f"saved, but the change report could not be written: {exc}")
+            return ""
+        return path
 
     def _reload(self):
         """Drop the pending edits and re-read the database from disk."""

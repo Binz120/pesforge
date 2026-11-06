@@ -9,6 +9,7 @@ read back, and hash the game's own file before and after to prove it never moved
 import hashlib
 import os
 import shutil
+import tempfile
 
 import gi
 
@@ -639,6 +640,14 @@ def _selftest_chrome(win):
 def _selftest_write_run(win):
     import hashlib
     path = win.source
+    # This check writes the database. It refuses anything outside a temporary directory: an
+    # install's own file is not this check's to touch, and there is no undo for a mistake there.
+    # Point PES2019_DIR at a copy (the suite's `pes2019_box` does exactly that) before running it.
+    scratch = os.path.realpath(tempfile.gettempdir())
+    if not os.path.realpath(path).startswith(scratch + os.sep):
+        return _fail(win, f"refusing to write {path} — this check only runs against a copy "
+                          f"under {scratch}")
+
     before = hashlib.sha256(open(path, "rb").read()).hexdigest()
     backup_dir = settings.backups_dir()
     pre = set(win.mod.backup_list(backup_dir))
@@ -688,6 +697,15 @@ def _selftest_write_run(win):
     fresh = [n for n in win.mod.backup_list(backup_dir) if n not in pre]
     if not fresh:
         return _fail(win, "the save took no backup")
+    reports = sorted(n for n in os.listdir(backup_dir) if n.startswith("changes-"))
+    if not reports:
+        return _fail(win, "the save wrote no change report")
+    text = open(os.path.join(backup_dir, reports[-1]), encoding="utf-8").read()
+    for i, was in old.items():
+        line = [ln for ln in text.splitlines() if ln.startswith(f"pid {back.pid(i)}\t")]
+        if not line or "Speed" not in line[0] or f"{was} -> {min(99, was + 5)}" not in line[0]:
+            return _fail(win, f"the change report misses player {back.pid(i)}: {line}")
+    print(f"WRITE stage=report file={reports[-1]} lines={len(text.splitlines())}", flush=True)
     for name in fresh:
         win.mod.restore_backup(name)
     if hashlib.sha256(open(path, "rb").read()).hexdigest() != before:
