@@ -6,7 +6,7 @@ that file); it imports this package and re-exports the names the tests use. The 
     importing.py   identify a pick — CPKs, folders, the release behind them
     styling.py     the stylesheet (style.css) from the theme tokens, and light/dark
     widgets.py     small widget helpers + the Cairo ability bar
-    ratings.py     ability grouping, the OVR model, bulk field lists and ranges
+    reference.py   ability grouping, the OVR model, bulk field lists and ranges
     listpane.py    the player list: columns, ticks, cells, width policy
     formpane.py    the editor panes: player card, ability grid, BIO, chips, batch tray
     editing.py     form <-> record: load, dirty marking, undo/redo, field handlers
