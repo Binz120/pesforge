@@ -14,7 +14,6 @@ GtkDrawingArea, the palette is `theme.tokens(...)` turned into CSS, and Save pat
 of the table (with region backups, then reads each one back). Undo/redo and the photo fetch exist
 in the sibling Tk editor, which is not part of this build.
 """
-import json
 import os
 import subprocess
 import sys
@@ -47,264 +46,18 @@ from pesforge_gtk.importing import (  # noqa: E402,F401
 from pesforge_gtk.styling import (  # noqa: E402,F401  (re-exported: the tests use these)
     TOK, css, install_css, system_theme, tint,
 )
-
-
-
-def dim_label(text, width, chars):
-    """A fixed-width right-aligned field label.
-
-    `max_width_chars` matters as much as the size request: a Label's *natural* width is its whole
-    text, so without the cap a long label ("Defensive Awareness") pushes its value box right and
-    every row's box lands somewhere else — the column looks ragged even though it is a grid.
-    """
-    lab = Gtk.Label(label=text, xalign=1)
-    lab.add_css_class("dim")
-    lab.set_size_request(width, -1)
-    lab.set_max_width_chars(chars)
-    lab.set_ellipsize(Pango.EllipsizeMode.END)
-    lab.set_tooltip_text(text)
-    return lab
-
-
-WIDE_ENOUGH = 1000        # the window width at which the roomy grids fit beside the list
-
-
-def a11y(widget, label):
-    """Give a control the name a screen reader should announce.
-
-    A placeholder, an icon or a bare value box says nothing on its own; the label is what a
-    keyboard or braille user hears.
-    """
-    widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
-
-
-def slim_spin(spin):
-    """Hide a spinbutton's steppers (they cost ~60px of width each, and typing/scrolling works).
-
-    The compact layouts have three fields per row and no room for the buttons; the batch tray
-    keeps its own steppers, and the wide layout keeps every one of them.
-    """
-    child = spin.get_first_child()
-    while child is not None:
-        if isinstance(child, Gtk.Button):
-            child.set_visible(False)
-        child = child.get_next_sibling()
-
-
-def ellipsizing_dropdown(items, chars=12):
-    """A DropDown whose shown value elides.
-
-    Its natural width is otherwise the longest item in the list ("Extra Frontman"), which makes
-    that cell wider than every value box beside it and the whole column ragged.
-    """
-    dd = Gtk.DropDown.new_from_strings(items)
-    factory = Gtk.SignalListItemFactory()
-
-    def setup(_f, item):
-        lab = Gtk.Label(xalign=0)
-        lab.set_ellipsize(Pango.EllipsizeMode.END)
-        lab.set_max_width_chars(chars)
-        item.set_child(lab)
-
-    def bind(_f, item):
-        entry = item.get_item()
-        text = entry.get_string() if entry is not None else ""
-        lab = item.get_child()
-        lab.set_text(text)
-        lab.set_tooltip_text(text)     # the elided value stays readable on hover
-
-    factory.connect("setup", setup)
-    factory.connect("bind", bind)
-    dd.set_factory(factory)
-    return dd
-
-
-def ability_order(mod):
-    """The abilities in the order the map lists them (23 for PES 2019, 19 for PES 2015)."""
-    return tuple(mod.ABILITIES)
-
-
-# The game groups its ratings; the grid follows, so related numbers sit together
-# (Attacking → Defending → Physical → Goalkeeping) and each field's tooltip names its group.
-ABILITY_GROUPS = (
-    ("Attacking", ("Offensive Awareness", "Attacking Prowess", "Ball Control", "Dribbling",
-                   "Tight Possession", "Low Pass", "Lofted Pass", "Finishing", "Place Kicking",
-                   "Curl", "Swerve", "Heading", "Header")),
-    ("Defending", ("Defensive Awareness", "Defensive Prowess", "Ball Winning", "Aggression")),
-    ("Physical", ("Speed", "Acceleration", "Explosive Power", "Kicking Power", "Jump",
-                  "Physical Contact", "Balance", "Unwavering Balance", "Body Balance",
-                  "Stamina")),
-    ("Goalkeeping", ("GK Awareness", "Goalkeeping", "GK Catching", "GK Catch", "GK Clearing",
-                     "Clearing", "GK Reflexes", "Reflexes", "GK Reach", "Coverage", "Saving")),
+from pesforge_gtk.reference import (  # noqa: E402,F401
+    ABILITY_GROUPS, COUNTRIES, OVR_ALIASES, STYLE_NAMES_FALLBACK,
+    ability_group, ability_order, bulk_fields, country_names, field_range,
+    grouped_ability_order, overall_rating, tier_of,
+)
+from pesforge_gtk.widgets import (  # noqa: E402,F401
+    AbilityBar, a11y, dim_label, ellipsizing_dropdown, select_all_on_focus,
+    set_widget_value, slim_spin, spin_steps, step_widget, widget_value,
 )
 
 
-def ability_group(label):
-    """The group a rating belongs to; a label a later map adds lands in Other."""
-    for group, labels in ABILITY_GROUPS:
-        if label in labels:
-            return group
-    return "Other"
-
-
-def grouped_ability_order(mod):
-    """`ability_order` with related ratings together: the map's own rows, grouped."""
-    order = list(ability_order(mod))
-    rank = {name: i for i, (name, _labels) in enumerate(ABILITY_GROUPS)}
-    rank["Other"] = len(ABILITY_GROUPS)
-    return tuple(label for _i, label in sorted(
-        enumerate(order), key=lambda pair: (rank[ability_group(pair[1])], pair[0])))
-
-
-def tint(color, alpha):
-    """An rgba() from a token's #rrggbb — the CSS has no colour maths of its own."""
-    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-    return f"rgba({r}, {g}, {b}, {alpha})"
-
-
-# The reference-rating model (pesdb.OVR_MODEL) is written in PES 2021's ability names. In 2019
-# and 2015 some of those abilities are spelled differently, and a few do not exist: those weights
-# fold onto the map's own equivalent, or drop and the rest renormalise. 2015 has one keeper pair
-# (Saving / Goalkeeping) where 2021 has five separate ones.
-OVR_ALIASES = {
-    "pes2019": {"Offensive Awareness": "Attacking Prowess",
-                "Defensive Awareness": "Defensive Prowess",
-                "Acceleration": "Explosive Power",
-                "Balance": "Unwavering Balance",
-                "GK Awareness": "Goalkeeping", "GK Reflexes": "Reflexes",
-                "GK Reach": "Coverage", "GK Catching": "GK Catch", "GK Clearing": "Clearing",
-                "Tight Possession": None, "Aggression": None},
-    "pes2015": {"Offensive Awareness": "Attacking Prowess",
-                "Defensive Awareness": "Defensive Prowess",
-                "Acceleration": "Explosive Power",
-                "Balance": "Body Balance",
-                "GK Awareness": "Goalkeeping", "GK Reflexes": "Saving", "GK Reach": "Saving",
-                "GK Catching": "Saving", "GK Clearing": "Saving",
-                "Tight Possession": None, "Aggression": None, "Physical Contact": None},
-}
-
-
-def overall_rating(table, index, mod):
-    """The reference rating for one record, read through the map's own ability names.
-
-    Same arithmetic as `pesdb.overall` (weighted average, rounded half-to-even) — the labels are
-    the only reason this exists here rather than there.
-    """
-    aliases = OVR_ALIASES.get(mod.__name__, {})
-    fields = getattr(mod, "FIELD_BY_LABEL", {})
-    position = table.get(index, "Registered Position" if "Registered Position" in fields
-                         else "Position")
-    weights = pesdb.OVR_MODEL.get(int(position))
-    if not weights:                       # a position the model does not cover: the general six
-        names = ("Offensive Awareness", "Defensive Awareness", "Finishing", "Speed",
-                 "Physical Contact", "Stamina")
-        values = [table.get(index, aliases.get(n, n)) for n in names
-                  if aliases.get(n, n) in fields]
-        return int(round(sum(values) / len(values))) if values else 0
-    total = used = 0.0
-    for label, weight in weights:
-        target = aliases.get(label, label)
-        if target == "Header" and target not in fields:
-            target = "Heading"            # 2021 calls the same ability Heading
-        if target is None or target not in fields:
-            continue                      # the map has no such ability: drop the weight
-        total += table.get(index, target) * weight
-        used += weight
-    return int(round(total / used)) if used else 0
-
-
-def tier_of(value):
-    """A rating's band: under 60, 60-74, 75-84, 85+.
-
-    The *tint* carries the band; the number stays on top of it, so nothing is said by colour
-    alone.
-    """
-    value = int(value)
-    if value < 60:
-        return 0
-    if value < 75:
-        return 1
-    if value < 85:
-        return 2
-    return 3
-
-
-def select_all_on_focus(spin):
-    """Focusing a value selects it, so typing replaces it instead of appending to it."""
-    focus = Gtk.EventControllerFocus()
-    focus.connect("enter", lambda _c, s=spin: s.select_region(0, -1))
-    spin.add_controller(focus)
-
-
-def step_widget(spin, delta):
-    """Move a spinbutton's value by `delta`, clamped to its own range (the game's limits)."""
-    lo, hi = spin.get_range()
-    spin.set_value(max(lo, min(hi, spin.get_value() + delta)))
-
-
-def spin_steps(spin, big=5):
-    """Wheel and arrows step by one; hold Shift for five.
-
-    Both controllers run in the capture phase: the spinbutton's inner GtkText would otherwise eat
-    Up/Down as caret movement and the key would never reach this handler.
-    """
-    keys = Gtk.EventControllerKey()
-
-    def on_key(_c, keyval, _code, state):
-        up = keyval in (Gdk.KEY_Up, Gdk.KEY_KP_Up)
-        down = keyval in (Gdk.KEY_Down, Gdk.KEY_KP_Down)
-        if not (up or down):
-            return False
-        step = big if state & Gdk.ModifierType.SHIFT_MASK else 1
-        step_widget(spin, step if up else -step)
-        return True
-
-    keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-    keys.connect("key-pressed", on_key)
-    spin.add_controller(keys)
-    scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
-    scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-
-    def on_scroll(controller, _dx, dy):
-        state = controller.get_current_event_state()
-        step = big if state & Gdk.ModifierType.SHIFT_MASK else 1
-        step_widget(spin, -dy * step)
-        return True
-
-    scroll.connect("scroll", on_scroll)
-    spin.add_controller(scroll)
-
-
-def widget_value(widget):
-    """A field's value whether it is a spinbutton or a dropdown."""
-    if isinstance(widget, Gtk.DropDown):
-        return int(widget.get_selected())
-    return int(widget.get_value())
-
-
-def set_widget_value(widget, value):
-    value = int(value)
-    if isinstance(widget, Gtk.DropDown):
-        model = widget.get_model()
-        widget.set_selected(max(0, min(value, model.get_n_items() - 1)))
-    else:
-        widget.set_value(value)
-
-
-def bulk_fields(mod):
-    """The tray's fields: every ability, then the bio numbers the release actually carries."""
-    bios = ("Age", "Height", "Weight", "Form", "Weak Foot Usage", "Weak Foot Accuracy",
-            "Injury Resistance", "Reputation")
-    return ability_order(mod) + tuple(n for n in bios if n in mod.FIELD_BY_LABEL)
-
-
-def field_range(mod, label):
-    """(low, high) for a numeric field: abilities stop at 99 even if their bits allow more."""
-    _bit, width, add = mod.FIELD_BY_LABEL[label]
-    hi = add + (1 << width) - 1
-    if label in ability_order(mod):
-        hi = min(hi, 99)
-    return add, hi
+WIDE_ENOUGH = 1000        # the window width at which the roomy grids fit beside the list
 
 
 def widgets(root):
@@ -318,22 +71,6 @@ def widgets(root):
             stack.append(child)
             child = child.get_next_sibling()
     return out
-
-
-def country_names():
-    """code -> country name, from the table the PES 2021 side already ships."""
-    try:
-        import pesdb_maps
-        raw = json.loads(pesdb_maps.read_data("countries.json"))
-        return {int(code): name for code, name in raw.items()}
-    except (OSError, ValueError, AttributeError):
-        return {}
-
-
-COUNTRIES = country_names()
-STYLE_NAMES_FALLBACK = getattr(pes2019, "STYLE_NAMES", ())   # 2015's ids, 2019's names
-
-
 
 
 # ---------------------------------------------------------------- the row model
@@ -352,49 +89,6 @@ class Row(GObject.Object):
     @property
     def state(self):
         return "edited" if self.edited else ""
-
-
-class AbilityBar(Gtk.DrawingArea):
-    """The ability bar: a track and a fill, Cairo-drawn, repainted when the value changes."""
-
-    def __init__(self, width=104):
-        super().__init__()
-        self.value = 40
-        self.set_content_width(width)
-        self.set_content_height(7)
-        self.set_valign(Gtk.Align.CENTER)
-        self.set_draw_func(self._draw)
-
-    def set_value(self, value):
-        self.value = value
-        self.queue_draw()
-
-    @staticmethod
-    def _round_rect(cr, x, y, w, h, r):
-        r = min(r, h / 2, max(w, 0.1) / 2)
-        cr.new_path()
-        cr.arc(x + w - r, y + r, r, -1.5708, 0)
-        cr.arc(x + w - r, y + h - r, r, 0, 1.5708)
-        cr.arc(x + r, y + h - r, r, 1.5708, 3.14159)
-        cr.arc(x + r, y + r, r, 3.14159, 4.71239)
-        cr.close_path()
-
-    def _draw(self, _area, cr, width, height):
-        frac = max(0.0, min(1.0, (self.value - 40) / 59.0))
-        track = Gdk.RGBA()
-        Gdk.RGBA.parse(track, TOK["bar"])
-        cr.set_source_rgba(track.red, track.green, track.blue, track.alpha)
-        self._round_rect(cr, 0, 0, width, height, height / 2)
-        cr.fill()
-        if frac <= 0:
-            return
-        spec = TOK["accent"] if self.value >= 80 else (
-            TOK["accent_lo"] if self.value >= 65 else TOK["bar_low"])
-        paint = Gdk.RGBA()
-        Gdk.RGBA.parse(paint, spec)
-        cr.set_source_rgba(paint.red, paint.green, paint.blue, paint.alpha)
-        self._round_rect(cr, 0, 0, max(width * frac, height), height, height / 2)
-        cr.fill()
 
 
 # ---------------------------------------------------------------- the window
