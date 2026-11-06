@@ -133,9 +133,8 @@ for _l, _b in SKILLS:
 # ---------------------------------------------------------------- WESYS
 COUNTRIES = {}
 try:
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "countries.json"),
-              encoding="utf-8") as _f:
-        COUNTRIES = {int(k): v for k, v in json.load(_f).items()}
+    import pesdb_maps as _maps
+    COUNTRIES = {int(k): v for k, v in json.loads(_maps.read_data("countries.json")).items()}
 except (OSError, ValueError):
     COUNTRIES = {}
 

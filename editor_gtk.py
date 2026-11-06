@@ -12,7 +12,7 @@ What is real here: the list is a virtualized GtkColumnView over the table the ga
 search filters 16k rows through a GtkFilterListModel, the ability bars are Cairo on a
 GtkDrawingArea, the palette is `theme.tokens(...)` turned into CSS, and Save patches every copy
 of the table (with region backups, then reads each one back). Undo/redo and the photo fetch exist
-in the Tk build (`editor.py`), which this fork keeps.
+in the sibling Tk editor, which is not part of this build.
 """
 import json
 import os
@@ -88,6 +88,18 @@ def dim_label(text, width, chars):
     return lab
 
 
+WIDE_ENOUGH = 1000        # the window width at which the roomy grids fit beside the list
+
+
+def a11y(widget, label):
+    """Give a control the name a screen reader should announce.
+
+    A placeholder, an icon or a bare value box says nothing on its own; the label is what a
+    keyboard or braille user hears.
+    """
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
+
+
 def slim_spin(spin):
     """Hide a spinbutton's steppers (they cost ~60px of width each, and typing/scrolling works).
 
@@ -118,7 +130,10 @@ def ellipsizing_dropdown(items, chars=12):
 
     def bind(_f, item):
         entry = item.get_item()
-        item.get_child().set_text(entry.get_string() if entry is not None else "")
+        text = entry.get_string() if entry is not None else ""
+        lab = item.get_child()
+        lab.set_text(text)
+        lab.set_tooltip_text(text)     # the elided value stays readable on hover
 
     factory.connect("setup", setup)
     factory.connect("bind", bind)
@@ -129,6 +144,173 @@ def ellipsizing_dropdown(items, chars=12):
 def ability_order(mod):
     """The abilities in the order the map lists them (23 for PES 2019, 19 for PES 2015)."""
     return tuple(mod.ABILITIES)
+
+
+# The game groups its ratings; the grid follows, so related numbers sit together
+# (Attacking → Defending → Physical → Goalkeeping) and each field's tooltip names its group.
+ABILITY_GROUPS = (
+    ("Attacking", ("Offensive Awareness", "Attacking Prowess", "Ball Control", "Dribbling",
+                   "Tight Possession", "Low Pass", "Lofted Pass", "Finishing", "Place Kicking",
+                   "Curl", "Swerve", "Heading", "Header")),
+    ("Defending", ("Defensive Awareness", "Defensive Prowess", "Ball Winning", "Aggression")),
+    ("Physical", ("Speed", "Acceleration", "Explosive Power", "Kicking Power", "Jump",
+                  "Physical Contact", "Balance", "Unwavering Balance", "Body Balance",
+                  "Stamina")),
+    ("Goalkeeping", ("GK Awareness", "Goalkeeping", "GK Catching", "GK Catch", "GK Clearing",
+                     "Clearing", "GK Reflexes", "Reflexes", "GK Reach", "Coverage", "Saving")),
+)
+
+
+def ability_group(label):
+    """The group a rating belongs to; a label a later map adds lands in Other."""
+    for group, labels in ABILITY_GROUPS:
+        if label in labels:
+            return group
+    return "Other"
+
+
+def grouped_ability_order(mod):
+    """`ability_order` with related ratings together: the map's own rows, grouped."""
+    order = list(ability_order(mod))
+    rank = {name: i for i, (name, _labels) in enumerate(ABILITY_GROUPS)}
+    rank["Other"] = len(ABILITY_GROUPS)
+    return tuple(label for _i, label in sorted(
+        enumerate(order), key=lambda pair: (rank[ability_group(pair[1])], pair[0])))
+
+
+def tint(color, alpha):
+    """An rgba() from a token's #rrggbb — the CSS has no colour maths of its own."""
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+# The reference-rating model (pesdb.OVR_MODEL) is written in PES 2021's ability names. In 2019
+# and 2015 some of those abilities are spelled differently, and a few do not exist: those weights
+# fold onto the map's own equivalent, or drop and the rest renormalise. 2015 has one keeper pair
+# (Saving / Goalkeeping) where 2021 has five separate ones.
+OVR_ALIASES = {
+    "pes2019": {"Offensive Awareness": "Attacking Prowess",
+                "Defensive Awareness": "Defensive Prowess",
+                "Acceleration": "Explosive Power",
+                "Balance": "Unwavering Balance",
+                "GK Awareness": "Goalkeeping", "GK Reflexes": "Reflexes",
+                "GK Reach": "Coverage", "GK Catching": "GK Catch", "GK Clearing": "Clearing",
+                "Tight Possession": None, "Aggression": None},
+    "pes2015": {"Offensive Awareness": "Attacking Prowess",
+                "Defensive Awareness": "Defensive Prowess",
+                "Acceleration": "Explosive Power",
+                "Balance": "Body Balance",
+                "GK Awareness": "Goalkeeping", "GK Reflexes": "Saving", "GK Reach": "Saving",
+                "GK Catching": "Saving", "GK Clearing": "Saving",
+                "Tight Possession": None, "Aggression": None, "Physical Contact": None},
+}
+
+
+def overall_rating(table, index, mod):
+    """The reference rating for one record, read through the map's own ability names.
+
+    Same arithmetic as `pesdb.overall` (weighted average, rounded half-to-even) — the labels are
+    the only reason this exists here rather than there.
+    """
+    aliases = OVR_ALIASES.get(mod.__name__, {})
+    fields = getattr(mod, "FIELD_BY_LABEL", {})
+    position = table.get(index, "Registered Position" if "Registered Position" in fields
+                         else "Position")
+    weights = pesdb.OVR_MODEL.get(int(position))
+    if not weights:                       # a position the model does not cover: the general six
+        names = ("Offensive Awareness", "Defensive Awareness", "Finishing", "Speed",
+                 "Physical Contact", "Stamina")
+        values = [table.get(index, aliases.get(n, n)) for n in names
+                  if aliases.get(n, n) in fields]
+        return int(round(sum(values) / len(values))) if values else 0
+    total = used = 0.0
+    for label, weight in weights:
+        target = aliases.get(label, label)
+        if target == "Header" and target not in fields:
+            target = "Heading"            # 2021 calls the same ability Heading
+        if target is None or target not in fields:
+            continue                      # the map has no such ability: drop the weight
+        total += table.get(index, target) * weight
+        used += weight
+    return int(round(total / used)) if used else 0
+
+
+def tier_of(value):
+    """A rating's band: under 60, 60-74, 75-84, 85+.
+
+    The *tint* carries the band; the number stays on top of it, so nothing is said by colour
+    alone.
+    """
+    value = int(value)
+    if value < 60:
+        return 0
+    if value < 75:
+        return 1
+    if value < 85:
+        return 2
+    return 3
+
+
+def select_all_on_focus(spin):
+    """Focusing a value selects it, so typing replaces it instead of appending to it."""
+    focus = Gtk.EventControllerFocus()
+    focus.connect("enter", lambda _c, s=spin: s.select_region(0, -1))
+    spin.add_controller(focus)
+
+
+def step_widget(spin, delta):
+    """Move a spinbutton's value by `delta`, clamped to its own range (the game's limits)."""
+    lo, hi = spin.get_range()
+    spin.set_value(max(lo, min(hi, spin.get_value() + delta)))
+
+
+def spin_steps(spin, big=5):
+    """Wheel and arrows step by one; hold Shift for five.
+
+    Both controllers run in the capture phase: the spinbutton's inner GtkText would otherwise eat
+    Up/Down as caret movement and the key would never reach this handler.
+    """
+    keys = Gtk.EventControllerKey()
+
+    def on_key(_c, keyval, _code, state):
+        up = keyval in (Gdk.KEY_Up, Gdk.KEY_KP_Up)
+        down = keyval in (Gdk.KEY_Down, Gdk.KEY_KP_Down)
+        if not (up or down):
+            return False
+        step = big if state & Gdk.ModifierType.SHIFT_MASK else 1
+        step_widget(spin, step if up else -step)
+        return True
+
+    keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+    keys.connect("key-pressed", on_key)
+    spin.add_controller(keys)
+    scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
+    scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+
+    def on_scroll(controller, _dx, dy):
+        state = controller.get_current_event_state()
+        step = big if state & Gdk.ModifierType.SHIFT_MASK else 1
+        step_widget(spin, -dy * step)
+        return True
+
+    scroll.connect("scroll", on_scroll)
+    spin.add_controller(scroll)
+
+
+def widget_value(widget):
+    """A field's value whether it is a spinbutton or a dropdown."""
+    if isinstance(widget, Gtk.DropDown):
+        return int(widget.get_selected())
+    return int(widget.get_value())
+
+
+def set_widget_value(widget, value):
+    value = int(value)
+    if isinstance(widget, Gtk.DropDown):
+        model = widget.get_model()
+        widget.set_selected(max(0, min(value, model.get_n_items() - 1)))
+    else:
+        widget.set_value(value)
 
 
 def bulk_fields(mod):
@@ -390,15 +572,16 @@ def default_database(game_dir):
 
 def country_names():
     """code -> country name, from the table the PES 2021 side already ships."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "countries.json")
     try:
-        with open(path, encoding="utf-8") as f:
-            return {int(code): name for code, name in json.load(f).items()}
+        import pesdb_maps
+        raw = json.loads(pesdb_maps.read_data("countries.json"))
+        return {int(code): name for code, name in raw.items()}
     except (OSError, ValueError, AttributeError):
         return {}
 
 
 COUNTRIES = country_names()
+STYLE_NAMES_FALLBACK = getattr(pes2019, "STYLE_NAMES", ())   # 2015's ids, 2019's names
 
 
 # ---------------------------------------------------------------- CSS from the app's tokens
@@ -418,13 +601,15 @@ def css():
         border: none; border-radius: 0; color: {t['dim']}; font-size: 11px; font-weight: bold;
         padding: 3px 8px; min-height: 20px; }}
     columnview > header > button label {{ font-size: 11px; font-weight: bold; }}
-    .dim {{ color: {t['dim']}; }}
+    .dim {{ color: {t['dim']}; font-size: 11px; }}      /* field labels: the 11 scale step */
     .hint {{ color: {t['hint']}; }}
-    .brand {{ color: {t['accent']}; font-weight: bold; font-size: 15px; }}
-    .section {{ color: {t['accent']}; font-weight: bold; font-size: 11px; }}
-    .hero {{ font-size: 17px; font-weight: bold; }}
-    .meta {{ color: {t['hint']}; font-size: 10px; }}
-    .stat {{ font-size: 10px; font-weight: bold; color: {t['dim']}; }}
+    .brand {{ color: {t['accent_text']}; font-weight: bold; font-size: 14px; }}
+    .section {{ color: {t['accent_text']}; font-weight: bold; font-size: 12px; }}
+    .section-row {{ border-bottom: 1px solid {t['line_soft']}; padding-bottom: 3px;
+        margin-bottom: 3px; }}
+    .hero {{ font-size: 18px; font-weight: bold; }}
+    .meta {{ color: {t['hint']}; font-size: 11px; }}
+    .stat {{ font-size: 11px; font-weight: bold; color: {t['dim']}; }}
 
     .pane {{ background-color: {t['panel']}; border-radius: 6px; }}
     .pane-header {{ background-color: {t['panel2']}; }}
@@ -435,15 +620,42 @@ def css():
              font-weight: bold; padding: 4px 8px; }}
     columnview {{ background-color: {t['panel']}; }}
     columnview > listview > row {{ padding: 0; }}
-    columnview > listview > row:selected {{ background-color: {t['sel']}; }}
+    columnview > listview > row:selected {{ background-color: {t['sel']};
+        box-shadow: inset 4px 0 0 {t['accent']}; }}          /* the selected row reads at a glance */
 
+    /* One control language: every field, dropdown and button shares the same radius, border,
+       padding and focus ring. Chips stay pills — that shape is a deliberate choice of theirs,
+       not a control border. Type scale: 11 (meta/headers), 12 (body, fields, chips), 14 (brand),
+       18 (player name). Numbers are tabular so columns of digits line up. */
     entry, spinbutton, dropdown, combobox {{ background-color: {t['bg']}; color: {t['fg']};
-        border: 1px solid {t['line']}; border-radius: 4px; min-height: 20px; padding: 0 5px; }}
-    entry:focus, spinbutton:focus {{ border-color: {t['accent']}; outline: none; }}
-    entry.search {{ background-color: {t['panel']}; border-radius: 5px; }}
+        border: 1px solid {t['line_strong']}; border-radius: 5px; min-height: 24px;
+        padding: 0 6px; font-size: 12px; }}
+    dropdown {{ padding: 0; }}                     /* the ring went around the button, not on it */
+    dropdown > button {{ padding: 0 4px; min-height: 22px; }}
+    entry:focus, spinbutton:focus, dropdown:focus, combobox:focus {{
+        border-color: {t['focus']}; outline: 1px solid {t['focus']}; outline-offset: -1px; }}
+    entry.search {{ background-color: {t['panel']}; }}
+    entry placeholder, entry > text > placeholder {{ color: {t['dim']}; }}   /* not the faint grey */
+    button.quiet {{ color: {t['hint']}; }}                /* same button, less shouting */
+    button.quiet:hover {{ color: {t['fg']}; border-color: {t['line']}; background-color: {t['hover']}; }}
+    .pill.dirty {{ background-color: {tint(t['accent'], 0.24)}; border-color: {t['accent']};
+        color: {t['fg']}; font-weight: bold; }}
+    entry.chipfilter {{ min-height: 18px; font-size: 11px; padding: 0 6px; }}
+    entry.invalid, entry.invalid:focus {{ border-color: {t['warn']};
+        outline: 1px solid {t['warn']}; outline-offset: -1px; }}
+    /* rating bands: the tint sits behind the number, which stays legible on it */
+    spinbutton.tier1 {{ background-color: {tint(t['dim'], 0.30)}; }}
+    spinbutton.tier2 {{ background-color: {tint(t['green'], 0.26)}; }}
+    spinbutton.tier3 {{ background-color: {tint(t['accent'], 0.30)}; }}
+    /* a field whose value differs from the one the game holds */
+    spinbutton.edited, dropdown.edited, entry.edited {{ border-left: 2px solid {t['accent']}; }}
     spinbutton, spinbutton entry, spinbutton button {{ min-width: 0; }}
-    button {{ background-color: {t['panel2']}; color: {t['dim']}; border: 1px solid {t['line']};
-        border-radius: 5px; padding: 2px 8px; min-height: 22px; font-size: 12px; }}
+    button {{ background-color: {t['panel2']}; color: {t['dim']}; border: 1px solid
+        {t['line_strong']}; border-radius: 5px; padding: 3px 10px; min-height: 24px;
+        font-size: 12px; }}
+    button:focus-visible, checkbutton:focus-visible, togglebutton:focus-visible,
+    columnview:focus-visible, columnview > listview > row:focus-visible {{
+        outline: 1px solid {t['focus']}; outline-offset: -1px; }}
     button:hover {{ background-color: {t['hover']}; color: {t['fg']}; }}
     button.accent {{ background-color: {t['accent']}; color: {t['ink']}; font-weight: bold;
         border: none; padding: 2px 10px; }}
@@ -452,12 +664,24 @@ def css():
     .batch {{ background-color: {t['panel']}; border-top: 1px solid {t['line']};
         padding: 3px 4px; }}
     .batch spinbutton {{ min-width: 66px; }}
-    columnview label.cell {{ color: {t['fg']}; }}
+    columnview label.cell {{ color: {t['fg']}; font-size: 12px;
+        font-feature-settings: "tnum" 1; }}
+    columnview label.cell.empty {{ color: {t['hint']}; }}
+    /* the pending-edit marker: a dot, not the word "edited" */
+    columnview label.cell.dot {{ background-color: {t['accent']}; border-radius: 999px;
+        min-width: 9px; min-height: 9px; color: transparent; }}
+    /* the list's checkbox: the app's own colours instead of the platform's blob */
+    columnview checkbutton > check {{ background-color: {t['panel2']};
+        border: 1px solid {t['line_strong']}; border-radius: 4px; min-width: 13px;
+        min-height: 13px; }}
+    columnview checkbutton > check:checked {{ background-color: {t['accent']};
+        border-color: {t['accent']}; color: {t['ink']}; }}
 
     .pill {{ background-color: {t['panel2']}; border: 1px solid {t['line']};
-        border-radius: 999px; padding: 0 8px; font-size: 10px; color: {t['fg']}; }}
-    .chip {{ background-color: {t['panel2']}; border: 1px solid {t['line']};
-        border-radius: 999px; padding: 0 3px; font-size: 8px; color: {t['dim']};
+        border-radius: 999px; padding: 0 8px; font-size: 11px; color: {t['fg']};
+        font-feature-settings: "tnum" 1; }}
+    .chip {{ background-color: {t['panel2']}; border: 1px solid {t['line_strong']};
+        border-radius: 999px; padding: 0 3px; font-size: 12px; color: {t['dim']};
         min-height: 15px; min-width: 0; }}
     .chip:checked {{ background-color: {t['accent']}; color: {t['ink']};
         border-color: {t['accent']}; font-weight: bold; }}
@@ -477,7 +701,8 @@ def css():
     menu, menuitem, popover.menu, popover.menu > contents {{
         background-color: {t['panel2']}; color: {t['fg']}; }}
     menuitem:hover, popover.menu modelbutton:hover {{ background-color: {t['hover']}; }}
-    spinbutton text {{ background: none; color: {t['fg']}; font-size: 11px; }}
+    spinbutton text {{ background: none; color: {t['fg']}; font-size: 12px;
+        font-feature-settings: "tnum" 1; }}
     spinbutton entry {{ border: none; background: none; min-height: 16px; }}
     spinbutton button {{ border: none; background-color: {t['panel']}; color: {t['dim']};
         min-height: 7px; min-width: 10px; padding: 0; border-radius: 3px; }}
@@ -488,18 +713,31 @@ def css():
 def system_theme():
     """'light' or 'dark' as the desktop asks for it.
 
-    PESFORGE_THEME wins (tests, and a manual override); then GTK's own preference, which modern
-    GTK syncs from the freedesktop portal; then the portal directly; and the app's dark palette
-    when nothing answers. The app used to paint itself dark whatever the desktop said, which is
-    why a light session showed a dark window with a white dropdown in it.
+    PESFORGE_THEME wins (tests, and a manual override); then the desktop's own answer — the GTK
+    theme's name, the `color-scheme` GTK syncs from the freedesktop portal, then the portal
+    directly — and dark when nothing answers. Reading only `gtk-application-prefer-dark-theme` was
+    wrong: that property stays False even under Adwaita-dark, so a dark desktop was handed the
+    light palette. The light palette paints dark ink, and the theme's dark value boxes then ate it
+    whole: every spinbutton looked empty.
     """
     want = (os.environ.get("PESFORGE_THEME") or "").strip().lower()
+    if not want:                                 # then a mode pinned in the settings menu
+        want = str(settings.load().get("mode", "")).strip().lower()
     if want in ("light", "dark"):
         return want
+    name = ""
     try:
         st = Gtk.Settings.get_default()
         if st is not None:
-            return "dark" if st.get_property("gtk-application-prefer-dark-theme") else "light"
+            name = str(st.get_property("gtk-theme-name") or "").lower()
+            if name.endswith("dark") or st.get_property("gtk-application-prefer-dark-theme"):
+                return "dark"
+    except Exception:
+        pass
+    try:
+        scheme = Gio.Settings.new("org.gnome.desktop.interface").get_string("color-scheme")
+        if scheme in ("prefer-dark", "prefer-light"):
+            return "dark" if scheme == "prefer-dark" else "light"
     except Exception:
         pass
     try:
@@ -527,7 +765,12 @@ def install_css(display, mode=None):
     if _PROVIDER is None:
         _PROVIDER = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(display, _PROVIDER,
-                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+                                                  # above the user's gtk.css (USER, 800): a themed
+                                                  # desktop paints our fields with its own palette,
+                                                  # and that is where mixed light/dark controls came
+                                                  # from. The palette still follows the desktop's
+                                                  # light/dark answer; its colours are ours.
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
     try:
         _PROVIDER.load_from_data(css().encode("utf-8"))
     except TypeError:                       # older bindings want (data, length)
@@ -545,10 +788,6 @@ class Row(GObject.Object):
     name = GObject.Property(type=str, default="")
     club = GObject.Property(type=str, default="")
     pos = GObject.Property(type=str, default="")
-    spd = GObject.Property(type=int, default=0)
-    bc = GObject.Property(type=int, default=0)
-    fin = GObject.Property(type=int, default=0)
-    sta = GObject.Property(type=int, default=0)
     edited = GObject.Property(type=bool, default=False)
 
     @property
@@ -692,6 +931,10 @@ class ImportHub(Gtk.Window):
         self.close()
 
 
+LIST_MAX = 452       # the six list columns: check 36 + id 52 + name 158 + club 106 + pos 44 + state 56
+LIST_MIN_H = 130     # the list strip's height when the editor sits under it
+
+
 class PesForgeGtk(Gtk.ApplicationWindow):
     def __init__(self, app, table=None, table_source=None, teams=None, assign=None):
         """Starts with no database: nothing is read until the user imports one."""
@@ -712,6 +955,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.mod = VINTAGES["pes2019"]["module"]
         self.rows = []
         self.dirty = set()
+        self.originals = {}                     # (index, key) -> the value the game holds
         self.undo_stack = []                    # steps: [(index, key, old, new), ...]
         self.redo_stack = []
         self.loading = True                     # until the first record is loaded
@@ -750,6 +994,62 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             self.populate()
 
     # ---- header
+    def _settings_button(self):
+        """The settings menu: the palette, the light/dark mode, and how many backups to keep.
+
+        Only settings this build honours are here — each is read back when it is used, so
+        writing the config and reloading the stylesheet is all it takes to apply one.
+        """
+        cfg = settings.load()
+        popover = Gtk.Popover()
+        grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        for m, side in ((10, "start"), (10, "end"), (10, "top"), (10, "bottom")):
+            (grid.set_margin_start(m) if side == "start" else
+             grid.set_margin_end(m) if side == "end" else
+             grid.set_margin_top(m) if side == "top" else grid.set_margin_bottom(m))
+        grid.attach(dim_label("Theme", 76, 12), 0, 0, 1, 1)
+        mode = Gtk.DropDown.new_from_strings(("Follow desktop", "Dark", "Light"))
+        mode.set_selected({"dark": 1, "light": 2}.get(str(cfg.get("mode", "")).lower(), 0))
+        mode.set_hexpand(True)
+        a11y(mode, "theme mode: follow the desktop, dark, or light")
+        mode.connect("notify::selected", self._on_mode_changed)
+        grid.attach(mode, 1, 0, 1, 1)
+        grid.attach(dim_label("Palette", 76, 12), 0, 1, 1, 1)
+        names = [name for name, _label in theme.CHOICES]
+        palette = Gtk.DropDown.new_from_strings([label for _name, label in theme.CHOICES])
+        palette.set_selected(names.index(theme.choice(cfg)))
+        palette.set_hexpand(True)
+        a11y(palette, "colour palette")
+        palette.connect("notify::selected",
+                        lambda dd, _p: self._set_config(theme=names[dd.get_selected()]))
+        grid.attach(palette, 1, 1, 1, 1)
+        grid.attach(dim_label("Backups", 76, 12), 0, 2, 1, 1)
+        keep = Gtk.SpinButton.new_with_range(0, 200, 1)
+        keep.set_value(int(cfg.get("max_backups", 50)))
+        keep.set_tooltip_text("backups kept before the oldest is pruned; 0 keeps everything")
+        keep.set_hexpand(False)
+        keep.set_halign(Gtk.Align.START)
+        a11y(keep, "backups to keep; 0 keeps everything")
+        keep.connect("value-changed", lambda sb: self._set_config(max_backups=int(sb.get_value())))
+        grid.attach(keep, 1, 2, 1, 1)
+        popover.set_child(grid)
+        button = Gtk.MenuButton(label="Settings")
+        button.set_popover(popover)
+        button.set_tooltip_text("palette, theme mode, backups")
+        self.settings_button = button
+        return button
+
+    def _set_config(self, **changes):
+        """Write settings, then reload the stylesheet — that is what applies them."""
+        cfg = settings.load()
+        cfg.update(changes)
+        settings.save(cfg)
+        install_css(self.get_display())
+        self._status("settings saved · " + ", ".join(f"{k}={v}" for k, v in changes.items()))
+
+    def _on_mode_changed(self, dd, _pspec):
+        self._set_config(mode=("", "dark", "light")[dd.get_selected()])
+
     def _header(self):
         bar = Gtk.Box(spacing=10)
         bar.set_margin_top(10)
@@ -765,14 +1065,18 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         bar.append(self.import_btn)
         self.unload_btn = Gtk.Button(label="Unload")
         self.unload_btn.set_tooltip_text("drop the loaded database and go back to the start")
+        self.unload_btn.add_css_class("quiet")
         self.unload_btn.connect("clicked", lambda _b: self.unload_database())
         bar.append(self.unload_btn)
         self.search = Gtk.SearchEntry()
         self.search.set_hexpand(True)
         self.search.set_placeholder_text("Search players, clubs, IDs…")
+        a11y(self.search, "search players by name, shirt name, club or id")
         self.search.connect("search-changed", lambda _e: self._refilter())
+        self.search.connect("activate", lambda _e: self._open_first_match())
         self.search.set_sensitive(False)                         # nothing loaded to search yet
         bar.append(self.search)
+        bar.append(self._settings_button())
         return bar
 
     # ---- empty state: shown until a database is imported
@@ -813,7 +1117,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         a size the window did not have yet (it opens at the remembered size and the compositor
         tiles it afterwards), which is how a 738px window ended up with a sliced-up form.
         """
-        self.narrow = True                        # the compact grids: 3 columns, no value bars
+        self.narrow = True                        # the abilities' compact grid: 3 columns, no bars
+        self.roomy = getattr(self, "roomy", False)   # the BIO grid, when the window is wide enough
+        self._paned = None                        # a fresh page re-applies its arrangement
         panes = Gtk.Box(spacing=8)
         panes.set_margin_start(8)
         panes.set_margin_end(8)
@@ -845,44 +1151,82 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         Gtk.ApplicationWindow.do_size_allocate(self, width, height, baseline)
         self._size_panes(width, height)
 
-    def _size_panes(self, width, height=0):
-        """Point the page: side by side, or list-on-top when the editor cannot fit beside it.
+    def _rebuild_for_mode(self):
+        """Rebuild the grids for the other layout — once, when the window's size is settled.
 
-        The editor needs ~586px of width and ~950px of height for all of its fields; below either,
-        the list gives way (it is a strip above, and the editor scrolls) — the columns still line
-        up, which is what "aligned" means here.
+        A rebuild is a fresh page: the store, the filter and the form all have to be refilled,
+        or the list comes back empty.
         """
-        if width <= 1 or not hasattr(self, "_list_pane"):
+        was = self.index
+        self._build_panes()
+        if getattr(self, "rows", None):
+            self.populate()
+            self._refilter()
+            if was is not None:
+                self._load(was)
+        return False
+
+    def _size_panes(self, width, height=0):
+        """Point the page: the list beside the editor, or as a strip above it.
+
+        The editor's own content decides, not a width I guessed: the form overflows (and GTK
+        slices its columns) whenever the space left beside the list is smaller than what the
+        fields need, and that need changes with how the labels happen to wrap. So: side by side
+        while it fits, strip-on-top the moment it does not, with a 40px band so the two states
+        cannot flip back and forth.
+        """
+        if width <= 1 or not hasattr(self, "_editor"):
             return False
-        stacked = width < 910 or 0 < height < 950
         total = width - 16                          # the two 8px margins
-        # Side by side, the editor's grids need ~630px: the list takes the rest, capped at 590
-        # (ten columns want ~586) and floored so its rows still make sense.
-        room = max(260, total - 648)
-        list_w = max(260, min(590, int(total * 0.32), room))
+        list_w = max(260, min(LIST_MAX, int(total * 0.32)))
+        # The six columns are 452px together and a ColumnView squeezes instead of scrolling: at a
+        # 320px pane ID and NAME collapsed to nothing (the "blank columns" the user reported)
+        # because the policy below was data nobody read. Hide what does not fit, and never hand the
+        # pane less width than the columns that are left.
+        pane_w = total if (width < 910 or 0 < height < 950) else list_w
+        cols_w = 36 + 158 + 56                      # check, NAME, STATE: shown at any width
+        for col, need in self._col_min:
+            col.set_visible(pane_w >= need)
+            if pane_w >= need:
+                cols_w += int(col.get_fixed_width())
+        list_w = max(list_w, cols_w)
+        space = total - list_w - 8                  # what the editor would get beside the list
+        try:
+            editor_min = self._editor.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+        except Exception:                           # not measurable before the first frame
+            editor_min = 586
+        was = getattr(self, "_paned", None) or ("h", 0)
+        if was[0] == "h":
+            # what the editor needs when it *has* the side-by-side width — the only honest number
+            # to judge the way back with. Measured while stacked it is inflated (the form is as
+            # wide as the window there, so its labels stop wrapping), and the pane then never
+            # returns: the split layout would be a one-way door.
+            self._editor_min_h = max(getattr(self, "_editor_min_h", 0), editor_min)
+        else:
+            editor_min = getattr(self, "_editor_min_h", editor_min)
+        stacked = (width < 910 or 0 < height < 950
+                   or space < editor_min + 16
+                   or (was[0] == "h" and self._form_overflows()))
         want = ("v", -1) if stacked else ("h", list_w)
-        if getattr(self, "_paned", None) != want:
+        if was != want:
             self._paned = want
             self._panes.set_orientation(
                 Gtk.Orientation.VERTICAL if stacked else Gtk.Orientation.HORIZONTAL)
-            self._list_pane.set_size_request(-1, 130) if stacked else \
-                self._list_pane.set_size_request(list_w, -1)
             self._editor.set_vexpand(True)
-        # Columns appear as the pane can pay for them: a stacked strip has the whole window,
-        # side by side the list shows its stats, then club and position — never squeezed stubs.
-        room = 10 ** 6 if stacked else list_w
-        if getattr(self, "_col_room", None) != room:
-            self._col_room = room
-            for col, need in getattr(self, "_col_min", ()):
-                col.set_visible(room >= need)
-            # the identity columns take the widths the pane can actually give them,
-            # so a 4-digit id is never elided to "7,8…"
-            for col, wide, tight in ((getattr(self, "_check_col", None), 36, 34),
-                                     (getattr(self, "_cols", {}).get("ID"), 48, 56),
-                                     (getattr(self, "_cols", {}).get("STATE"), 56, 50)):
-                if col is not None:
-                    col.set_fixed_width(tight if room < 440 else wide)
+            if stacked:
+                self._list_pane.set_size_request(-1, LIST_MIN_H)
+            else:
+                self._list_pane.set_size_request(list_w, -1)
         return False
+
+    def _form_overflows(self):
+        """True when the form pane is actually showing a horizontal scrollbar this frame."""
+        scroller = self._form_pane.get_first_child()
+        if scroller is None:
+            return False
+        ha = scroller.get_hadjustment()
+        return ha.get_upper() > ha.get_page_size() + 0.5
+
 
     def _list(self):
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -895,6 +1239,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.column_view.set_show_column_separators(False)
         self.column_view.set_show_row_separators(False)
         self.column_view.add_css_class("rows")
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)   # before the row's own handling
+        keys.connect("key-pressed", self._on_view_key)
+        self.column_view.add_controller(keys)
         check_factory = Gtk.SignalListItemFactory()
         check_factory.connect("setup", self._check_setup)
         check_factory.connect("bind", self._check_bind)
@@ -902,23 +1250,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         check_col.set_fixed_width(36)
         self.column_view.append_column(check_col)
         self._check_col = check_col
+        # no rating columns here: the abilities pane shows every number, at a readable size
         for title, width, attr, align, sortable in (
-                ("ID", 48, "pid", 1.0, True), ("NAME", 158, "name", 0.0, True),
-                ("CLUB", 106, "club", 0.0, True), ("POS", 36, "pos", 0.5, False),
-                ("SPD", 40, "spd", 1.0, True), ("BC", 34, "bc", 1.0, True),
-                ("FIN", 36, "fin", 1.0, True), ("STA", 36, "sta", 1.0, True)):
+                ("ID", 52, "pid", 1.0, True), ("NAME", 158, "name", 0.0, True),
+                ("CLUB", 106, "club", 0.0, True), ("POS", 44, "pos", 0.5, False)):
             factory = Gtk.SignalListItemFactory()
             factory.connect("setup", self._cell_setup)
             factory.connect("bind", self._cell_bind, attr)
             col = Gtk.ColumnViewColumn(title=title, factory=factory)
             col.set_fixed_width(width)
             col.set_resizable(True)
-            if title == "NAME":
-                col.set_expand(True)             # the name takes the slack the pane has
+            if title in ("NAME", "CLUB"):
+                col.set_expand(True)             # name and club share the slack the pane has
             if title in ("CLUB", "POS"):
-                self._col_min.append((col, 586))     # ten columns want ~586px
-            elif title in ("SPD", "BC", "FIN", "STA"):
-                self._col_min.append((col, 440))     # the stats fit without club and position
+                self._col_min.append((col, LIST_MAX))   # the pane fits all six columns or neither
+            if title == "ID":
+                self._col_min.append((col, 250))         # below this even the name is squeezed out
             self._cols[title] = col
             if sortable:
                 sorter = Gtk.CustomSorter.new(self._compare, attr)
@@ -940,13 +1287,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         scroller.set_child(self.column_view)
         scroller.set_vexpand(True)
         pane.append(scroller)
+        previous = getattr(self, "count", None)          # a rebuilt page leaves its old count
+        if previous is not None and previous.get_parent() is not None:   # behind in the footer,
+            previous.get_parent().remove(previous)        # one copy per rebuild
         self.count = Gtk.Label(label="", xalign=0)
         self.count.add_css_class("hint")
         self.count.set_ellipsize(Pango.EllipsizeMode.END)   # its text was the pane's minimum
         self.count.set_max_width_chars(30)                  # ...and its natural, too
-        self.count.set_margin_start(8)
-        self.count.set_margin_bottom(6)
-        pane.append(self.count)
+        self.count.set_margin_start(6)
+        self.count.set_margin_end(6)
+        footer = self.status.get_parent()
+        if footer is not None:
+            # in the footer, beside Revert: under the list it clipped the last row of a pane that
+            # is exactly as tall as the window
+            footer.insert_child_after(self.count, self.revert_btn)
+        else:
+            pane.append(self.count)
         return pane
 
     def _cell_setup(self, _f, item):
@@ -957,22 +1313,65 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         label.add_controller(click)
         item.set_child(label)
 
+
     def _cell_bind(self, _f, item, attr):
         row = item.get_item()
         label = item.get_child()
         value = getattr(row, attr)
-        text = f"{value:,}" if attr == "pid" else str(value)
+        if attr == "state":
+            # a dot, not the word: the count of pending edits lives in the footer
+            label.set_text("")
+            label.set_xalign(0.5)
+            if value:
+                label.add_css_class("dot")
+            else:
+                label.remove_css_class("dot")
+            label.set_tooltip_text("edited — Save writes it" if value else None)
+            label.update_property([Gtk.AccessibleProperty.LABEL],
+                                  ["edited" if value else ""])
+            return
+        text = str(value)                    # ids read "26395", never "1,0…" elided
+        empty = attr in ("club", "pos") and not text.strip()
+        if empty:
+            text = "free agent" if attr == "club" else "—"
+            label.add_css_class("empty")
+        else:
+            label.remove_css_class("empty")
         label.set_text(text)
         # ten columns want more than the pane holds, so the view squeezes them: elide instead of
         # chopping the word, and keep the full value on hover
         label.set_ellipsize(Pango.EllipsizeMode.END)
         label.set_tooltip_text(text or None)
-        label.set_xalign(1.0 if attr in ("pid", "spd", "bc", "fin", "sta") else 0.0)
+        label.set_xalign(1.0 if attr == "pid" else 0.0)
         label.set_width_chars(0)
+
+    def _on_view_key(self, _c, keyval, _code, _state):
+        """Space ticks the row under the cursor; Tab leaves the list instead of walking rows.
+
+        The list can hold 26k rows: with every row a Tab stop the key was useless, so Tab moves on
+        to the form (and back to the search) and the row under the cursor is ticked with Space.
+        """
+        if keyval in (Gdk.KEY_space, Gdk.KEY_KP_Space):
+            row = self.selection.get_selected_item()
+            if row is None:
+                return False
+            self._set_checked(row.index, row.index not in self.checked)
+            return True
+        if keyval == Gdk.KEY_Tab:
+            # grab_focus, not set_focus: a Gtk.Entry reports focusable=False (its inner GtkText
+            # owns the focus) and set_focus refuses such a widget outright
+            self.name_entries.get("Name", self.search).grab_focus()
+            return True
+        if keyval == Gdk.KEY_ISO_Left_Tab:
+            self.search.grab_focus()
+            return True
+        return False
 
     def _check_setup(self, _f, item):
         check = Gtk.CheckButton()
         check.set_halign(Gtk.Align.CENTER)
+        check.set_focusable(False)          # the list is one Tab stop; Space ticks the cursor row
+        a11y(check, "select this player for a bulk edit")
         click = Gtk.GestureClick()
         click.connect("released", self._row_clicked, item)
         check.add_controller(click)
@@ -1003,7 +1402,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             self.checked.discard(index)
         if 0 <= index < len(self.rows):
             # a cell paints on a re-bind only, so splice this row and keep its edited flag
+            pos = self.selection.get_selected()        # the cursor must survive the splice
             self._refresh_cells([index], edited=self.rows[index].edited)
+            if pos is not None:
+                self.selection.set_selected(pos)
         self._update_bulk()
 
     def selected_indexes(self):
@@ -1047,7 +1449,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
 
         pills = Gtk.Box(spacing=6)
         self.pills = {}
-        for key in ("Height", "Weight", "Age", "Foot"):
+        for key in ("OVR", "Height", "Weight", "Age", "Foot"):
             p = Gtk.Label(label=f"{key} —")
             p.add_css_class("pill")
             pills.append(p)
@@ -1055,6 +1457,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         inner.append(pills)
 
         self.name_entries = {}
+        self.name_slots = {}
         slots = getattr(self.mod, "NAME_SLOTS",
                        (("Name", "full"), ("Shirt Name", "shirt"), ("Japanese Name", "japanese")))
         nrow = Gtk.Grid(column_spacing=10, row_spacing=0) if narrow else None
@@ -1062,7 +1465,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             lab = dim_label(key, 72 if narrow else 96, 11 if narrow else 15)
             e = Gtk.Entry()
             e.set_hexpand(True)
+            e.set_tooltip_text(f"up to {self._name_limit()} bytes")
+            a11y(e, f"{key}, up to {self._name_limit()} bytes")
             e.connect("changed", self._on_name_changed, off)
+            self.name_slots[key] = off
             self.name_entries[key] = e
             if nrow is not None:              # short window: pair the name fields up
                 nrow.attach(lab, (i % 2) * 2, i // 2, 1, 1)
@@ -1075,17 +1481,23 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         if nrow is not None:
             inner.append(nrow)
 
-        inner.append(self._section("ABILITIES", "40 - 99"))
+        inner.append(self._section("ABILITIES",
+                                   " · ".join(name for name, _labels in ABILITY_GROUPS)))
         self.abilities = {}
         cols = 3 if narrow else 2
         grid = Gtk.Grid(column_spacing=6, row_spacing=0)
-        order = ability_order(self.mod)
+        order = grouped_ability_order(self.mod)
         for n, label in enumerate(order):
             cell = Gtk.Box(spacing=6)
-            cell.append(dim_label(label, 108, 19))
+            cell.append(dim_label(label, 114, 20))
             spin = Gtk.SpinButton.new_with_range(40, 99, 1)
             spin.set_width_chars(4)          # without this the entry reserves ~112px
             spin.set_size_request(72, 28)    # one box size for every value control in the grid
+            lo, hi = spin.get_range()        # the range belongs on the field, not floating above
+            spin.set_tooltip_text(f"{label} · {ability_group(label)} · {int(lo)} to {int(hi)}")
+            a11y(spin, f"{label}, {ability_group(label)}, {int(lo)} to {int(hi)}")
+            select_all_on_focus(spin)
+            spin_steps(spin)
             if narrow:
                 slim_spin(spin)
             spin.connect("value-changed", self._on_ability_changed, label)
@@ -1098,14 +1510,18 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 self.abilities[label] = (spin, None)
             grid.attach(cell, n % cols, n // cols, 1, 1)
         pos_cell = Gtk.Box(spacing=6)
-        pos_cell.append(dim_label("Position", 108, 19))
-        self.position = Gtk.DropDown.new_from_strings(self.mod.POSITION_NAMES)
+        pos_cell.append(dim_label("Position", 114, 20))
+        self.position = ellipsizing_dropdown(self.mod.POSITION_NAMES, 5)   # "DMF" fits, its popup keeps the long form
         self.position.set_size_request(72, 28)                      # same box as the value fields
         self.position.set_hexpand(False)                            # or it outgrows its column
         self.position.connect("notify::selected", self._on_position_changed)
         pos_cell.append(self.position)
         grid.attach(pos_cell, len(order) % cols, len(order) // cols, 1, 1)
-        inner.append(grid)
+        band = Gtk.Box(spacing=12)
+        band.append(grid)
+        if getattr(self, "roomy", False):
+            band.append(self._profile())
+        inner.append(band)
         return box
 
     BULK_OPS = (("Set to", "set"), ("Add", "add"), ("Subtract", "sub"))
@@ -1117,6 +1533,37 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                   "Nationality": (0, 511), "Form": (1, 8), "Weak Foot Usage": (1, 4),
                   "Weak Foot Accuracy": (1, 4), "Injury Resistance": (1, 4),
                   "Reputation": (1, 8)}
+
+    def _profile(self):
+        """The abilities at a glance: one bar per group, drawn right of the grid.
+
+        The grid already holds every number; this shows the shape of them — four rows, each the
+        mean of its group. Reuses AbilityBar, so the colours match the values elsewhere.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        box.set_valign(Gtk.Align.START)
+        head = Gtk.Label(label="PROFILE", xalign=0)
+        head.add_css_class("dim")
+        box.append(head)
+        self.profile = {}
+        for name, _labels in ABILITY_GROUPS:
+            row = Gtk.Box(spacing=6)
+            tag = Gtk.Label(label=name[:3].upper(), xalign=0)
+            tag.add_css_class("dim")
+            tag.set_size_request(32, -1)
+            bar = AbilityBar(64)
+            bar.set_hexpand(True)
+            bar.set_tooltip_text(f"{name} average")
+            a11y(bar, f"{name} average")
+            value = Gtk.Label(label="—", xalign=1)
+            value.add_css_class("dim")
+            value.set_size_request(20, -1)
+            row.append(tag)
+            row.append(bar)
+            row.append(value)
+            box.append(row)
+            self.profile[name] = (bar, value)
+        return box
 
     def _bio(self):
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1137,54 +1584,83 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         inner.append(self._section("BIO", ""))
 
         self.bio = {}
-        rows = tuple((label,) + self.BIO_RANGES[label] + (label,)
-                     for label in self.BIO_LABELS if label in self.mod.FIELD_BY_LABEL)
-        # two fields per line: nine rows in one column is what made this pane tall enough to scroll
+        roomy = self.roomy                        # three narrow columns, or two roomy ones
         pairs = []
-        val_w = 90 if getattr(self, "narrow", False) else 128    # one box size for spins and dropdowns
-        for label, lo, hi, key in rows:
-            spin = Gtk.SpinButton.new_with_range(lo, hi, 1)
-            spin.set_width_chars(4)
-            spin.set_size_request(val_w, 28)
-            if getattr(self, "narrow", False):
-                slim_spin(spin)
-            spin.connect("value-changed", self._on_bio_changed, key)
-            self.bio[key] = spin
-            pairs.append((label, spin))   # nationality is a code; the country shows in the meta
 
-        names = getattr(self.mod, "STYLE_NAMES", None)
+        # PES 2015 stores the same style ids as 2019 (0 None, 17 Defensive Goalkeeper) but its
+        # map carries no names, so it borrows the shared list
+        names = getattr(self.mod, "STYLE_NAMES", None) or STYLE_NAMES_FALLBACK
         if names:
-            self.style = ellipsizing_dropdown(names, 12)
+            self.style = ellipsizing_dropdown(names)       # roomy: no truncation, the box is the longest style
             self.style.connect("notify::selected", self._on_style_changed)
-        else:                                 # PES 2015 numbers its playing styles
+        else:                                 # a release without names: its id in a spinbox
             lo, hi = field_range(self.mod, "Playing Style")
             self.style = Gtk.SpinButton.new_with_range(lo, hi, 1)
             self.style.connect("value-changed", self._on_bio_changed, "Playing Style")
-        dropdowns = [("Playing Style", self.style)]
-        self.foot = ellipsizing_dropdown(("Right", "Left"), 8)
+        self.foot = ellipsizing_dropdown(("Right", "Left"), 6)
         self.foot.connect("notify::selected", self._on_foot_changed)
-        dropdowns.append(("Foot", self.foot))
+
+        # Every field goes into ONE grid: the style and foot dropdowns used to sit on their own
+        # line below it, so their labels started at a different x than the rows above and the
+        # boxes looked like they were floating. The grid sizes each value column to its widest
+        # member, so the boxes line up and a country name is never cut short.
+        fields = [(label, self.BIO_RANGES[label]) for label in self.BIO_LABELS
+                  if label in self.mod.FIELD_BY_LABEL]
+        # style and foot follow the last row's dropdown, as in the game's own panel
+        fields += [("Playing Style", None), ("Foot", None)]
+        for label, span in fields:
+            key = label
+            if label == "Playing Style":
+                widget = self.style
+            elif label == "Foot":
+                widget = self.foot
+            elif key == "Nationality":
+                # a code, not a number: offer the country itself. The list is the whole code
+                # range, so the selected index *is* the stored value — nothing to drift.
+                widget = ellipsizing_dropdown([COUNTRIES.get(c, f"#{c}") for c in range(512)],
+                                              12)                        # 7 cut "Portugal" in half
+                if hasattr(widget, "set_enable_search"):
+                    widget.set_enable_search(True)
+            else:
+                lo, hi = span
+                widget = Gtk.SpinButton.new_with_range(lo, hi, 1)
+                widget.set_width_chars(4)
+                if not roomy:
+                    slim_spin(widget)
+            if isinstance(widget, Gtk.DropDown):
+                # notify::selected hands over the pspec too; the handler wants (widget, key)
+                widget.connect("notify::selected",
+                               lambda dd, _p, k=key: self._on_bio_changed(dd, k))
+            else:
+                widget.connect("value-changed", self._on_bio_changed, key)
+            if span is not None:
+                widget.set_tooltip_text(f"{label} · {span[0]} to {span[1]}")
+                a11y(widget, f"{label}, {span[0]} to {span[1]}")
+            if isinstance(widget, Gtk.SpinButton):
+                select_all_on_focus(widget)
+                spin_steps(widget)
+            self.bio[key] = widget
+            pairs.append((label, widget))
 
         grid = Gtk.Grid(column_spacing=6, row_spacing=1)
-        ncols = 3 if getattr(self, "narrow", False) else 2   # three short rows beat six tall ones
+        ncols = 2 if roomy else 3
         for i, (text, widget) in enumerate(pairs):
-            lab = dim_label(text, 84 if ncols == 3 else 92, 14)
-            widget.set_size_request(val_w, 28)   # one box size, so the columns line up
+            lab = dim_label(text, 128 if roomy else 114, 20)
             widget.set_hexpand(False)
-            widget.set_tooltip_text(widget.get_tooltip_text() or text)
+            widget.set_halign(Gtk.Align.FILL)   # one width per column: no box floats
+            if widget.get_tooltip_text() is None:
+                widget.set_tooltip_text(text)
             grid.attach(lab, (i % ncols) * 2, i // ncols, 1, 1)
             grid.attach(widget, (i % ncols) * 2 + 1, i // ncols, 1, 1)
         inner.append(grid)
-        # outside the grid: a dropdown's own minimum is wider than the number boxes beside it.
-        # Both share one line — stacked, they were the 17px that made the pane scroll.
-        line = Gtk.Box(spacing=6)
-        for text, widget in dropdowns:
-            line.append(dim_label(text, 84, 14))
-            widget.set_hexpand(True)
-            line.append(widget)
-        inner.append(line)
 
-        inner.append(self._section("SKILLS & COM STYLES", "click to toggle"))
+        self.chip_filter = Gtk.SearchEntry()
+        self.chip_filter.add_css_class("chipfilter")
+        self.chip_filter.set_placeholder_text("filter skills and styles…")
+        a11y(self.chip_filter, "filter the skill and playing-style chips by name")
+        self.chip_filter.set_tooltip_text("show only the chips whose name matches")
+        self.chip_filter.connect("search-changed", lambda _e: self._filter_chips())
+        inner.append(self._section("SKILLS & COM STYLES", self.chip_filter))
         # A grid, not a FlowBox: the flow reports six widest-in-a-row as its minimum width, which
         # no amount of font shrinking fixed, and a grid's columns are the pane's to divide.
         cols = 6 if getattr(self, "narrow", False) else 4
@@ -1201,6 +1677,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             if text is not None:              # long names elide instead of widening the column
                 text.set_ellipsize(Pango.EllipsizeMode.END)
             chip.set_tooltip_text(label.split(": ", 1)[1])
+            a11y(chip, f"toggle {label.split(': ', 1)[1]}")
+            self._chip_text(chip, False, chip.get_tooltip_text())
             chip.connect("toggled", self._on_skill_toggled, label)
             grid2.attach(chip, n % cols, n // cols, 1, 1)
             self.chips[label] = chip
@@ -1211,11 +1689,17 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         return pane
 
     def _section(self, text, hint):
+        """A section band: its title, and a hint that may be a string or a widget."""
         box = Gtk.Box(spacing=8)
+        box.add_css_class("section-row")
         lab = Gtk.Label(label=f"▼ {text}", xalign=0)
         lab.add_css_class("section")
         box.append(lab)
-        if hint:
+        if isinstance(hint, Gtk.Widget):
+            hint.set_hexpand(True)
+            hint.set_halign(Gtk.Align.END)
+            box.append(hint)
+        elif hint:
             h = Gtk.Label(label=hint, xalign=1)
             h.add_css_class("hint")
             h.set_hexpand(True)
@@ -1242,6 +1726,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.bulk_op.set_selected(1)
         self.batch.append(self.bulk_op)
         self.bulk_amount = Gtk.SpinButton.new_with_range(-99, 99, 1)
+        spin_steps(self.bulk_amount)
         self.bulk_amount.set_value(1)
         self.batch.append(self.bulk_amount)
         apply_btn = Gtk.Button(label="Apply to selected")
@@ -1277,6 +1762,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.bulk_amount.set_range(min(lo, -99), max(hi, 99))
 
     def _update_bulk(self):
+        self._update_badge()
         n = len(self.selected_indexes())
         self.batch.set_visible(bool(n))
         if n:
@@ -1323,8 +1809,6 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             t = self.table
             batch.append((i, Row(index=i, pid=old.pid, name=t.name(i), club=old.club,
                                  pos=self.position_name(t.get(i, "Position")),
-                                 spd=t.get(i, "Speed"), bc=t.get(i, "Ball Control"),
-                                 fin=t.get(i, "Finishing"), sta=t.get(i, "Stamina"),
                                  edited=edited)))
         for i, row in batch:
             self.rows[i] = row
@@ -1344,6 +1828,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         revert.set_sensitive(False)
         self.revert_btn = revert
         bar.append(revert)
+        self.dirty_badge = Gtk.Label()
+        self.dirty_badge.add_css_class("pill")
+        self.dirty_badge.add_css_class("dirty")
+        self.dirty_badge.set_visible(False)
+        bar.append(self.dirty_badge)
         self.status = Gtk.Label(label=(f"{VINTAGES[self.vintage]['label']} · "
                                        f"{os.path.basename(str(source))}") if source
                                 else "no database loaded · Import database… to pick one", xalign=0)
@@ -1359,12 +1848,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         bar.append(self.save_btn)
         return bar
 
+    def _update_badge(self):
+        """The pending-edit badge: how many edits are waiting for Save."""
+        if not hasattr(self, "dirty_badge"):
+            return
+        n = len(self.dirty)
+        self.dirty_badge.set_text(f"{n} edited" if n else "")
+        self.dirty_badge.set_visible(bool(n))
+        self.dirty_badge.set_tooltip_text(f"{n} edit(s) not yet written — Save to game writes "
+                                          f"them" if n else None)
+
     def _status(self, text):
         """Write the footer line. Everything it reports names the database it is about."""
         self.status.set_text(f"{self.provenance} · {text}" if self.provenance else text)
 
     def _shortcuts(self):
-        """Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+F / Escape — the Tk build's keyboard set."""
+        """Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+F / Escape: save, undo, redo, find, clear."""
         ctrl = Gtk.ShortcutController()
         for spec, fn in (("<Control>s", lambda *_: (self._save(), True)[1]),
                          ("<Control>z", self._undo),
@@ -1418,13 +1917,33 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         return True
 
     # ---- import / unload
-    def unload_database(self):
-        """Drop the loaded database and go back to the empty window (the Tk build's Unmount)."""
+    def unload_database(self, ask=True):
+        """Drop the loaded database and go back to the empty window.
+
+        With edits pending this asks first — discarding them is a real choice, not a status line.
+        """
         if self.table is None:
             self._status("nothing loaded")
             return
         if self.dirty:
-            self._status(f"{len(self.dirty)} unsaved edit(s) — save or Revert before unloading")
+            if not ask:
+                return
+            dialog = Gtk.AlertDialog()
+            dialog.set_modal(True)
+            dialog.set_message(f"Discard {len(self.dirty)} unsaved edit(s) and unload?")
+            dialog.set_detail("They are not written to the database until you press "
+                              "Save to game.")
+            dialog.set_buttons(["Keep editing", "Discard and unload"])
+            dialog.set_cancel_button(0)
+            dialog.set_default_button(0)
+
+            def _done(d, result):
+                try:
+                    if d.choose_finish(result) == 1:
+                        self.unload_database(ask=False)
+                except GLib.Error:
+                    pass
+            dialog.choose(self, None, _done)
             return
         self.table = self.teams = self.assign = None
         self.source = self.source_name = ""
@@ -1432,9 +1951,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.packs = []
         self.clubs, self.assign_by_pid = {}, {}
         self.rows, self.dirty = [], set()
+        self.originals.clear()
         self.checked.clear()
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.originals.clear()
         self.index = None
         self.provenance = ""
         self.loading = True
@@ -1516,6 +2037,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.vintage = vintage
         self.mod = mod
         self.table, self.teams, self.assign = table, teams, assign
+        self._ovr_cache = {}                  # ratings belong to the database that was open
         self.source = path
         self.source_name = name
         self.game = install_of(path)
@@ -1525,9 +2047,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         for i in range(len(self.assign)):
             self.assign_by_pid.setdefault(self.assign.player(i), []).append(i)
         self.dirty.clear()
+        self.originals.clear()
         self.checked.clear()
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.originals.clear()
         self.index = None
         self.rows = []
         self.store.remove_all()
@@ -1538,6 +2062,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.save_btn.set_sensitive(True)
         self.revert_btn.set_sensitive(True)
         self.search.set_sensitive(True)
+        self.search.grab_focus()          # typing should land in the search, not on the floor
         self.provenance = name + (f" ({swapped} had no player table)" if swapped else "")
         self._status(f"{VINTAGES[vintage]['label']} · {len(self.rows):,} players · {note}"
                      + (" · EDIT00000000 is present and overrides this file in game"
@@ -1553,8 +2078,7 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             club = self.clubs.get(self.assign.team(rows[0]), "") if rows else ""
             self.rows.append(Row(index=i, pid=pid, name=t.name(i), club=club,
                                  pos=self.position_name(t.get(i, "Position")),
-                                 spd=t.get(i, "Speed"), bc=t.get(i, "Ball Control"),
-                                 fin=t.get(i, "Finishing"), sta=t.get(i, "Stamina")))
+                                 ))
 
     def position_name(self, value):
         """The release's name for a stored position id; a stray value shows as itself."""
@@ -1578,6 +2102,9 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         only binds what is on screen anyway.
         """
         self.store.splice(0, self.store.get_n_items(), self.rows)
+        self.column_view.set_model(self.selection)   # a rebuilt view starts with no model at all
+        # a header click drives the view's own sorter; the sort model is what has to hold it
+        self.sorted.set_sorter(self.column_view.get_sorter())
         self._update_count()
         self._load_first()
 
@@ -1588,6 +2115,18 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         if q.isdigit():
             return str(item.pid).startswith(q)
         return q in item.name.lower() or q in item.club.lower()
+
+    def _open_first_match(self):
+        """Enter in the search: drop the cursor on the first match, so the form shows it."""
+        if not self.filtered.get_n_items():
+            self._status("nothing matches that search")
+            return
+        row = self.filtered.get_item(0)
+        self.selection.set_selected(0)                # the cursor follows, the ticks do not
+        self.column_view.scroll_to(0, None, Gtk.ListScrollFlags.NONE, None)
+        self._load(row.index)
+        self._status(f"{self.filtered.get_n_items():,} match(es) · {self.table.name(row.index)} "
+                     f"(id {self.table.pid(row.index)}) in the form")
 
     def _refilter(self):
         self.filter.changed(Gtk.FilterChange.DIFFERENT)
@@ -2159,6 +2698,8 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.loading = True
         self.hero.set_text(t.name(index))
         self.meta.set_text(self._meta_text(index))
+        self._paint_ovr(index)
+        self._paint_profile(index)
         for key in ("Height", "Weight", "Age"):
             self.pills[key].set_text(f"{key} {t.get(index, key)}")
         self.pills["Foot"].set_text("Foot " + ("Left" if t.get(index, "Foot") else "Right"))
@@ -2173,15 +2714,25 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                 bar.set_value(value)
         self.position.set_selected(t.get(index, "Position"))
         for key, spin in self.bio.items():
-            spin.set_value(t.get(index, key))
+            set_widget_value(spin, t.get(index, key))
         style = t.get(index, "Playing Style")
-        if hasattr(self.style, "set_selected"):          # 2019 names its styles
-            self.style.set_selected(min(style, len(self.mod.STYLE_NAMES) - 1))
+        if hasattr(self.style, "set_selected"):          # a named list, wherever it came from
+            names = getattr(self.mod, "STYLE_NAMES", None) or STYLE_NAMES_FALLBACK
+            style = min(style, len(names) - 1)
+            self.style.set_selected(style)
+            self.style.set_tooltip_text(names[style] if style < len(names) else "")
         else:                                            # 2015 numbers them
             self.style.set_value(style)
         self.foot.set_selected(t.get(index, "Foot"))
         for label, chip in self.chips.items():
             chip.set_active(bool(t.get(index, label)))
+            self._chip_text(chip, bool(t.get(index, label)))
+        for label, (spin, _bar) in self.abilities.items():
+            self._decorate(spin, label, rating=True)
+        for key, widget in self.bio.items():
+            self._decorate(widget, key)
+        for display, entry in self.name_entries.items():
+            self._decorate(entry, "name:" + self.name_slots.get(display, display))
         self.loading = False
         self._status(f"{len(self.rows):,} players · showing {t.name(index)} "
                      f"(id {t.pid(index)})"
@@ -2284,7 +2835,10 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return
         saved = sorted({i for i, _label in self.dirty})
         self.dirty.clear()
+        self.originals.clear()                     # the game holds these now: no "was …" left
         self._refresh_cells(saved, edited=False)   # the STATE cell only repaints on a re-bind
+        if self.index is not None:
+            self._load(self.index)                 # and the form's fields drop their markers
         pruned = settings.prune_backups(backup, settings.load()["max_backups"])
         self._status(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
                      + f" · backups in {backup}" + (f" ({pruned} old pruned)" if pruned else "")
@@ -2300,9 +2854,11 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             self._status(f"reload failed: {exc}")
             return
         self.dirty.clear()
+        self.originals.clear()
         self.checked.clear()
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.originals.clear()
         self.index = None
         self.rows = []
         self.store.remove_all()
@@ -2311,9 +2867,16 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self._status("pending edits dropped, re-read from disk")
 
     def _push_step(self, changes):
-        """One user action as one undo step — a bulk edit reverses in one go, like the Tk build."""
+        """One user action as one undo step — a bulk edit reverses in one go.
+
+        This is where a field's pristine value is remembered, once, from the step itself: it is
+        what the "was …" tooltip shows and what lets an edit that lands back on it stop being an
+        edit. Reading the value after the write would remember the new one.
+        """
         if not changes:
             return
+        for index, key, old, _new in changes:
+            self.originals.setdefault((index, key), old)
         self.undo_stack.append(changes)
         del self.undo_stack[:-100]
         self.redo_stack.clear()
@@ -2366,8 +2929,20 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                      f"· Save writes it")
 
     def _mark_dirty(self, index, label, refresh=True):
-        """Record a pending edit and repaint its row: a mutated Row paints nothing by itself."""
-        self.dirty.add((index, label))
+        """Record a pending edit and repaint its row: a mutated Row paints nothing by itself.
+
+        A field that comes back to the value the game holds (an undo, a retyped number) stops
+        counting as an edit.
+        """
+        original = self.originals.get((index, label))
+        if original is not None and original == self._value(index, label):
+            self.dirty.discard((index, label))
+        else:
+            self.dirty.add((index, label))
+        self._ovr_cache.pop(index, None)          # the rating is built from these values
+        if index == self.index:
+            self._paint_ovr(index)
+            self._paint_profile(index)
         if refresh:
             self._refresh_cells([index])          # the STATE cell only repaints on a re-bind
         else:
@@ -2376,6 +2951,23 @@ class PesForgeGtk(Gtk.ApplicationWindow):
                      f"· Save writes it")
         if hasattr(self, "batch"):
             self._update_bulk()
+
+    def _decorate(self, widget, key, rating=False):
+        """A field's state: rating tint, the modified marker, the original in the tooltip."""
+        base = getattr(widget, "_base_tooltip", None) or widget.get_tooltip_text() or key
+        widget._base_tooltip = base
+        if rating:
+            for n in range(4):
+                widget.remove_css_class(f"tier{n}")
+            widget.add_css_class(f"tier{tier_of(widget_value(widget))}")
+        original = self.originals.get((self.index, key))
+        value = self._value(self.index, key) if self.index is not None else None
+        if original is not None and original != value:
+            widget.add_css_class("edited")
+            widget.set_tooltip_text(f"{base} · was {original}")
+        else:
+            widget.remove_css_class("edited")
+            widget.set_tooltip_text(base)
 
     def _on_ability_changed(self, spin, label):
         if self.loading or self.index is None:
@@ -2386,10 +2978,39 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return
         self.table.set(self.index, label, value)
         self._push_step([(self.index, label, old, value)])
+        self._decorate(spin, label, rating=True)
         bar = self.abilities[label][1]
         if bar is not None:
             bar.set_value(value)
         self._mark_dirty(self.index, label)
+
+    def _paint_ovr(self, index):
+        rating = self.ovr(index)
+        self.pills["OVR"].set_text(f"OVR {rating}")
+        for n in range(4):
+            self.pills["OVR"].remove_css_class(f"tier{n}")
+        self.pills["OVR"].add_css_class(f"tier{tier_of(rating)}")
+
+    def _paint_profile(self, index):
+        """One bar per ability group: the mean of the abilities this release actually has."""
+        if not getattr(self, "profile", None):
+            return
+        t = self.table
+        for name, labels in ABILITY_GROUPS:
+            have = [t.get(index, lab) for lab in labels if lab in self.mod.FIELD_BY_LABEL]
+            value = round(sum(have) / len(have)) if have else 0
+            bar, text = self.profile[name]
+            bar.set_value(value)
+            text.set_text(str(value) if value else "—")
+
+    def ovr(self, index):
+        """The player's reference rating, cached per record (see `overall_rating`)."""
+        cache = getattr(self, "_ovr_cache", None)
+        if cache is None:
+            cache = self._ovr_cache = {}
+        if index not in cache:
+            cache[index] = overall_rating(self.table, index, self.mod)
+        return cache[index]
 
     def _meta_text(self, index):
         """The line under the name: id, club, country, how many packs were searched."""
@@ -2404,12 +3025,13 @@ class PesForgeGtk(Gtk.ApplicationWindow):
     def _on_bio_changed(self, spin, key):
         if self.loading or self.index is None:
             return
-        value = int(spin.get_value())
+        value = widget_value(spin)
         old = self.table.get(self.index, key)
         if old == value:
             return
         self.table.set(self.index, key, value)
         self._push_step([(self.index, key, old, value)])
+        self._decorate(spin, key)
         if key in ("Height", "Weight", "Age"):
             self.pills[key].set_text(f"{key} {int(spin.get_value())}")
         if key == "Nationality":               # the country name lives in the meta line
@@ -2449,6 +3071,22 @@ class PesForgeGtk(Gtk.ApplicationWindow):
         self.pills["Foot"].set_text("Foot " + ("Left" if dd.get_selected() else "Right"))
         self._mark_dirty(self.index, "Foot")
 
+    def _chip_text(self, chip, active, name=None):
+        """A chosen chip carries a tick; colour alone must not be the only difference."""
+        text = chip.get_child()
+        if text is None:
+            return
+        if name is None:
+            name = getattr(chip, "_chip_name", None) or chip.get_tooltip_text() or ""
+        chip._chip_name = name
+        text.set_text(f"✓ {name}" if active else name)
+
+    def _filter_chips(self):
+        """Narrow the chip grid to the names that match the filter box."""
+        query = self.chip_filter.get_text().strip().lower()
+        for recorded, chip in self.chips.items():
+            chip.set_visible(not query or query in recorded.lower())
+
     def _on_skill_toggled(self, chip, label):
         if self.loading or self.index is None:
             return
@@ -2458,17 +3096,33 @@ class PesForgeGtk(Gtk.ApplicationWindow):
             return
         self.table.set(self.index, label, value)
         self._push_step([(self.index, label, old, value)])
+        self._chip_text(chip, bool(value))
         self._mark_dirty(self.index, label)
+
+    def _name_limit(self):
+        """The game's name slot in UTF-8 bytes — what it will actually keep."""
+        return int(getattr(self.mod, "NAME_SLOT",
+                           getattr(self.mod, "NAME_LEN",
+                                   getattr(pesdb, "NAME_SLOT", 61)))) - 1
 
     def _on_name_changed(self, entry, slot):
         if self.loading or self.index is None:
             return
         text = entry.get_text()
+        limit = self._name_limit()
+        if len(text.encode("utf-8")) > limit:
+            # the game stores a fixed slot and cuts the rest: say so instead of losing it quietly
+            entry.add_css_class("invalid")
+            entry.set_tooltip_text(f"too long — the game stores {limit} bytes and cuts the rest")
+        else:
+            entry.remove_css_class("invalid")
+            entry.set_tooltip_text(f"up to {limit} bytes")
         old = self._value(self.index, "name:" + slot)
         if old == text:
             return
         self.table.set_name(self.index, **{slot: text})
         self._push_step([(self.index, "name:" + slot, old, text)])
+        self._decorate(entry, "name:" + slot)
         row = self.rows[self.index]
         row.name = self.table.name(self.index)
         self._mark_dirty(self.index, f"name:{slot}")

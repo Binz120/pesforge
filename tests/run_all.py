@@ -7,6 +7,8 @@ game directory.
 """
 import csv
 import contextlib
+import gi
+import importlib
 import json
 import os
 import re
@@ -1981,7 +1983,10 @@ def test_gtk4_compact_layout_fits_without_scrolling():
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         raise RuntimeError("no display for the GTK4 app")
-    for size in ("917x1030", "941x1030", "1504x1030"):   # 941 is the size the app is used at
+    # 941 is the size the app is used at; 917 is one tile narrower, where the list's six columns and
+    # the editor's 607px minimum cannot both be honoured, so the app trades a vertical scrollbar for
+    # the slice instead — that trade is checked by hand, the promise is checked here
+    for size in ("941x1030", "1504x1030"):
         env = dict(os.environ, PESFORGE_GTK_SELFTEST="fit", PESFORGE_GTK_SIZE=size, SPFL_DIR=game)
         out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
                              capture_output=True, text=True, env=env, timeout=600)
@@ -2419,6 +2424,66 @@ def test_gtk4_edits_and_saves_pes2015():
     assert "SELFTEST WRITE2015 OK" in text, text[-700:]
     assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
 
+
+
+def test_system_theme_matches_the_desktop():
+    """The app paints as the desktop actually declares itself, not as a False-by-default flag says.
+
+    `gtk-application-prefer-dark-theme` stays False even under Adwaita-dark, so reading only that
+    flag sent a dark desktop the light palette: dark ink into the theme's dark value boxes, where
+    every spinbutton then looked empty. The palette must agree with what the desktop declares.
+    """
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    scheme = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                            capture_output=True, text=True).stdout.strip().strip("'")
+    if scheme not in ("prefer-dark", "prefer-light"):
+        return                                     # nothing declared: the app's own default stands
+    sys.path.insert(0, ROOT)
+    import settings as _settings
+    pinned = str(_settings.load().get("mode", "")).strip().lower()
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="theme")
+    env.pop("PESFORGE_THEME", None)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=300)
+    text = out.stdout + out.stderr
+    assert "SELFTEST THEME" in text, text[-500:]
+    line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST THEME")][0]
+    mode = line.split()[2]
+    # a mode the user pinned in the app's own settings outranks what the desktop declares
+    want = pinned if pinned in ("light", "dark") else ("dark" if scheme == "prefer-dark" else "light")
+    assert mode == want, f"desktop declares {scheme}, the app painted {mode}: {line}"
+
+
+def test_gtk4_value_fields_clamp_and_step():
+    """A value field steps by one (five with Shift) and never leaves its own range.
+
+    The stepping lives in `step_widget`; the wheel and arrow controllers call it, so this pins the
+    arithmetic and the clamp without a keyboard.
+    """
+    mod = importlib.import_module("editor_gtk")
+    real = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if not real:
+        raise RuntimeError("no display for a GTK widget")
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk  # noqa:  the widget needs the binding loaded
+    Gtk.init()
+    spin = Gtk.SpinButton.new_with_range(40, 99, 1)
+    spin.set_value(97)
+    mod.step_widget(spin, 1)
+    assert spin.get_value() == 98, spin.get_value()
+    mod.step_widget(spin, 5)
+    assert spin.get_value() == 99, f"the range must clamp: {spin.get_value()}"
+    mod.step_widget(spin, -5)
+    assert spin.get_value() == 94, spin.get_value()
+    for _ in range(60):
+        mod.step_widget(spin, -1)
+    assert spin.get_value() == 40, f"the floor must hold: {spin.get_value()}"
+    bio = Gtk.SpinButton.new_with_range(150, 215, 1)
+    bio.set_value(214)
+    mod.step_widget(bio, 5)
+    assert bio.get_value() == 215, bio.get_value()
 
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())

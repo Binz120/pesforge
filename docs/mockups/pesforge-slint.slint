@@ -1,0 +1,574 @@
+// PESForge — what the editor looks like written in Slint.
+//
+// A mockup, not a port: the data below is real (it is Messi's record as read from the
+// installed PES 2019 by pes2019.py), and the colours are the app's own amber tokens, but
+// nothing here reads or writes a CPK. Everything the Tk version builds imperatively — the
+// ability rows, the pill chips, the list — is a `for` loop over a model instead.
+//
+// Run it:  pip install slint && python3 docs/mockups/run_slint_mockup.py
+// Rendered: docs/mockups/pesforge-slint-mockup.png
+
+struct Row {
+    id: int,
+    name: string,
+    club: string,
+    pos: string,
+    spd: int,
+    bc: int,
+    fin: int,
+    sta: int,
+}
+
+struct Ability { label: string, value: int }
+struct Bio { label: string, value: string }
+struct Skill { label: string, on: bool }
+
+component ValuePill inherits Rectangle {
+    in property <string> label;
+    height: 24px;
+    width: text.preferred-width + 20px;
+    border-radius: self.height / 2;
+    background: #251c14;
+    border-width: 1px;
+    border-color: #35281c;
+    text := Text {
+        text: root.label;
+        color: #f4ead9;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+component SkillPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> on: false;
+    height: 22px;
+    width: text.preferred-width + 22px;
+    border-radius: self.height / 2;
+    background: on ? #f0a63f : #251c14;
+    border-width: on ? 0px : 1px;
+    border-color: #35281c;
+    text := Text {
+        text: root.on ? "✓ " + root.label : root.label;
+        color: root.on ? #281d0f : #ab927a;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+component AbilityRow inherits Rectangle {
+    in property <string> label;
+    in property <int> value;
+    height: 22px;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: #ab927a;
+            font-size: 12px;
+            width: 124px;
+            horizontal-alignment: right;
+        }
+        Rectangle {
+            width: 34px;
+            height: 19px;
+            border-radius: 4px;
+            background: #120e0a;
+            border-width: 1px;
+            border-color: #35281c;
+            Text {
+                text: root.value;
+                color: #f4ead9;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: 106px;
+            height: 7px;
+            border-radius: 3px;
+            background: #3a3128;
+            Rectangle {
+                width: 106px * (root.value - 40) / 59;
+                height: 7px;
+                border-radius: 3px;
+                background: root.value >= 80 ? #f0a63f : root.value >= 65 ? #a9752e : #8c6227;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+    }
+}
+
+component BioRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 24px;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: #ab927a;
+            font-size: 12px;
+            width: 104px;
+            horizontal-alignment: right;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 22px;
+            border-radius: 4px;
+            background: #120e0a;
+            border-width: 1px;
+            border-color: #35281c;
+            Text {
+                text: root.value;
+                color: #f4ead9;
+                font-size: 12px;
+                x: 7px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component SectionTitle inherits Rectangle {
+    in property <string> label;
+    in property <string> hint: "";
+    height: 24px;
+    Text {
+        text: "▼ " + root.label;
+        color: #f0a63f;
+        font-size: 12px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.hint;
+        color: #8b7763;
+        font-size: 11px;
+        x: parent.width - self.width;
+        vertical-alignment: center;
+    }
+}
+
+component GhostButton inherits Rectangle {
+    in property <string> label;
+    height: 30px;
+    width: text.preferred-width + 24px;
+    border-radius: 5px;
+    background: #251c14;
+    border-width: 1px;
+    border-color: #35281c;
+    text := Text {
+        text: root.label;
+        color: #ab927a;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component AccentButton inherits Rectangle {
+    in property <string> label;
+    height: 30px;
+    width: text.preferred-width + 30px;
+    border-radius: 5px;
+    background: #f0a63f;
+    text := Text {
+        text: root.label;
+        color: #281d0f;
+        font-size: 12px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component PesForge inherits Window {
+    title: "PESForge — SP Football Life 2027";
+    width: 1560px;
+    height: 980px;
+    background: #120e0a;
+    default-font-family: "DejaVu Sans";
+
+    in property <[Row]> rows: [
+        { id: 7511, name: "L. MESSI", club: "BARCELONA", pos: "SS", spd: 86, bc: 97, fin: 95, sta: 76 },
+        { id: 11110, name: "A. MESSIDORO", club: "TALLERES COR", pos: "AMF", spd: 77, bc: 70, fin: 65, sta: 70 },
+        { id: 11436, name: "N. MESSINITI", club: "INDEPENDIENTE", pos: "CF", spd: 76, bc: 73, fin: 67, sta: 71 },
+        { id: 4522, name: "C. RONALDO", club: "MD WHITE", pos: "CF", spd: 89, bc: 91, fin: 92, sta: 89 },
+        { id: 33185, name: "M. NEUER", club: "FREE", pos: "GK", spd: 70, bc: 68, fin: 43, sta: 68 },
+    ];
+
+    in property <[Ability]> left_abilities: [
+        { label: "Attacking Prowess", value: 95 },
+        { label: "Dribbling", value: 96 },
+        { label: "Lofted Pass", value: 86 },
+        { label: "Header", value: 68 },
+        { label: "Swerve", value: 89 },
+        { label: "Explosive Power", value: 92 },
+        { label: "Jump", value: 67 },
+        { label: "Unwavering Balance", value: 95 },
+        { label: "Defensive Prowess", value: 43 },
+        { label: "Goalkeeping", value: 40 },
+        { label: "Clearing", value: 40 },
+        { label: "Coverage", value: 40 },
+    ];
+    in property <[Ability]> right_abilities: [
+        { label: "Ball Control", value: 97 },
+        { label: "Low Pass", value: 88 },
+        { label: "Finishing", value: 95 },
+        { label: "Place Kicking", value: 90 },
+        { label: "Speed", value: 86 },
+        { label: "Kicking Power", value: 80 },
+        { label: "Physical Contact", value: 66 },
+        { label: "Stamina", value: 76 },
+        { label: "Ball Winning", value: 48 },
+        { label: "GK Catch", value: 40 },
+        { label: "Reflexes", value: 40 },
+    ];
+    in property <[Bio]> bio: [
+        { label: "Height", value: "170" },
+        { label: "Weight", value: "72" },
+        { label: "Age", value: "31" },
+        { label: "Nationality", value: "144" },
+        { label: "Playing Style", value: "14" },
+        { label: "Form", value: "7" },
+        { label: "Weak Foot Usage", value: "1" },
+        { label: "Weak Foot Accuracy", value: "3" },
+        { label: "Injury Resistance", value: "3" },
+        { label: "Foot", value: "Left" },
+    ];
+    in property <[[Skill]]> skill_rows: [
+        [{ label: "Trickster", on: true }, { label: "Mazing Run", on: true }, { label: "Speeding Bullet", on: true }],
+        [{ label: "Incisive Run", on: true }, { label: "Long Ball Expert", on: false }, { label: "Early Cross", on: true }],
+        [{ label: "Long Ranger", on: false }, { label: "Scissors Feint", on: false }, { label: "Double Touch", on: true }],
+        [{ label: "Flip Flap", on: false }, { label: "Marseille Turn", on: false }, { label: "Sombrero", on: false }],
+        [{ label: "Cross Over Turn", on: false }, { label: "Cut Behind & Turn", on: true }, { label: "Scotch Move", on: false }],
+        [{ label: "Step On Skill Control", on: false }, { label: "Heading", on: false }, { label: "Long Range Drive", on: true }],
+        [{ label: "Chip Shot Control", on: true }, { label: "Knuckle Shot", on: false }, { label: "Dipping Shots", on: false }],
+        [{ label: "Rising Shots", on: false }, { label: "Acrobatic Finishing", on: false }, { label: "Heel Trick", on: false }],
+        [{ label: "First-time Shot", on: true }, { label: "One-touch Pass", on: true }, { label: "Weighted Pass", on: false }],
+        [{ label: "Pinpoint Crossing", on: true }, { label: "Outside Curler", on: false }, { label: "Rabona", on: false }],
+        [{ label: "No Look Pass", on: false }, { label: "Low Lofted Pass", on: true }, { label: "Penalty Specialist", on: true }],
+        [{ label: "Captaincy", on: false }, { label: "Fighting Spirit", on: false }]
+    ];
+
+    VerticalLayout {
+        padding: 0px;
+
+        // ---- header: brand + search + Save/Undo/Redo/Discard/Menu
+        Rectangle {
+            height: 52px;
+            background: #120e0a;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: center;
+                Text {
+                    text: "PESForge";
+                    color: #f0a63f;
+                    font-size: 17px;
+                    font-weight: 700;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 30px;
+                    border-radius: 5px;
+                    background: #1b1510;
+                    border-width: 1px;
+                    border-color: #35281c;
+                    Text {
+                        text: "messi";
+                        color: #f4ead9;
+                        font-size: 12px;
+                        x: 9px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "Ctrl+F";
+                        color: #8b7763;
+                        font-size: 10px;
+                        x: parent.width - self.width - 9px;
+                        vertical-alignment: center;
+                    }
+                }
+                GhostButton { label: "Undo" ;}
+                GhostButton { label: "Redo" ;}
+                GhostButton { label: "Discard" ;}
+                AccentButton { label: "Save to game" ;}
+            }
+        }
+
+        // ---- tab row
+        Rectangle {
+            height: 30px;
+            background: #120e0a;
+            HorizontalLayout {
+                padding-left: 14px;
+                spacing: 2px;
+                Rectangle {
+                    width: players.preferred-width + 18px;
+                    height: 24px;
+                    background: transparent;
+                    players := Text {
+                        text: "Players  26,395";
+                        color: #ab927a;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    width: clubs.preferred-width + 18px;
+                    height: 24px;
+                    background: transparent;
+                    clubs := Text {
+                        text: "Clubs  0";
+                        color: #ab927a;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    width: t15.preferred-width + 18px;
+                    height: 24px;
+                    background: transparent;
+                    t15 := Text {
+                        text: "PES 2015";
+                        color: #ab927a;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    width: t19.preferred-width + 18px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: #523a1d;
+                    t19 := Text {
+                        text: "PES 2019  17,598";
+                        color: #f0a63f;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ---- body: list | player card | abilities | bio + skills
+        Rectangle {
+            vertical-stretch: 1;
+            background: #120e0a;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                spacing: 12px;
+
+                // list pane
+                Rectangle {
+                    width: 462px;
+                    background: #1b1510;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 0px;
+                        spacing: 0px;
+                        Rectangle {
+                            height: 26px;
+                            background: #251c14;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                Text { text: "ID"; color: #ab927a; font-size: 11px; font-weight: 700; width: 46px; horizontal-alignment: right; }
+                                Text { text: "Name"; color: #ab927a; font-size: 11px; font-weight: 700; horizontal-stretch: 1; }
+                                Text { text: "Club"; color: #ab927a; font-size: 11px; font-weight: 700; width: 106px; }
+                                Text { text: "Pos"; color: #ab927a; font-size: 11px; font-weight: 700; width: 34px; }
+                                Text { text: "SPD"; color: #ab927a; font-size: 11px; font-weight: 700; width: 34px; horizontal-alignment: right; }
+                                Text { text: "BC"; color: #ab927a; font-size: 11px; font-weight: 700; width: 30px; horizontal-alignment: right; }
+                                Text { text: "FIN"; color: #ab927a; font-size: 11px; font-weight: 700; width: 32px; horizontal-alignment: right; }
+                                Text { text: "STA"; color: #ab927a; font-size: 11px; font-weight: 700; width: 32px; horizontal-alignment: right; }
+                            }
+                        }
+                        for row[i] in rows : Rectangle {
+                            height: 25px;
+                            background: i == 0 ? #523a1d : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                Text { text: row.id; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 46px; horizontal-alignment: right; }
+                                Text { text: row.name; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; horizontal-stretch: 1; }
+                                Text { text: row.club; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 106px; }
+                                Text { text: row.pos; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 34px; }
+                                Text { text: row.spd; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 34px; horizontal-alignment: right; }
+                                Text { text: row.bc; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 30px; horizontal-alignment: right; }
+                                Text { text: row.fin; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 32px; horizontal-alignment: right; }
+                                Text { text: row.sta; color: i == 0 ? #f4ead9 : #ab927a; font-size: 12px; width: 32px; horizontal-alignment: right; }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                        Rectangle {
+                            height: 26px;
+                            background: transparent;
+                            Text {
+                                text: "3 of 17,598 players — type to narrow";
+                                color: #8b7763;
+                                font-size: 11px;
+                                x: 8px;
+                                y: 7px;
+                            }
+                        }
+                    }
+                }
+
+                // player card + abilities
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #1b1510;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        SectionTitle { label: "PLAYER" ;}
+                        Text {
+                            text: "L. MESSI";
+                            color: #f4ead9;
+                            font-size: 21px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "id 7511 · BARCELONA (#10) · 3 copies: dt10_x64.cpk:Player, dt80_100E_x64.cpk:Player, dt80_200E_x64.cpk:Player";
+                            color: #8b7763;
+                            font-size: 11px;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ValuePill { label: "Height 170" ;}
+                            ValuePill { label: "Weight 72" ;}
+                            ValuePill { label: "Age 31" ;}
+                            ValuePill { label: "Foot Left" ;}
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Rectangle {
+                            height: 28px;
+                            background: #120e0a;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #35281c;
+                            Text { text: "L. MESSI"; color: #f4ead9; font-size: 12px; x: 8px; vertical-alignment: center; }
+                        }
+                        Rectangle {
+                            height: 28px;
+                            background: #120e0a;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #35281c;
+                            Text { text: "MESSI"; color: #f4ead9; font-size: 12px; x: 8px; vertical-alignment: center; }
+                        }
+                        Rectangle {
+                            height: 28px;
+                            background: #120e0a;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #35281c;
+                            Text { text: "リオネル メッシ"; color: #f4ead9; font-size: 12px; x: 8px; vertical-alignment: center; }
+                        }
+                        SectionTitle { label: "ABILITIES"; hint: "40 - 99" ;}
+                        HorizontalLayout {
+                            spacing: 16px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 1px;
+                                Rectangle {
+                                    height: 22px;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: center;
+                                        Text { text: "Position"; color: #ab927a; font-size: 12px; width: 124px; horizontal-alignment: right; }
+                                        Rectangle {
+                                            width: 54px;
+                                            height: 19px;
+                                            border-radius: 4px;
+                                            background: #120e0a;
+                                            border-width: 1px;
+                                            border-color: #35281c;
+                                            Text { text: "SS  ▾"; color: #f4ead9; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    }
+                                }
+                                for a in left_abilities : AbilityRow { label: a.label; value: a.value ;}
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 1px;
+                                Rectangle { height: 22px; background: transparent; }
+                                for a in right_abilities : AbilityRow { label: a.label; value: a.value ;}
+                            }
+                        }
+                    }
+                }
+
+                // bio + skills
+                Rectangle {
+                    width: 396px;
+                    background: #1b1510;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        SectionTitle { label: "BIO" ;}
+                        for b in bio : BioRow { label: b.label; value: b.value ;}
+                        SectionTitle { label: "SKILLS & COM STYLES"; hint: "click to toggle" ;}
+                        VerticalLayout {
+                            spacing: 4px;
+                            for row in skill_rows : HorizontalLayout {
+                                spacing: 4px;
+                                for s in row : SkillPill { label: s.label; on: s.on ;}
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                    }
+                }
+            }
+        }
+
+        // ---- footer: Revert | Save / Apply | status
+        Rectangle {
+            height: 56px;
+            background: #120e0a;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                alignment: center;
+                GhostButton { label: "Revert" ;}
+                Text {
+                    text: "PES 2019 view: 17,598 players from Data/dt10_x64.cpk + the mounted data packs — its Save writes those files, not the SP Football database";
+                    color: #8b7763;
+                    font-size: 11px;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                GhostButton { label: "Apply to player" ;}
+                AccentButton { label: "Save to game" ;}
+            }
+            Text {
+                text: "Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save";
+                color: #8b7763;
+                font-size: 10px;
+                x: parent.width - self.width - 14px;
+                y: parent.height - self.height - 4px;
+            }
+        }
+    }
+}

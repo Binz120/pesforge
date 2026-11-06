@@ -69,9 +69,11 @@ DEFAULT = CHOICES[0][0]
 # tokens editor.py binds: contrast floor each one is blended to hold, against `bg` unless
 # the tuple names another token as the ground.
 FLOORS = {
-    "hint": 4.5,          # shortcut hints, secondary captions
+    "hint": 4.5,          # shortcut hints, secondary captions (darkest ground: panel, not bg)
     "bar_low": 3.0,       # a low ability fill must still read as a fill (on panel2)
     "ghost": 3.0,         # the pre-edit tick on an ability bar
+    "line_strong": 3.0,   # a control's own boundary (WCAG 1.4.11), unlike a decorative rule
+    "accent_text": 4.5,   # accent used as text rather than as a fill
 }
 
 
@@ -154,6 +156,10 @@ def ink_on(accent):
     return away(start, accent, 4.5)
 
 
+# the two poles `away()` blends toward; not palette colours, so apart from BASE
+WHITE, BLACK = "#ffffff", "#000000"
+
+
 def tokens(name=DEFAULT, mode="dark"):
     """Flat token dict for one palette. Keys are the C_* names, lowercased.
 
@@ -175,8 +181,12 @@ def tokens(name=DEFAULT, mode="dark"):
         "ink": mix(bg, accent, 0.10) if mode != "light" else ink_on(accent),
         "fg": fg,
         "dim": dim,
-        "hint": toward(dim, bg, FLOORS["hint"]),
+        "hint": away(away(toward(dim, bg, FLOORS["hint"]), panel, FLOORS["hint"]), panel2,
+                     FLOORS["hint"]),
+        "line_strong": away(away(base["line"], panel, FLOORS["line_strong"]), bg,
+                            FLOORS["line_strong"]),
         "accent": accent,
+        "accent_text": away(accent, panel, FLOORS["accent_text"]),
         "accent_hi": mix(accent, fg, 0.22),
         "accent_lo": mix(accent, bg, 0.32),
         "green": base["green"],
@@ -191,9 +201,6 @@ def tokens(name=DEFAULT, mode="dark"):
 
 
 TOKEN_NAMES = tuple(tokens().keys())
-
-# the two poles `away()` blends toward; not palette colours, so kept apart from BASE
-WHITE, BLACK = "#ffffff", "#000000"
 
 if __name__ == "__main__":                             # a quick contrast report
     for name, label in CHOICES:
