@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# bin/check — exactly what CI runs: the whole assert suite, GUI checks included.
+#
+# The GTK4 checks need a display. When DISPLAY is set it is used with the Wayland backend
+# disabled: on a Wayland session a GTK window otherwise lands on the live desktop even when
+# DISPLAY names a headless server (that is how a test run once drew on the user's screen).
+# With no DISPLAY, xvfb-run provides one; without Xvfb either, the GUI checks skip and the
+# run still covers the data layer, the fixture tests and the CLIs.
+set -eu
+cd "$(dirname "$0")/.."
+PY="${PESFORGE_GTK4_PYTHON:-/usr/bin/python3}"
+
+if [ -n "${DISPLAY:-}" ]; then
+    exec env -u WAYLAND_DISPLAY GDK_BACKEND=x11 "$PY" tests/run_all.py
+fi
+if command -v xvfb-run >/dev/null 2>&1; then
+    exec env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a "$PY" tests/run_all.py
+fi
+echo "bin/check: no DISPLAY and no xvfb-run; running the suite without the GUI checks" >&2
+exec env -u WAYLAND_DISPLAY -u DISPLAY "$PY" tests/run_all.py
