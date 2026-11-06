@@ -62,6 +62,7 @@ from pesforge_gtk.listpane import (  # noqa: E402,F401
 from pesforge_gtk.formpane import FormPaneMixin  # noqa: E402,F401
 from pesforge_gtk.batchbar import BatchBarMixin  # noqa: E402,F401
 from pesforge_gtk.editing import EditingMixin  # noqa: E402,F401
+from pesforge_gtk.saving import SavingMixin  # noqa: E402,F401
 
 
 WIDE_ENOUGH = 1000        # the window width at which the roomy grids fit beside the list
@@ -80,7 +81,7 @@ def widgets(root):
     return out
 
 
-class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, ListPaneMixin,
+class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, ListPaneMixin, SavingMixin,
                   Gtk.ApplicationWindow):
     def __init__(self, app, table=None, table_source=None, teams=None, assign=None):
         """Starts with no database: nothing is read until the user imports one."""
@@ -445,46 +446,6 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, ListPaneMixin,
                                                Gtk.CallbackAction.new(fn)))
         self.add_controller(ctrl)
 
-    def _alert(self, message, detail=""):
-        """A modal the user cannot miss: a traceback in a signal handler is not an error report."""
-        dialog = Gtk.AlertDialog()
-        dialog.set_modal(True)
-        dialog.set_message(message)
-        if detail:
-            dialog.set_detail(detail[:400])
-        dialog.set_buttons(["OK"])
-        dialog.set_cancel_button(0)
-        dialog.set_default_button(0)
-
-        def _done(d, result):
-            try:
-                d.choose_finish(result)
-            except GLib.Error:                      # dismissed
-                pass
-        dialog.choose(self, None, _done)
-
-    def _on_close_request(self, *_a, ask=True):
-        """Hold the window open while edits are pending: memory is their only copy."""
-        if not self.dirty:
-            return False
-        if ask:
-            dialog = Gtk.AlertDialog()
-            dialog.set_modal(True)
-            dialog.set_message(f"Discard {len(self.dirty)} unsaved edit(s)?")
-            dialog.set_detail("They are not written to the database until you press "
-                              "Save to game.")
-            dialog.set_buttons(["Keep editing", "Discard"])
-            dialog.set_cancel_button(0)
-            dialog.set_default_button(0)
-
-            def _done(d, result):
-                try:
-                    if d.choose_finish(result) == 1:
-                        self.destroy()
-                except GLib.Error:
-                    pass
-            dialog.choose(self, None, _done)
-        return True
 
     # ---- import / unload
     def unload_database(self, ask=True):
@@ -1150,111 +1111,6 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, ListPaneMixin,
         self.dirty.clear()            # a check must not sit on the close guard
         self.close()
         return False
-
-
-    def _save(self):
-        """Write every pending edit into each copy of the table, backing each region up first."""
-        if not self.dirty:
-            self._status("nothing to save · edit a field first")
-            return
-        if not self.game:
-            self._status(f"no install to write to (set {VINTAGES[self.vintage]['env']})")
-            return
-        edits = self._edited_values()
-        backup = settings.backups_dir()
-        written, failed = [], []
-        others = self.mod.database_cpks(self.game) if self.game else []
-        # Read every copy and build what would be written first: a copy that cannot be read
-        # fails before anything has been written.
-        jobs = []
-        for path in [self.source] + [p for p in others if p != self.source]:
-            name = os.path.basename(path)
-            try:
-                db = self.mod.Cpk(path)
-                table = db.read_table("Player")
-            except KeyError:
-                continue                      # a pack without a player table
-            except (OSError, ValueError) as exc:
-                failed.append(f"{name}: {type(exc).__name__}: {exc}")
-                continue
-            hit = 0
-            for pid, fields in edits.items():
-                for i in table.find(str(pid)):
-                    hit += 1
-                    for key, value in fields.items():
-                        if key.startswith("name:"):
-                            table.set_name(i, **{key.split(":", 1)[1]: value})
-                        else:
-                            table.set(i, key, value)
-            if hit:
-                jobs.append((path, db, table, hit))
-        # Write. A failure is reported in the status line and a dialog — a traceback in a signal
-        # handler is a console nobody watches.
-        for path, db, table, hit in jobs:
-            name = os.path.basename(path)
-            if not os.access(path, os.W_OK):  # no backup is worth spending on a doomed write
-                failed.append(f"{name}: not writable")
-                continue
-            try:
-                db.patch("Player", table.to_payload(), backup_dir=backup)
-                back = self.mod.Cpk(path).read_table("Player")    # saved is not written
-            except (OSError, KeyError, ValueError) as exc:
-                failed.append(f"{name}: {type(exc).__name__}: {exc}")
-                continue
-            wrong = [pid for pid, fields in edits.items() if not self._reads_back(back, pid, fields)]
-            if wrong:
-                failed.append(f"{name}: {len(wrong)} player(s) did not read back")
-            else:
-                written.append(f"{name} ({hit})")
-        if not jobs:
-            if failed:
-                self._status("could not write: " + "; ".join(failed))
-                self._alert("Could not write the database", "; ".join(failed))
-            else:
-                self._status("no database copy carries these players — nothing written")
-            return
-        exes = VINTAGES[self.vintage]["exe"]
-        exes = exes if isinstance(exes, tuple) else (exes,)
-        running = any(subprocess.run(["pgrep", "-f", exe],
-                                     capture_output=True).returncode == 0 for exe in exes)
-        head = "game is running, it reloads the table when you restart it · " if running else ""
-        if failed:
-            kind = "partial save: " if written else "could not write: "
-            self._status(f"{head}{kind}" + "; ".join(failed))
-            self._alert("Save did not finish", f"{head}{kind}" + "; ".join(failed))
-            return
-        saved = sorted({i for i, _label in self.dirty})
-        self.dirty.clear()
-        self.originals.clear()                     # the game holds these now: no "was …" left
-        self._refresh_cells(saved, edited=False)   # the STATE cell only repaints on a re-bind
-        if self.index is not None:
-            self._load(self.index)                 # and the form's fields drop their markers
-        pruned = settings.prune_backups(backup, settings.load()["max_backups"])
-        self._status(f"{head}saved {len(edits)} player(s) into " + ", ".join(written)
-                     + f" · backups in {backup}" + (f" ({pruned} old pruned)" if pruned else "")
-                     + (" · EDIT00000000 is present and overrides this file in game"
-                        if settings.edit_save_files() else ""))
-        self._update_bulk()
-
-    def _reload(self):
-        """Drop the pending edits and re-read the database from disk."""
-        try:
-            self.table = self.mod.Cpk(self.source).read_table("Player")
-        except (KeyError, OSError, ValueError) as exc:
-            self._status(f"reload failed: {exc}")
-            return
-        self.dirty.clear()
-        self.originals.clear()
-        self.checked.clear()
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.originals.clear()
-        self.index = None
-        self.rows = []
-        self.store.remove_all()
-        self.load_rows()
-        self.populate()
-        self._status("pending edits dropped, re-read from disk")
 
 
 def check():
