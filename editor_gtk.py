@@ -12,10 +12,26 @@ and runs the app. What lives where is documented in `pesforge_gtk/__init__.py` a
 import os
 import sys
 
-import gi
+# The one place a missing dependency is explained: a zipapp run on a machine without GTK4
+# otherwise dies with a bare ImportError, which says nothing about what to install.
+MISSING = """pesforge-gtk4 needs GTK 4 with its Python bindings, and could not start:
 
-gi.require_version("Gtk", "4.0")
-gi.require_version("Gdk", "4.0")
+    {error}
+
+Install them, then run this again:
+
+    Debian/Ubuntu   sudo apt install python3-gi gir1.2-gtk-4.0
+    Fedora          sudo dnf install python3-gobject gtk4
+    Arch            sudo pacman -S python-gobject gtk4
+"""
+
+try:
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+except (ImportError, ValueError) as exc:                      # no gi, or GTK 4 too old/absent
+    raise SystemExit(MISSING.format(error=exc))
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

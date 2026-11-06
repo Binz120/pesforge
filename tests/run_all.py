@@ -20,6 +20,18 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# The Tk build lives in legacy/ since the hardening pass (tag tk-final is its last maintained
+# state; it is unmaintained and the owner may delete it). The tests below still drive it —
+# and skip cleanly, rather than error, once it is gone.
+LEGACY = os.path.join(ROOT, "legacy")
+if os.path.isfile(os.path.join(LEGACY, "editor.py")):
+    sys.path.insert(0, LEGACY)
+else:
+    class _NoTk:
+        def __getattr__(self, name):
+            raise FileNotFoundError("the Tk build (legacy/editor.py) is not in this tree")
+
+    sys.modules["editor"] = _NoTk()
 import pesdb
 import pesdb_maps as maps
 import pes2015

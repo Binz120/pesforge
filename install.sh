@@ -27,7 +27,7 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 mkdir -p "$BIN" "$APPS"
-chmod +x "$here/bin/pesforge" "$here/editor.py" 2>/dev/null
+chmod +x "$here/bin/pesforge" "$here/legacy/editor.py" 2>/dev/null
 
 # A symlink keeps `git pull` working; a copy keeps the launcher alive if the checkout moves.
 if ln -sf "$here/bin/pesforge" "$LAUNCHER" 2>/dev/null; then :; else

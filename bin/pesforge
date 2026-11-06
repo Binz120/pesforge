@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# PESForge — portable launcher for the SP Football Life 2027 player editor.
+# PESForge — portable launcher for the Tk player editor.
+#
+# UNMAINTAINED: the Tk build moved to legacy/editor.py in the hardening pass (tag tk-final is
+# its last maintained state). The GTK4 build, ./bin/pesforge-gtk4, is the one to use. This
+# launcher is kept so the old build stays runnable.
 #
 # Works from any install location and any desktop: Tk draws through X11, or through XWayland
-# on Wayland sessions. Set SPFL_EDITOR_DIR to point at the checkout if it is not found
-# automatically, and SPFL_PYTHON to force a particular interpreter.
+# on Wayland sessions. Set SPFL_EDITOR_DIR to point at the folder holding legacy/editor.py if
+# it is not found automatically, and SPFL_PYTHON to force a particular interpreter.
 set -uo pipefail
 
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
@@ -15,12 +19,15 @@ find_editor() {
                    "$HOME/Code/pesforge" "$HOME/pesforge" \
                    /usr/local/share/pesforge /opt/pesforge; do
     [ -n "$candidate" ] && [ -f "$candidate/editor.py" ] && { echo "$candidate"; return 0; }
+    [ -n "$candidate" ] && [ -f "$candidate/legacy/editor.py" ] && \
+      { echo "$candidate/legacy"; return 0; }
   done
   return 1
 }
 
 EDITOR_DIR=$(find_editor) || {
-  echo "pesforge: editor.py not found. Set SPFL_EDITOR_DIR to the folder containing it." >&2
+  echo "pesforge: legacy/editor.py not found (the Tk build is unmaintained; use" >&2
+  echo "  ./bin/pesforge-gtk4). Set SPFL_EDITOR_DIR to the folder containing it." >&2
   exit 1
 }
 
