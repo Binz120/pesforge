@@ -139,6 +139,19 @@ def set_widget_value(widget, value):
         widget.set_value(value)
 
 
+def tree(root):
+    """Every widget under `root`, depth first (no window-manager or GTK-internal traversal)."""
+    out, stack = [], [root]
+    while stack:
+        w = stack.pop()
+        out.append(w)
+        child = w.get_first_child()
+        while child is not None:
+            stack.append(child)
+            child = child.get_next_sibling()
+    return out
+
+
 class AbilityBar(Gtk.DrawingArea):
     """The ability bar: a track and a fill, Cairo-drawn, repainted when the value changes."""
 

@@ -7,6 +7,9 @@ trap 'rm -rf "$stage"' EXIT
 for m in editor_gtk pes2015 pes2019 pes2021 pesdb pesdb_maps cpk settings theme; do
     cp "$m.py" "$stage/"
 done
+# the app package, stylesheet included (`__pycache__` stays out of the archive)
+mkdir -p "$stage/pesforge_gtk"
+cp pesforge_gtk/*.py pesforge_gtk/*.css "$stage/pesforge_gtk/"
 cp -r data "$stage/data"
 cat > "$stage/__main__.py" <<'PY'
 import editor_gtk
