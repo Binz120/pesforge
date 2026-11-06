@@ -290,6 +290,33 @@ def _selftest_scale(win):
     return False
 
 
+def _selftest_watch(win):
+    """`PESFORGE_GTK_SELFTEST=watch`: print the geometry every tick, for a resize driver.
+
+    Nothing is asserted here — the driver outside resizes the window (xdotool under a window
+    manager) and reads these lines. It exists because a window *without* a manager will not
+    honour a shrink, so the sweep mode can only ask the policy what it would do; with a manager
+    the down-and-back-up pass is performed for real, and this is the record of what happened.
+    """
+    def tick():
+        parts = [f"WATCH {win.get_width()}x{win.get_height()} paned={win._paned[0]}"]
+        for label, pane in (("form", win._form_pane), ("bio", win._bio_pane)):
+            inner = pane.get_first_child()
+            if inner is None:
+                continue
+            ha, va = inner.get_hadjustment(), inner.get_vadjustment()
+            parts.append(f"{label}={inner.get_width()}x{inner.get_height()}"
+                         + ("+h" if ha.get_upper() > ha.get_page_size() + 0.5 else "")
+                         + ("+v" if va.get_upper() > va.get_page_size() + 0.5 else ""))
+        parts.append(f"list={win._list_pane.get_width()}")
+        parts.append("cols=" + ",".join(c.get_title() for c, _need in win._col_min
+                                        if c.get_visible()))
+        print(" ".join(parts), flush=True)
+        return True                       # keep printing until the driver kills us
+    GLib.timeout_add(400, tick)
+    return False
+
+
 def _selftest_select(win):
     """Clicking a player shows that player: GTK's selection-changed reports the *previous*
     position, which used to leave the form one click behind."""
@@ -756,6 +783,8 @@ def run(win):
         return _selftest_a11y(win)
     if mode == "scale":
         return _selftest_scale(win)
+    if mode == "watch":
+        return _selftest_watch(win)
     if mode == "theme":
         return _selftest_theme(win)
     if not win.rows or len(win.store) != len(win.rows):

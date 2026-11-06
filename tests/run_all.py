@@ -2084,6 +2084,93 @@ def test_gtk4_follows_the_desktop_text_scale():
     assert heights[-1] >= heights[0] * 1.8, heights      # and by roughly the factor (2.0 at most)
 
 
+def test_gtk4_resizes_under_a_window_manager():
+    """A real shrink and grow under a window manager: the same size decides the same layout.
+
+    `PESFORGE_GTK_SELFTEST=sweep` can only *ask* the policy what a smaller size would do, because
+    a window with no window manager will not honour a shrink. `xfwm4` does: this drives a real
+    resize against the live app with `xdotool` — 1400 → 900 → 1400 → 917 → 941 wide, at 1030 tall
+    — and reads the geometry the app prints (`=watch`). It fails when a size seen twice decided
+    differently, when an editor pane scrolls at a size where the split layout is in use, or when
+    917 (a tiled window on this desktop) is not split. Skips, not fails, where xfwm4, xdotool or
+    Xvfb are missing.
+    """
+    import shutil as _shutil
+    import time
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    xfwm4 = _shutil.which("xfwm4")
+    xdotool = _shutil.which("xdotool")
+    xvfb = _shutil.which("Xvfb") or os.path.expanduser("~/.local/opt/xvfb/usr/bin/Xvfb")
+    if not (xfwm4 and xdotool and os.path.exists(xvfb)):
+        raise RuntimeError("no window manager (xfwm4), xdotool or Xvfb: cannot drive a resize")
+    display = ":100"
+    log = os.path.join(tempfile.mkdtemp(prefix="pesforge-wm-"), "watch.log")
+    xvfb_p = subprocess.Popen([xvfb, display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"])
+    env = dict(os.environ, DISPLAY=display)
+    env.pop("WAYLAND_DISPLAY", None)
+    wm = None
+    app = None
+    try:
+        for _ in range(40):                      # wait for the X server to answer
+            if subprocess.run([xdotool, "getdisplaygeometry"], env=env,
+                              capture_output=True).returncode == 0:
+                break
+            time.sleep(0.25)
+        wm = subprocess.Popen([xfwm4, "--compositor=off"], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        app_env = dict(env, GDK_BACKEND="x11", PESFORGE_GTK_SELFTEST="watch",
+                       PESFORGE_GTK_SIZE="1400x1030", SPFL_DIR=game)
+        app = subprocess.Popen([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                               stdout=open(log, "w"), stderr=subprocess.STDOUT, env=app_env)
+        window = ""
+        for _ in range(80):                      # wait for the window, then its first line
+            found = subprocess.run([xdotool, "search", "--pid", str(app.pid)], env=env,
+                                   capture_output=True, text=True)
+            window = (found.stdout.split() or [""])[-1]
+            if window and "WATCH" in open(log).read():
+                break
+            time.sleep(0.5)
+        assert window, "the app never mapped a window under the window manager"
+        steps = [(1400, 1030), (900, 1030), (1400, 1030), (917, 1030), (941, 1030)]
+        seen = {}
+        for width, height in steps:
+            assert subprocess.run([xdotool, "windowsize", window, str(width), str(height)],
+                                  env=env, capture_output=True).returncode == 0
+            time.sleep(1.6 if width >= 917 else 1.2)     # the layout settles, it is not instant
+            lines = [ln for ln in open(log) if ln.startswith("WATCH")]
+            match = [ln for ln in lines if ln.split()[1].split("x")[0].isdigit()
+                     and abs(int(ln.split()[1].split("x")[0]) - width) <= 2
+                     and abs(int(ln.split()[1].split("x")[1]) - height) <= 2]
+            assert match, f"no geometry line for {width}x{height}: {lines[-3:]}"
+            line = match[-1]
+            seen[(width, height)] = (line, seen.get((width, height), (line,))[0])
+            print(f"wm resize {width}x{height}: {line.strip()}")
+        for (width, height), (now_line, first_line) in seen.items():
+            if now_line is not first_line:               # a size the driver visited twice
+                for key in ("paned=", "cols="):
+                    was = [w for w in first_line.split() if w.startswith(key)][0]
+                    got = [w for w in now_line.split() if w.startswith(key)][0]
+                    assert was == got, f"{width}x{height}: {key}{got} on the way back, {was} before"
+        for width, height in ((1400, 1030), (917, 1030), (941, 1030)):
+            line = seen[(width, height)][0]
+            assert "paned=h" in line, f"{width}: the split layout is not in use: {line.strip()}"
+            for pane in ("form=", "bio="):
+                cell = [w for w in line.split() if w.startswith(pane)][0]
+                assert "+h" not in cell and "+v" not in cell, \
+                    f"{width}: {pane} scrolls while split: {cell}"
+    finally:
+        for proc in (app, wm, xvfb_p):
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        shutil.rmtree(os.path.dirname(log), ignore_errors=True)
+
+
 def test_gtk4_edits_and_saves_pes2021():
     """SP Football Life is editable: load the install's database copy, edit, save, read it back.
 

@@ -41,7 +41,8 @@ their scroller at 941x1030, 917x1030 and 1504x1030.
 
 `PESFORGE_GTK_SELFTEST=sweep` (run at `PESFORGE_GTK_SIZE=700x1030`) resizes the live window up
 across the split layout's boundary — 700, 880, 960, 1100, 1400 — and then asks the policy
-again for each size on the way back. It fails on a size deciding differently the second time,
+again for each size on the way back. (It *asks* rather than performs because a window with no
+window manager will not shrink; the test below performs the real thing.) It fails on a size deciding differently the second time,
 a list narrower than the columns it shows, a squeezed list column (which is what a blank
 column looks like), or an editor pane scrolling while the split layout is in use. The way
 back is *asked* rather than performed because a window without a window manager will not
@@ -54,6 +55,15 @@ adjustments. The boundary it produces on this machine is 914px — the old hard-
 fair guess, and is now gone. Two measured figures are remembered (`_editor_min_w`, and the
 height band `_tight_below` at which the split layout was last seen costing a scrollbar); both
 are used on both crossings, so the layout cannot chatter or become a one-way door.
+
+`test_gtk4_resizes_under_a_window_manager` performs the down-and-back-up pass for real: it
+starts its own `Xvfb :100` and `xfwm4 --compositor=off` (both installed here; the test skips
+where they are not), launches the app with `PESFORGE_GTK_SELFTEST=watch` — a mode that prints its
+geometry every 400 ms and asserts nothing itself — and drives `xdotool windowsize` through
+1400 → 900 → 1400 → 917 → 941 wide at 1030 tall. It fails when a size seen twice decided
+differently, when an editor pane scrolls while the split layout is in use, or when 917 is not
+split. Measured: 1400 and its second visit print the identical line (split, form/bio 934x464, no
+scroll), 900 stacks (the panes scroll, as designed), 917 and 941 are split with no scroll.
 
 ## What the suite covers
 

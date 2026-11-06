@@ -145,11 +145,14 @@ you care about and I will pin it in the README. Flatpak: evaluated, not built �
 * **The game itself.** Nothing in this pass booted PES. The write path is exercised end-to-end
   through the real code on copies, and the copies' bytes are asserted; what the game *shows*
   is not. `docs/in-game-checklist.md` is the manual step that closes this.
-* **A real compositor.** Everything ran on Xvfb. `weston`/`mutter`/`sway` are not installed
-  here, so the "way back" of the sweep is *asked* of the policy rather than performed: a
-  window without a window manager will not shrink, and `set_size_request` only grows it. On
-  your Hyprland session the resize is real; the commands are `bin/check` and
-  `PESFORGE_GTK_SELFTEST=sweep PESFORGE_GTK_SIZE=700x1030`. Wayland proper is untested.
+* **A real compositor, on Wayland.** The X11 half is now covered by
+  `test_gtk4_resizes_under_a_window_manager`: its own `Xvfb :100` plus `xfwm4 --compositor=off`
+  (a window manager honours a shrink, which a bare X server does not) driving `xdotool
+  windowsize` through 1400 → 900 → 1400 → 917 → 941 wide. 1400 and its second visit print the
+  identical geometry line, 900 stacks, 917 and 941 are split with both panes fitting. What is
+  still untested is Wayland specifically: `weston`/`mutter`/`sway` are not installed here, so
+  your Hyprland session is the remaining run — `bin/check` plus
+  `PESFORGE_GTK_SELFTEST=sweep PESFORGE_GTK_SIZE=700x1030`.
 * **Orca.** No AT-SPI bus and no Orca here: the a11y checks prove the names exist and the list
   renders, not how the app sounds. Reading order and pronunciation are untested.
 * **Columns, not overlapping siblings, at every size.** The scale check asserts sibling
