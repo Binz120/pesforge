@@ -41,9 +41,29 @@ def check():
     return 1 if missing == len(EDITABLE) else 0
 
 
+def text_scale(scale):
+    """Apply a text-scaling factor as `gtk-xft-dpi` — the knob GNOME's "large text" moves.
+
+    GTK converts the stylesheet's px font sizes through the Xft DPI, so this one setting moves
+    every size in the app. `PESFORGE_GTK_SCALE=1.5` is how the checks ask for it. It has to be
+    in place before the display opens and the stylesheet is parsed, so this runs first thing.
+    """
+    try:
+        factor = float(scale)
+    except (TypeError, ValueError):
+        return
+    if factor <= 0:
+        return
+    Gtk.init()
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        settings.set_property("gtk-xft-dpi", int(96 * 1024 * factor))
+
+
 def main():
     if "--check" in sys.argv[1:]:
         return check()
+    text_scale(os.environ.get("PESFORGE_GTK_SCALE", ""))
     selftest = None
     if os.environ.get("PESFORGE_GTK_SELFTEST"):
         from . import selftest as _selftest   # a normal start never imports the checks
@@ -78,7 +98,9 @@ def main():
         win.present()
         mode = os.environ.get("PESFORGE_GTK_SELFTEST", "").lower()
         # --db, and the checks that need data, open one; a normal start waits for the user
-        want = db_arg() or (default_database(GAME) if mode in ("1", "2", "write", "fit") else "")
+        want = db_arg() or (default_database(GAME)
+                            if mode in ("1", "2", "write", "fit", "sweep", "a11y", "scale")
+                            else "")
         if want:
             win.load_database(want)
         if mode:

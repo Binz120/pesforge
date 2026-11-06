@@ -71,7 +71,8 @@ counts them as skipped; read the skip lines, not just the "N/N passed" tail.
 ## Self-check modes (GTK4)
 
 `PESFORGE_GTK_SELFTEST=` `1` | `empty` | `cycle` | `select` | `hub` | `write` | `write2015` |
-`write2021` | `fit` | `sweep` | `theme`, plus `PESFORGE_GTK_SIZE=WxH` and `--db <cpk|folder>`.
+`write2021` | `fit` | `sweep` | `a11y` | `scale` | `theme`, plus `PESFORGE_GTK_SIZE=WxH`
+and `--db <cpk|folder>`.
 `fit` is the layout gate: it fails when either editor pane's content exceeds its scroller.
 `sweep` is the geometry-and-history gate: see the layout section above.
 The write modes never touch the game: they copy to a scratch install, hash the source CPK

@@ -32,6 +32,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
 from .listpane import LIST_MAX, LIST_MIN_H  # noqa: E402
+from .widgets import scaled  # noqa: E402
 
 LIST_WANTED_MIN = 260        # a list narrower than this shows a name and little else
 GAP = 8                      # the box spacing between the list and the editor
@@ -47,7 +48,7 @@ class LayoutMixin:
         reads as blank columns; hiding the ones that do not fit is the honest alternative, and
         the pane is then never given less width than the ones left.
         """
-        cols_w = 36 + 158 + 56                 # check, NAME, STATE: shown at any width
+        cols_w = scaled(36 + 158 + 56)         # check, NAME, STATE: shown at any width
         for col, need in self._col_min:
             shown = pane_w >= need
             col.set_visible(shown)
@@ -92,7 +93,7 @@ class LayoutMixin:
         if width <= 1 or not hasattr(self, "_editor"):
             return False
         total = width - 16                     # the two 8px margins
-        share = max(LIST_WANTED_MIN, min(LIST_MAX, int(total * SHARE)))
+        share = max(scaled(LIST_WANTED_MIN), min(scaled(LIST_MAX), int(total * SHARE)))
         wanted = max(share, self._apply_column_policy(share))
         editor_min = self._editor_min_width()
         was = getattr(self, "_paned", None) or ("h", 0)
@@ -121,7 +122,7 @@ class LayoutMixin:
             if stacked:
                 # the editor gets the whole width, so every column is affordable again
                 self._apply_column_policy(total)
-                self._list_pane.set_size_request(-1, LIST_MIN_H)
+                self._list_pane.set_size_request(-1, scaled(LIST_MIN_H))
             else:
                 self._list_pane.set_size_request(wanted, -1)
         return False

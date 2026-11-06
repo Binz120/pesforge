@@ -8,25 +8,25 @@ window { background-color: $bg; color: $fg; }
     columnview > listview > row:hover { background-color: $hover; }
     columnview > listview > row:selected { background-color: $sel; color: $fg; }
     columnview > header > button { background-color: $panel2; background-image: none;
-        border: none; border-radius: 0; color: $dim; font-size: 11px; font-weight: bold;
+        border: none; border-radius: 0; color: $dim; font-size: 0.825em; font-weight: bold;
         padding: 3px 8px; min-height: 20px; }
-    columnview > header > button label { font-size: 11px; font-weight: bold; }
-    .dim { color: $dim; font-size: 11px; }      /* field labels: the 11 scale step */
+    columnview > header > button label { font-size: 0.825em; font-weight: bold; }
+    .dim { color: $dim; font-size: 0.825em; }      /* field labels: the 11 scale step */
     .hint { color: $hint; }
-    .brand { color: $accent_text; font-weight: bold; font-size: 14px; }
-    .section { color: $accent_text; font-weight: bold; font-size: 12px; }
+    .brand { color: $accent_text; font-weight: bold; font-size: 1.05em; }
+    .section { color: $accent_text; font-weight: bold; font-size: 0.9em; }
     .section-row { border-bottom: 1px solid $line_soft; padding-bottom: 3px;
         margin-bottom: 3px; }
-    .hero { font-size: 18px; font-weight: bold; }
-    .meta { color: $hint; font-size: 11px; }
-    .stat { font-size: 11px; font-weight: bold; color: $dim; }
+    .hero { font-size: 1.35em; font-weight: bold; }
+    .meta { color: $hint; font-size: 0.825em; }
+    .stat { font-size: 0.825em; font-weight: bold; color: $dim; }
 
     .pane { background-color: $panel; border-radius: 6px; }
     .pane-header { background-color: $panel2; }
     .row { padding: 1px 8px; }
     .row:selected { background-color: $sel; }
     .row:hover { background-color: $hover; }
-    .head { background-color: $panel2; color: $dim; font-size: 11px;
+    .head { background-color: $panel2; color: $dim; font-size: 0.825em;
              font-weight: bold; padding: 4px 8px; }
     columnview { background-color: $panel; }
     columnview > listview > row { padding: 0; }
@@ -39,7 +39,7 @@ window { background-color: $bg; color: $fg; }
        18 (player name). Numbers are tabular so columns of digits line up. */
     entry, spinbutton, dropdown, combobox { background-color: $bg; color: $fg;
         border: 1px solid $line_strong; border-radius: 5px; min-height: 24px;
-        padding: 0 6px; font-size: 12px; }
+        padding: 0 6px; font-size: 0.9em; }
     dropdown { padding: 0; }                     /* the ring went around the button, not on it */
     dropdown > button { padding: 0 4px; min-height: 22px; }
     entry:focus, spinbutton:focus, dropdown:focus, combobox:focus {
@@ -50,7 +50,7 @@ window { background-color: $bg; color: $fg; }
     button.quiet:hover { color: $fg; border-color: $line; background-color: $hover; }
     .pill.dirty { background-color: $tint('accent', 0.24); border-color: $accent;
         color: $fg; font-weight: bold; }
-    entry.chipfilter { min-height: 18px; font-size: 11px; padding: 0 6px; }
+    entry.chipfilter { min-height: 18px; font-size: 0.825em; padding: 0 6px; }
     entry.invalid, entry.invalid:focus { border-color: $warn;
         outline: 1px solid $warn; outline-offset: -1px; }
     /* rating bands: the tint sits behind the number, which stays legible on it */
@@ -62,7 +62,7 @@ window { background-color: $bg; color: $fg; }
     spinbutton, spinbutton entry, spinbutton button { min-width: 0; }
     button { background-color: $panel2; color: $dim; border: 1px solid
         $line_strong; border-radius: 5px; padding: 3px 10px; min-height: 24px;
-        font-size: 12px; }
+        font-size: 0.9em; }
     button:focus-visible, checkbutton:focus-visible, togglebutton:focus-visible,
     columnview:focus-visible, columnview > listview > row:focus-visible {
         outline: 1px solid $focus; outline-offset: -1px; }
@@ -74,7 +74,7 @@ window { background-color: $bg; color: $fg; }
     .batch { background-color: $panel; border-top: 1px solid $line;
         padding: 3px 4px; }
     .batch spinbutton { min-width: 66px; }
-    columnview label.cell { color: $fg; font-size: 12px;
+    columnview label.cell { color: $fg; font-size: 0.9em;
         font-feature-settings: "tnum" 1; }
     columnview label.cell.empty { color: $hint; }
     /* the pending-edit marker: a dot, not the word "edited" */
@@ -88,10 +88,10 @@ window { background-color: $bg; color: $fg; }
         border-color: $accent; color: $ink; }
 
     .pill { background-color: $panel2; border: 1px solid $line;
-        border-radius: 999px; padding: 0 8px; font-size: 11px; color: $fg;
+        border-radius: 999px; padding: 0 8px; font-size: 0.825em; color: $fg;
         font-feature-settings: "tnum" 1; }
     .chip { background-color: $panel2; border: 1px solid $line_strong;
-        border-radius: 999px; padding: 0 3px; font-size: 12px; color: $dim;
+        border-radius: 999px; padding: 0 3px; font-size: 0.9em; color: $dim;
         min-height: 15px; min-width: 0; }
     .chip:checked { background-color: $accent; color: $ink;
         border-color: $accent; font-weight: bold; }
@@ -111,7 +111,7 @@ window { background-color: $bg; color: $fg; }
     menu, menuitem, popover.menu, popover.menu > contents {
         background-color: $panel2; color: $fg; }
     menuitem:hover, popover.menu modelbutton:hover { background-color: $hover; }
-    spinbutton text { background: none; color: $fg; font-size: 12px;
+    spinbutton text { background: none; color: $fg; font-size: 0.9em;
         font-feature-settings: "tnum" 1; }
     spinbutton entry { border: none; background: none; min-height: 16px; }
     spinbutton button { border: none; background-color: $panel; color: $dim;

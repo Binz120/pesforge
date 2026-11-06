@@ -15,9 +15,29 @@ def a11y(widget, label):
     """Give a control the name a screen reader should announce.
 
     A placeholder, an icon or a bare value box says nothing on its own; the label is what a
-    keyboard or braille user hears.
+    keyboard or braille user hears. The name is also recorded on the widget: GTK's property is
+    write-only from Python, and `PESFORGE_GTK_SELFTEST=a11y` walks the tree to prove nothing
+    interactive was left unnamed.
     """
+    widget._a11y_name = label
     widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
+
+
+def text_scale_factor():
+    """The desktop's text-scaling factor, as GTK is applying it (1.0 at 96 dpi).
+
+    The stylesheet's sizes are in em, so the *text* follows this on its own; pixel widths
+    (column widths, label widths, the list's pane thresholds) are fixed numbers and have to be
+    multiplied by it, or a larger text scale clips them.
+    """
+    settings = Gtk.Settings.get_default()
+    dpi = settings.get_property("gtk-xft-dpi") if settings is not None else 0
+    return max(1.0, dpi / (96 * 1024)) if dpi and dpi > 0 else 1.0
+
+
+def scaled(px):
+    """A design pixel width, at the text scale the desktop is running at."""
+    return int(round(px * text_scale_factor()))
 
 
 def dim_label(text, width, chars):
@@ -26,10 +46,12 @@ def dim_label(text, width, chars):
     `max_width_chars` matters as much as the size request: a Label's *natural* width is its whole
     text, so without the cap a long label ("Defensive Awareness") pushes its value box right and
     every row's box lands somewhere else — the column looks ragged even though it is a grid.
+    The width is a *design* width and scales with the desktop's text size, or the label would be
+    clipped once the text outgrows it.
     """
     lab = Gtk.Label(label=text, xalign=1)
     lab.add_css_class("dim")
-    lab.set_size_request(width, -1)
+    lab.set_size_request(scaled(width), -1)
     lab.set_max_width_chars(chars)
     lab.set_ellipsize(Pango.EllipsizeMode.END)
     lab.set_tooltip_text(text)

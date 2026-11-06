@@ -301,13 +301,16 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
         self.status.set_text(f"{self.provenance} · {text}" if self.provenance else text)
 
     def _shortcuts(self):
-        """Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+F / Escape: save, undo, redo, find, clear."""
+        """Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+F / Ctrl+B / Escape: save, undo, redo, find,
+        batch-apply, clear. (GTK 4 dropped Alt-underlines, so the keyboard route to everything
+        is these accelerators plus Tab, which the focus-ring rules in style.css make visible.)"""
         ctrl = Gtk.ShortcutController()
         for spec, fn in (("<Control>s", lambda *_: (self._save(), True)[1]),
                          ("<Control>z", self._undo),
                          ("<Control>y", self._redo),
                          ("<Control><Shift>z", self._redo),
                          ("<Control>f", lambda *_: (self.search.grab_focus(), True)[1]),
+                         ("<Control>b", lambda *_: (self._bulk_apply(), True)[1]),
                          ("Escape", lambda *_: (self.search.set_text(""), True)[1])):
             ctrl.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string(spec),
                                                Gtk.CallbackAction.new(fn)))

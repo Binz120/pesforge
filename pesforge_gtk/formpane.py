@@ -128,6 +128,7 @@ class FormPaneMixin:
         pos_cell = Gtk.Box(spacing=6)
         pos_cell.append(dim_label("Position", 114, 20))
         self.position = ellipsizing_dropdown(self.mod.POSITION_NAMES, 5)   # "DMF" fits, its popup keeps the long form
+        a11y(self.position, "registered position")
         self.position.set_size_request(72, 28)                      # same box as the value fields
         self.position.set_hexpand(False)                            # or it outgrows its column
         self.position.connect("notify::selected", self._on_position_changed)
@@ -198,12 +199,15 @@ class FormPaneMixin:
         names = getattr(self.mod, "STYLE_NAMES", None) or STYLE_NAMES_FALLBACK
         if names:
             self.style = ellipsizing_dropdown(names)       # roomy: no truncation, the box is the longest style
+            a11y(self.style, "playing style")
             self.style.connect("notify::selected", self._on_style_changed)
         else:                                 # a release without names: its id in a spinbox
             lo, hi = field_range(self.mod, "Playing Style")
             self.style = Gtk.SpinButton.new_with_range(lo, hi, 1)
+            a11y(self.style, "playing style")
             self.style.connect("value-changed", self._on_bio_changed, "Playing Style")
         self.foot = ellipsizing_dropdown(("Right", "Left"), 6)
+        a11y(self.foot, "preferred foot")
         self.foot.connect("notify::selected", self._on_foot_changed)
 
         # Every field goes into ONE grid: the style and foot dropdowns used to sit on their own

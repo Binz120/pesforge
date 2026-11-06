@@ -2016,6 +2016,62 @@ def test_gtk4_layout_is_a_function_of_size():
     assert "layout sweep" not in text, text[-900:]
 
 
+def test_gtk4_every_control_has_an_accessible_name():
+    """Nothing interactive is announced as its role alone, and no column renders blank (Phase 5).
+
+    Runs the a11y walk at two widths: the compact one shows four list columns, the wide one all
+    six, so the rendered-row check (one cell per visible column, none of them zero-width) is
+    exercised for both the hidden and the shown columns.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    for size, columns in (("941x1030", 4), ("1504x1030", 6)):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="a11y", PESFORGE_GTK_SIZE=size,
+                   SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST A11Y OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST A11Y OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert int(parts["columns"]) == columns, line
+        assert int(parts["cells"]) == columns, line
+        assert int(parts["named"]) > 50, line
+        assert "no accessible name" not in text, text[-900:]
+
+
+def test_gtk4_follows_the_desktop_text_scale():
+    """Text scaling moves the app's own text, without clipping anything (Phase 5).
+
+    GTK resolves a stylesheet's `px` font sizes against the screen, not against the desktop's
+    text-scaling factor — measured: the app's player-name line stayed 22px tall at every scale,
+    while an unstyled label doubled. So the app's font sizes are in `em`, and the fixed pixel
+    widths (column widths, field-label widths, the list pane's thresholds) are multiplied by the
+    factor when they are built. This runs the app at four scales and asserts the name line grows
+    with each, and that no widget is drawn outside its parent or on top of a sibling.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    heights = []
+    for scale in ("1.0", "1.25", "1.5", "2.0"):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="scale", PESFORGE_GTK_SCALE=scale,
+                   PESFORGE_GTK_SIZE="941x1030", SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST SCALE OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST SCALE OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert parts["scale"] == scale, line
+        heights.append(int(parts["hero_h"]))
+    assert heights == sorted(set(heights)), heights      # strictly grows with the scale
+    assert heights[-1] >= heights[0] * 1.8, heights      # and by roughly the factor (2.0 at most)
+
+
 def test_gtk4_edits_and_saves_pes2021():
     """SP Football Life is editable: load the install's database copy, edit, save, read it back.
 

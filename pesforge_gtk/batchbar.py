@@ -10,7 +10,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Pango  # noqa: E402
 
 from .reference import bulk_fields, field_range  # noqa: E402
-from .widgets import spin_steps  # noqa: E402
+from .widgets import a11y, spin_steps  # noqa: E402
 
 
 
@@ -29,14 +29,17 @@ class BatchBarMixin:
         self.batch.append(self.batch_label)
         self.bulk_field = Gtk.DropDown.new_from_strings(bulk_fields(self.mod))
         self.bulk_field.set_tooltip_text("field to change")
+        a11y(self.bulk_field, "field to change across the ticked players")
         self.bulk_field.set_size_request(186, -1)
         self.bulk_field.connect("notify::selected", self._update_bulk_range)
         self.batch.append(self.bulk_field)
         self.bulk_op = Gtk.DropDown.new_from_strings([label for label, _ in self.BULK_OPS])
+        a11y(self.bulk_op, "operation to apply to the field")
         self.bulk_op.set_selected(1)
         self.batch.append(self.bulk_op)
         self.bulk_amount = Gtk.SpinButton.new_with_range(-99, 99, 1)
         spin_steps(self.bulk_amount)
+        a11y(self.bulk_amount, "amount for the batch operation")
         self.bulk_amount.set_value(1)
         self.batch.append(self.bulk_amount)
         apply_btn = Gtk.Button(label="Apply to selected")

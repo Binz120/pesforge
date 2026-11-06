@@ -150,6 +150,145 @@ def _selftest_sweep(win):
     return False
 
 
+def _all(w, out=None):
+    """Every widget under `w`, internals included (the rendered rows live inside those)."""
+    if out is None:
+        out = []
+    out.append(w)
+    child = w.get_first_child()
+    while child is not None:
+        _all(child, out)
+        child = child.get_next_sibling()
+    return out
+
+
+def _walk_controls(w, out):
+    """The app's own widgets, in tree order.
+
+    GTK builds a lot of internals inside its composite widgets — a spinbutton's two stepper
+    buttons, a dropdown's popover and list, a scrolled window's scrollbars — and those are GTK's
+    to name (they already have names of their own). Walking stops at them so the check talks
+    about the controls *this app* built.
+    """
+    out.append(w)
+    if isinstance(w, (Gtk.SpinButton, Gtk.DropDown, Gtk.Entry, Gtk.SearchEntry, Gtk.ComboBox,
+                      Gtk.MenuButton, Gtk.Popover, Gtk.ListView, Gtk.Scrollbar,
+                      Gtk.WindowHandle)):
+        return
+    child = w.get_first_child()
+    while child is not None:
+        _walk_controls(child, out)
+        child = child.get_next_sibling()
+
+
+def _selftest_a11y(win):
+    """`PESFORGE_GTK_SELFTEST=a11y`: every interactive control is announced as something.
+
+    A control with no accessible name is announced as its role alone ("button", "text") — a
+    screen reader user cannot tell one ability field from another, or the tick column from the
+    id column. The name may come from the app (`a11y()`), from the control's own text, or from
+    its tooltip; anything focusable with none of the three fails the check.
+    """
+    # GtkListView is deliberately absent: a column view's list is GTK's own widget (the rows
+    # inside it are named from their cells), not a control this app built.
+    interactive = (Gtk.Button, Gtk.Entry, Gtk.SpinButton, Gtk.DropDown, Gtk.CheckButton,
+                   Gtk.SearchEntry, Gtk.ColumnView, Gtk.MenuButton, Gtk.LinkButton)
+    nodes, unnamed, named = [], [], 0
+    _walk_controls(win, nodes)
+    for w in nodes:
+        if not isinstance(w, interactive):
+            continue
+        if isinstance(w, Gtk.Button):
+            own = w.get_label() or ""
+        elif isinstance(w, Gtk.Entry):
+            own = w.get_placeholder_text() or ""
+        else:
+            own = ""
+        if getattr(w, "_a11y_name", None) or own or w.get_tooltip_text():
+            named += 1
+        else:
+            unnamed.append(f"{type(w).__name__}{w.get_css_classes() or ''}")
+    if unnamed:
+        return _fail(win, f"{len(unnamed)} interactive control(s) with no accessible name: "
+                          + ", ".join(sorted(set(unnamed))))
+    # The rendered list: one cell widget per visible column per row, every one of them with a
+    # width — a squeezed column is a zero-width cell, which is what a blank column looks like.
+    visible = [c for c in win.column_view.get_columns() if c.get_visible()]
+    rows = [w for w in _all(win.column_view) if type(w).__name__.endswith("RowWidget")]
+    cells = []
+    for row in rows:                       # the first row with cells built: the pool keeps
+        cells = [w for w in _all(row) if type(w).__name__.endswith("CellWidget")]  # some empty
+        if cells:
+            break
+    squeezed = [w.get_css_classes() for w in cells if w.get_width() <= 1]
+    if rows and len(cells) != len(visible):
+        return _fail(win, f"{len(cells)} cell(s) for {len(visible)} visible column(s)")
+    if squeezed:
+        return _fail(win, f"squeezed cell(s): {squeezed}")
+    print(f"SELFTEST A11Y OK named={named} controls={len(nodes)} "
+          f"columns={len(visible)} rows={len(rows)} cells={len(cells)}", flush=True)
+    win.close()
+    return False
+
+
+def _selftest_scale(win):
+    """`PESFORGE_GTK_SELFTEST=scale`: the app follows the desktop's text scale, without clipping.
+
+    GTK converts the stylesheet's px font sizes through the Xft DPI, so the desktop's text
+    scaling factor moves every size in the app (measured: the player-name line is 18px tall at
+    1.0 and 36px at 2.0). At a larger scale the panes scroll — that is allowed. What is not
+    allowed is a widget drawn outside its parent, or two visible siblings drawn on top of each
+    other, and the check walks the whole tree for both.
+    """
+    scale = os.environ.get("PESFORGE_GTK_SCALE", "1")
+    bad, containers, checked = [], 0, 0
+    nodes = _all(win)
+    for w in nodes:
+        if isinstance(w, (Gtk.ScrolledWindow, Gtk.Viewport, Gtk.ColumnView, Gtk.Popover,
+                          Gtk.Overlay, Gtk.ListView)):
+            continue      # a scroller's child may exceed the page: it clips, by design; a list
+                          # view also prefetches rows below its viewport for the same reason
+        kids = []
+        child = w.get_first_child()
+        while child is not None:
+            if child.get_visible() and child.get_width() > 0 and child.get_height() > 0:
+                kids.append(child)
+            child = child.get_next_sibling()
+        if not kids:
+            continue
+        ww, wh = w.get_width(), w.get_height()
+        if ww <= 1 or wh <= 1:
+            continue           # not laid out yet (a hidden column's header, a recycled row):
+                               # there is nothing to compare a child's allocation against
+        containers += 1
+        rects = []
+        for kid in kids:
+            box = kid.get_allocation()
+            checked += 1
+            if box.x < -1 or box.y < -1 or box.x + box.width > ww + 1 or box.y + box.height > wh + 1:
+                bad.append(f"{type(kid).__name__} outside its {type(w).__name__} "
+                           f"({box.x},{box.y} {box.width}x{box.height} in {ww}x{wh})")
+            rects.append((kid, box))
+        for i, (a_kid, a) in enumerate(rects):
+            for b_kid, b in rects[i + 1:]:
+                if (a.x < b.x + b.width - 1 and b.x < a.x + a.width - 1
+                        and a.y < b.y + b.height - 1 and b.y < a.y + a.height - 1):
+                    bad.append(f"{type(a_kid).__name__} overlaps {type(b_kid).__name__} "
+                               f"in {type(w).__name__}")
+    hero = win.hero.get_height() if hasattr(win, "hero") else 0
+    if bad:
+        return _fail(win, f"text scale {scale}: " + "; ".join(bad[:4]))
+    dpi = Gtk.Settings.get_default().get_property("gtk-xft-dpi")
+    fresh = Gtk.Label(label="Hg")
+    fresh_h = fresh.measure(Gtk.Orientation.VERTICAL, -1)[1]
+    font = win.hero.get_pango_context().get_metrics(None, None).get_height() / 1024.0
+    print(f"SELFTEST SCALE OK scale={scale} dpi={dpi} hero_h={hero} fresh_h={fresh_h} font_pt={font:.1f} "
+          f"containers={containers} widgets={checked} "
+          f"window={win.get_width()}x{win.get_height()}", flush=True)
+    win.close()
+    return False
+
+
 def _selftest_select(win):
     """Clicking a player shows that player: GTK's selection-changed reports the *previous*
     position, which used to leave the form one click behind."""
@@ -595,6 +734,10 @@ def run(win):
         return _selftest_fit(win)
     if mode == "sweep":
         return _selftest_sweep(win)
+    if mode == "a11y":
+        return _selftest_a11y(win)
+    if mode == "scale":
+        return _selftest_scale(win)
     if mode == "theme":
         return _selftest_theme(win)
     if not win.rows or len(win.store) != len(win.rows):

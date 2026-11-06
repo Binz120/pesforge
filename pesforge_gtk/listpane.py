@@ -13,7 +13,7 @@ from gi.repository import Gdk, Gio, GObject, Gtk, Pango  # noqa: E402
 
 import pesdb  # noqa: E402
 
-from .widgets import a11y  # noqa: E402
+from .widgets import a11y, scaled, tree  # noqa: E402
 
 LIST_MAX = 452       # the six list columns: check 36 + id 52 + name 158 + club 106 + pos 44 + state 56
 LIST_MIN_H = 130     # the list strip's height when the editor sits under it
@@ -58,7 +58,7 @@ class ListPaneMixin:
         check_factory.connect("setup", self._check_setup)
         check_factory.connect("bind", self._check_bind)
         check_col = Gtk.ColumnViewColumn(title="✓", factory=check_factory)
-        check_col.set_fixed_width(36)
+        check_col.set_fixed_width(scaled(36))
         self.column_view.append_column(check_col)
         self._check_col = check_col
         # no rating columns here: the abilities pane shows every number, at a readable size
@@ -69,14 +69,14 @@ class ListPaneMixin:
             factory.connect("setup", self._cell_setup)
             factory.connect("bind", self._cell_bind, attr)
             col = Gtk.ColumnViewColumn(title=title, factory=factory)
-            col.set_fixed_width(width)
+            col.set_fixed_width(scaled(width))    # fixed: a squeezed column renders blank
             col.set_resizable(True)
             if title in ("NAME", "CLUB"):
                 col.set_expand(True)             # name and club share the slack the pane has
             if title in ("CLUB", "POS"):
-                self._col_min.append((col, LIST_MAX))   # the pane fits all six columns or neither
+                self._col_min.append((col, scaled(LIST_MAX)))  # all six or neither
             if title == "ID":
-                self._col_min.append((col, 250))         # below this even the name is squeezed out
+                self._col_min.append((col, scaled(250)))       # below this: no room for a name
             self._cols[title] = col
             if sortable:
                 sorter = Gtk.CustomSorter.new(self._compare, attr)
@@ -86,8 +86,25 @@ class ListPaneMixin:
         state_factory.connect("setup", self._cell_setup)
         state_factory.connect("bind", self._cell_bind, "state")
         state_col = Gtk.ColumnViewColumn(title="STATE", factory=state_factory)
-        state_col.set_fixed_width(56)
+        state_col.set_fixed_width(scaled(56))
         self.column_view.append_column(state_col)
+        # What a screen reader announces. The headers are abbreviations on purpose, and PyGObject
+        # does not expose GtkColumnViewColumn as an accessible object, so the names (and the long
+        # forms, as tooltips) go on the header widgets the columns build.
+        a11y(self.column_view, "player list, one row per player")
+        spoken = {"✓": "include in the batch change", "ID": "player id", "NAME": "player name",
+                  "CLUB": "club", "POS": "registered position", "STATE": "edited state"}
+        header = self.column_view.get_first_child()
+        for widget in tree(header) if header is not None else []:
+            if isinstance(widget, Gtk.Label):
+                text = widget.get_text()
+            elif isinstance(widget, Gtk.Button):
+                text = widget.get_label()
+            else:
+                continue
+            if text in spoken:
+                a11y(widget, spoken[text])
+                widget.set_tooltip_text(spoken[text])
         scroller = Gtk.ScrolledWindow()
         # The three panes together want ~1970px, and a tiled window hands the app far less: each
         # pane scrolls on its own instead of squeezing the others' content out of view.
