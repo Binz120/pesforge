@@ -2485,6 +2485,159 @@ def test_gtk4_value_fields_clamp_and_step():
     mod.step_widget(bio, 5)
     assert bio.get_value() == 215, bio.get_value()
 
+# ------------------------------------------------------- synthetic fixtures (no game data)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixtures                                              # noqa: E402
+
+
+@contextlib.contextmanager
+def fixture_install(vintage, players=320, seed=7):
+    """One release's synthetic install in a scratch dir, with the state dir redirected."""
+    box = tempfile.mkdtemp(prefix=f"pesforge-fixture-{vintage}-")
+    saved = os.environ.get("SPFL_STATE")
+    os.environ["SPFL_STATE"] = os.path.join(box, "state")
+    os.makedirs(os.environ["SPFL_STATE"], exist_ok=True)
+    try:
+        yield fixtures.build_install(box, vintage, players, seed), box
+    finally:
+        if saved is None:
+            os.environ.pop("SPFL_STATE", None)
+        else:
+            os.environ["SPFL_STATE"] = saved
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_fixture_containers_are_valid():
+    """Every fixture is a well-formed container: independent reader, alignment, no overlap."""
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, _box):
+            regions = fixtures.validate_cpk(path, vintage)
+            names = {name for _s, _e, name in regions}
+            assert names == {"Player.bin", "Team.bin", "PlayerAssignment.bin"}, names
+
+
+def test_fixture_build_is_deterministic():
+    """The same seed builds the same bytes, so a fixture failure is reproducible."""
+    with fixture_install("pes2019") as (path, box):
+        again = fixtures.build_cpk("pes2019", os.path.join(box, "again.cpk"))
+        with open(path, "rb") as a, open(again, "rb") as b:
+            assert a.read() == b.read(), "the fixture generator is not deterministic"
+
+
+def test_fixture_no_edit_save_returns_the_original_bytes():
+    """Load then save with no edits: byte-identical, because the re-pack is deterministic.
+
+    The payloads are written by the same writers the app saves with, so the decoded payload
+    and the container are both identical — the stronger form of the round trip.
+    """
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            with open(path, "rb") as f:
+                before = f.read()
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            with open(path, "rb") as f:
+                assert f.read() == before, f"{vintage}: a no-edit save moved bytes"
+            records, _prefix = fixtures.player_records(path, vintage)
+            assert records == [bytes(r) for r in table.records], f"{vintage}: rows differ"
+            backups = mod.backup_list(os.path.join(box, "backups"))
+            assert backups, f"{vintage}: the save took no backup"
+            for name in backups:
+                mod.restore_backup(name)
+            with open(path, "rb") as f:
+                assert f.read() == before, f"{vintage}: restore did not return the bytes"
+
+
+def test_fixture_single_field_edit_moves_only_its_record_and_span():
+    """One field on one record: the record moves, and only the bytes its map covers."""
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            before, _prefix = fixtures.player_records(path, vintage)
+            i, label = 7, "Speed"
+            was = table.get(i, label)
+            table.set(i, label, was + 1)
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            after, _prefix = fixtures.player_records(path, vintage)
+            assert len(after) == len(before), f"{vintage}: the row count changed"
+            moved = [k for k in range(len(before)) if before[k] != after[k]]
+            assert moved == [i], f"{vintage}: records that moved: {moved}"
+            bit, width, _add = mod.FIELD_BY_LABEL[label]
+            lo, hi = bit // 8, (bit + width + 7) // 8
+            span = [k for k in range(len(before[i])) if before[i][k] != after[i][k]]
+            assert span and all(lo <= k < hi for k in span), (vintage, span, (lo, hi))
+            assert mod.Cpk(path).read_table("Player").get(i, label) == was + 1
+
+
+def test_fixture_batch_edit_moves_only_those_records():
+    """A batch write over N rows changes those N records and nothing else."""
+    picks = [3, 9, 40, 41, 300]
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            before, _prefix = fixtures.player_records(path, vintage)
+            old = {i: table.get(i, "Speed") for i in picks}
+            for i in picks:
+                table.set(i, "Speed", min(99, old[i] + 2))
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            after, _prefix = fixtures.player_records(path, vintage)
+            moved = [k for k in range(len(before)) if before[k] != after[k]]
+            assert moved == picks, f"{vintage}: moved {moved}, wanted {picks}"
+            back = mod.Cpk(path).read_table("Player")
+            for i in picks:
+                assert back.get(i, "Speed") == min(99, old[i] + 2), (vintage, i)
+
+
+def test_fixture_release_detection_reads_bytes_not_names():
+    """Three releases, a mislabeled file and a table-less stub all identify by their bytes."""
+    py = gtk4_python()
+    box = tempfile.mkdtemp(prefix="pesforge-fixture-probe-")
+    try:
+        for vintage in ("pes2015", "pes2019", "pes2021"):
+            fixtures.build_install(os.path.join(box, vintage), vintage)
+        fixtures.build_mislabeled(os.path.join(box, "mislabeled"))   # 2015 bytes, 2019 name
+        fixtures.build_stub(os.path.join(box, "stub"))
+        script = (
+            "import sys; sys.path.insert(0, %r); sys.path.insert(0, %r)\n"
+            "import editor_gtk as g\n"
+            "for name in ('pes2015', 'pes2019', 'pes2021', 'mislabeled'):\n"
+            "    path, vintage, _note = g.find_database(%r + '/' + name)\n"
+            "    print('probe', name, vintage, bool(path))\n"
+            "print('stub', g.probe_database(%r)[0])\n"
+            "print('stub-folder', g.find_database(%r)[1])\n"
+        ) % (ROOT, os.path.join(ROOT, "tests"), box,
+             os.path.join(box, "stub", "Data", "dt00_4K_x64.cpk"), os.path.join(box, "stub"))
+        out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300,
+                             env=dict(os.environ, GDK_BACKEND="x11"))
+        text = out.stdout + out.stderr
+        for line in ("probe pes2015 pes2015 True", "probe pes2019 pes2019 True",
+                     "probe pes2021 pes2021 True", "probe mislabeled pes2015 True",
+                     "stub no player table", "stub-folder no player table"):
+            assert line in text, f"{line!r} missing from:\n{text[-600:]}"
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_data_layer_imports_stay_toolkit_free():
+    """The data layer must not import gi or tkinter (it has to run headless, e.g. in CI)."""
+    script = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import cpk, pesdb, pesdb_maps, pes2015, pes2019, pes2021, settings, theme\n"
+        "bad = [m for m in ('gi', 'gi.repository', 'tkinter') if m in sys.modules]\n"
+        "print('toolkit-free', not bad, bad)\n"
+    ) % ROOT
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         timeout=120)
+    text = out.stdout + out.stderr
+    assert "toolkit-free True" in text, text[-500:]
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
