@@ -2641,6 +2641,11 @@ def test_data_layer_imports_stay_toolkit_free():
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
+    # PESFORGE_TEST_FILTER=gtk4,fixture narrows a local run to the named tests; CI runs all
+    want = os.environ.get("PESFORGE_TEST_FILTER", "").strip()
+    if want:
+        parts = [p for p in want.split(",") if p]
+        tests = [(n, f) for n, f in tests if any(p in n for p in parts)]
     failures = 0
     for name, fn in tests:
         try:

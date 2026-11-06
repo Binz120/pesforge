@@ -1,0 +1,119 @@
+window { background-color: $bg; color: $fg; }
+    label { color: $fg; }
+    button, togglebutton, entry, spinbutton, dropdown, combobox, windowcontrols button {
+        background-image: none; box-shadow: none; }
+    scrolledwindow, viewport { background-color: transparent; }
+    columnview, columnview > listview, listview { background-color: $panel; }
+    columnview > listview > row { background-color: $panel; color: $fg; }
+    columnview > listview > row:hover { background-color: $hover; }
+    columnview > listview > row:selected { background-color: $sel; color: $fg; }
+    columnview > header > button { background-color: $panel2; background-image: none;
+        border: none; border-radius: 0; color: $dim; font-size: 11px; font-weight: bold;
+        padding: 3px 8px; min-height: 20px; }
+    columnview > header > button label { font-size: 11px; font-weight: bold; }
+    .dim { color: $dim; font-size: 11px; }      /* field labels: the 11 scale step */
+    .hint { color: $hint; }
+    .brand { color: $accent_text; font-weight: bold; font-size: 14px; }
+    .section { color: $accent_text; font-weight: bold; font-size: 12px; }
+    .section-row { border-bottom: 1px solid $line_soft; padding-bottom: 3px;
+        margin-bottom: 3px; }
+    .hero { font-size: 18px; font-weight: bold; }
+    .meta { color: $hint; font-size: 11px; }
+    .stat { font-size: 11px; font-weight: bold; color: $dim; }
+
+    .pane { background-color: $panel; border-radius: 6px; }
+    .pane-header { background-color: $panel2; }
+    .row { padding: 1px 8px; }
+    .row:selected { background-color: $sel; }
+    .row:hover { background-color: $hover; }
+    .head { background-color: $panel2; color: $dim; font-size: 11px;
+             font-weight: bold; padding: 4px 8px; }
+    columnview { background-color: $panel; }
+    columnview > listview > row { padding: 0; }
+    columnview > listview > row:selected { background-color: $sel;
+        box-shadow: inset 4px 0 0 $accent; }          /* the selected row reads at a glance */
+
+    /* One control language: every field, dropdown and button shares the same radius, border,
+       padding and focus ring. Chips stay pills — that shape is a deliberate choice of theirs,
+       not a control border. Type scale: 11 (meta/headers), 12 (body, fields, chips), 14 (brand),
+       18 (player name). Numbers are tabular so columns of digits line up. */
+    entry, spinbutton, dropdown, combobox { background-color: $bg; color: $fg;
+        border: 1px solid $line_strong; border-radius: 5px; min-height: 24px;
+        padding: 0 6px; font-size: 12px; }
+    dropdown { padding: 0; }                     /* the ring went around the button, not on it */
+    dropdown > button { padding: 0 4px; min-height: 22px; }
+    entry:focus, spinbutton:focus, dropdown:focus, combobox:focus {
+        border-color: $focus; outline: 1px solid $focus; outline-offset: -1px; }
+    entry.search { background-color: $panel; }
+    entry placeholder, entry > text > placeholder { color: $dim; }   /* not the faint grey */
+    button.quiet { color: $hint; }                /* same button, less shouting */
+    button.quiet:hover { color: $fg; border-color: $line; background-color: $hover; }
+    .pill.dirty { background-color: $tint('accent', 0.24); border-color: $accent;
+        color: $fg; font-weight: bold; }
+    entry.chipfilter { min-height: 18px; font-size: 11px; padding: 0 6px; }
+    entry.invalid, entry.invalid:focus { border-color: $warn;
+        outline: 1px solid $warn; outline-offset: -1px; }
+    /* rating bands: the tint sits behind the number, which stays legible on it */
+    spinbutton.tier1 { background-color: $tint('dim', 0.30); }
+    spinbutton.tier2 { background-color: $tint('green', 0.26); }
+    spinbutton.tier3 { background-color: $tint('accent', 0.30); }
+    /* a field whose value differs from the one the game holds */
+    spinbutton.edited, dropdown.edited, entry.edited { border-left: 2px solid $accent; }
+    spinbutton, spinbutton entry, spinbutton button { min-width: 0; }
+    button { background-color: $panel2; color: $dim; border: 1px solid
+        $line_strong; border-radius: 5px; padding: 3px 10px; min-height: 24px;
+        font-size: 12px; }
+    button:focus-visible, checkbutton:focus-visible, togglebutton:focus-visible,
+    columnview:focus-visible, columnview > listview > row:focus-visible {
+        outline: 1px solid $focus; outline-offset: -1px; }
+    button:hover { background-color: $hover; color: $fg; }
+    button.accent { background-color: $accent; color: $ink; font-weight: bold;
+        border: none; padding: 2px 10px; }
+    button.accent:hover { background-color: $accent_hi; }
+    button.accent:disabled { background-color: $panel2; color: $hint; }
+    .batch { background-color: $panel; border-top: 1px solid $line;
+        padding: 3px 4px; }
+    .batch spinbutton { min-width: 66px; }
+    columnview label.cell { color: $fg; font-size: 12px;
+        font-feature-settings: "tnum" 1; }
+    columnview label.cell.empty { color: $hint; }
+    /* the pending-edit marker: a dot, not the word "edited" */
+    columnview label.cell.dot { background-color: $accent; border-radius: 999px;
+        min-width: 9px; min-height: 9px; color: transparent; }
+    /* the list's checkbox: the app's own colours instead of the platform's blob */
+    columnview checkbutton > check { background-color: $panel2;
+        border: 1px solid $line_strong; border-radius: 4px; min-width: 13px;
+        min-height: 13px; }
+    columnview checkbutton > check:checked { background-color: $accent;
+        border-color: $accent; color: $ink; }
+
+    .pill { background-color: $panel2; border: 1px solid $line;
+        border-radius: 999px; padding: 0 8px; font-size: 11px; color: $fg;
+        font-feature-settings: "tnum" 1; }
+    .chip { background-color: $panel2; border: 1px solid $line_strong;
+        border-radius: 999px; padding: 0 3px; font-size: 12px; color: $dim;
+        min-height: 15px; min-width: 0; }
+    .chip:checked { background-color: $accent; color: $ink;
+        border-color: $accent; font-weight: bold; }
+    .footer { background-color: $bg; }
+    /* dropdown and menu popups are separate widgets: without this they come up in Adwaita's
+       light colours, a white box with black text on top of a dark app */
+    popover, popover.background, popover > arrow, popover > contents {
+        background-color: $panel2; color: $fg; border: 1px solid $line;
+        box-shadow: none; }
+    popover listview, popover listview > row, popover row, popover cell {
+        background-color: $panel2; color: $fg; }
+    popover listview > row:hover, popover row:hover { background-color: $hover; }
+    popover listview > row:selected, popover row:selected {
+        background-color: $sel; color: $fg; }
+    popover label, popover cell label { color: $fg; }
+    popover scrollbar { background-color: $panel; }
+    menu, menuitem, popover.menu, popover.menu > contents {
+        background-color: $panel2; color: $fg; }
+    menuitem:hover, popover.menu modelbutton:hover { background-color: $hover; }
+    spinbutton text { background: none; color: $fg; font-size: 12px;
+        font-feature-settings: "tnum" 1; }
+    spinbutton entry { border: none; background: none; min-height: 16px; }
+    spinbutton button { border: none; background-color: $panel; color: $dim;
+        min-height: 7px; min-width: 10px; padding: 0; border-radius: 3px; }
+    .abar-track { border-radius: 3px; }
