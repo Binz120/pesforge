@@ -68,12 +68,12 @@ scroll), 900 stacks (the panes scroll, as designed), 917 and 941 are split with 
 ## What the suite covers
 
 - 91 original tests: data layer, CLIs (each on its own sandbox copy of the real CPK),
-  the Tk editor through real windows, and the app through `PESFORGE_GTK_SELFTEST`.
+  the app through `PESFORGE_GTK_SELFTEST`.
 - Synthetic fixture tests (no game data, so CI can gate on them): container validity via an
   independent TOC/WESYS reader, deterministic builds, no-edit save byte-identity, single
   field edit touching only its record and byte span, batch edit touching only its records,
   release detection for the CPK releases plus a mislabeled file and a table-less stub,
-  and the data layer's freedom from `gi`/`tkinter`.
+  and the data layer's freedom from `gi`.
 - PES 5 (the classic-era option file): the same round-trip rules against a synthetic
   `KONAMI-WIN32PES5OPT` written through `pes5.save()` (signature, checksums, no-edit
   byte-identity, one-record confinement, restore), plus the shipped/live file decoded

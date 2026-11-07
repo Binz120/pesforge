@@ -2,7 +2,7 @@
 
 Read this before changing anything. It describes the tree as it stands after the first
 hardening pass: the package the app lives in, the contracts that must survive a refactor,
-and the data layer the two GUIs and the CLIs share.
+and the data layer the app and the CLIs share.
 
 ## What the app is
 
@@ -14,7 +14,7 @@ allows one batch change across them. Save writes with a whole-file backup first 
 read-back check after.
 
 Run it with `./bin/pesforge-gtk4`, `python3 editor_gtk.py`, or `dist/pesforge-gtk4` (the
-zipapp). The older Tk build (`editor.py`) still exists in the tree; it is a separate app.
+zipapp).
 
 ## The app: `editor_gtk.py` + `pesforge_gtk/`
 
@@ -71,7 +71,6 @@ traps that cost real time in this split:
 | `pesdb_maps.py` | 91 | Vendor-derived ability/skill/style lists; `read_data` serves `data/*.json` from the tree *and* from inside the zipapp. |
 | `settings.py` | 222 | Config, env overrides, backups dir + prune, install discovery, EDIT-save detection. |
 | `theme.py` | 213 | Palettes and `tokens()` with contrast floors; contrast maths. |
-| `editor.py` | 5260 | The older Tk build (separate app). |
 | `cli.py` | 524 | Headless PES 2021 verbs. |
 | `cli2015.py` | 672 | Headless PES 2015 verbs. |
 
@@ -93,7 +92,7 @@ traps that cost real time in this split:
 
 ## Testing
 
-`bin/check` runs exactly what CI runs: the data layer, the CLIs, the Tk editor and
+`bin/check` runs exactly what CI runs: the data layer, the CLIs and
 the app (through `PESFORGE_GTK_SELFTEST` subprocesses), plus synthetic-fixture tests
 that need no game data (`tests/fixtures.py` builds minimal faithful CPKs for all three CPK
 releases plus the classic option files (PES 5, PES 6), a table-less stub and a mislabeled

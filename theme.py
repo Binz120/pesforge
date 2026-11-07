@@ -6,8 +6,8 @@ tokens are blended until they clear the contrast they promise — quiet text is 
 colour pushed toward the background *only as far as* 4.5:1, and the ability bar's low fill
 keeps 3:1 against the panel so a 45 does not read as an empty slot.
 
-`tokens(name)` returns a flat dict; editor.py binds each key to a C_* module constant, so the
-UI code keeps naming colours instead of carrying literals.
+`tokens(name)` returns a flat dict, so the UI code keeps naming colours instead of carrying
+literals.
 """
 import os
 import sys
@@ -74,7 +74,7 @@ def light_base(name):
 CHOICES = (("amber", "Amber"), ("crimson", "Crimson"), ("ice", "Ice"), ("pitch", "Pitch"))
 DEFAULT = CHOICES[0][0]
 
-# tokens editor.py binds: contrast floor each one is blended to hold, against `bg` unless
+# Contrast floor each derived token is blended to hold, against `bg` unless
 # the tuple names another token as the ground.
 FLOORS = {
     "hint": 4.5,          # shortcut hints, secondary captions (darkest ground: panel, not bg)
@@ -169,7 +169,7 @@ WHITE, BLACK = "#ffffff", "#000000"
 
 
 def tokens(name=DEFAULT, mode="dark"):
-    """Flat token dict for one palette. Keys are the C_* names, lowercased.
+    """Flat token dict for one palette. Keys are the lowercase colour names.
 
     `mode` picks the dark (default) or light base for that palette name; a palette with no light
     variant of its own falls back to the light base, so a light desktop never gets a dark panel.

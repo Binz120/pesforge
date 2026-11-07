@@ -1,6 +1,6 @@
 """SP Football Life / PES 2021 database: pesdb's 312-byte map in the vintage panel's shape.
 
-`pesdb.py` holds the map and the CPK/WESYS mechanics — it is the PES 2021 editor the Tk build and
+`pesdb.py` holds the map and the CPK/WESYS mechanics — it is the PES 2021 editor the app and
 `cli.py` drive. This module is only the interface `editor_gtk.py` asks of a release, the way
 `pes2015.py` and `pes2019.py` already provide it, so one panel edits all three vintages:
 
@@ -39,7 +39,7 @@ SKILLS = tuple(label for label, _bit in pesdb.SKILLS)
 COM_STYLES = ()
 
 # PES 2021's own style enum, the order the game lists it in: the 22 named styles, then the
-# unnamed remainder of the 5-bit field (the Tk editor's PLAY_STYLES carries the same 32, and
+# unnamed remainder of the 5-bit field (PLAY_STYLES carries the same 32, and
 # tests/run_all.py pins the two lists to each other).
 STYLE_NAMES = ("None", "Goal Poacher", "Dummy Runner", "Fox in the Box", "Prolific Winger",
                "Classic No. 10", "Hole Player", "Box-to-Box", "Anchor Man", "The Destroyer",

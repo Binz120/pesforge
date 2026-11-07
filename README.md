@@ -11,11 +11,7 @@ to run.
 
 The window (`editor_gtk.py` over the `pesforge_gtk/` package) is what this build is about. It is
 made with GTK4 and PyGObject, which ship with every current desktop, so nothing needs installing
-and no venv is needed; it draws through Wayland or X11 directly. The original Tk window
-(`legacy/editor.py`) stays in the repo because it still has a few features this build does not,
-and the readers, the CLIs and the test suite are shared.
-
-The Tk window's own README is kept at `docs/tk-build.md`.
+and no venv is needed; it draws through Wayland or X11 directly.
 
 ## Run
 
@@ -90,7 +86,7 @@ screen shows comes from the loaded release's own map module (`pes2021.py` / `pes
   `PESFORGE_GTK_SIZE=917x1030` picks the size for a check run.
 - **Theme** — light or dark follows the desktop (GTK's own preference, then the freedesktop
   portal; `PESFORGE_THEME=light|dark` overrides) and the switch is followed live. Which palette
-  light and dark use comes from the same `theme` key the Tk build's Settings writes
+  light and dark use comes from the same `theme` key in the config
   (`amber`/`crimson`/`ice`/`pitch`). Each palette brings its own surfaces in both modes, so a
   light desktop gets a genuinely icy Ice and not amber with blue buttons; every combination has
   to clear 4.5:1 on its own, which `PESFORGE_GTK_SELFTEST=theme` reports.
@@ -106,11 +102,11 @@ each copy to check the edit landed. It reports which files were written, or whic
 read back. **Revert** drops the pending edits and re-reads from disk. The status line always names
 the database it is reporting on.
 
-**What this window does not do** (the Tk window, and some of the CLIs, do): the two-player
+**What this window does not do:** the two-player
 compare dialog, the coaches and appearance editors, the career block, celebration and motion
 slots, the player radar, the optional pesmaster photo, per-field revert, restoring a whole-file
 backup, and stadium or squad editing from the window. Roster CSV, transfers, squad numbers and
-stadium or coach assignment are covered by the CLIs, headlessly. Undo and redo are here too
+stadium or coach assignment are covered by the CLIs, headlessly. Undo and redo are here
 (`Ctrl+Z` / `Ctrl+Y`, one step per action).
 All five vintages are read *and* edited here: PES 2019 (188-byte records), PES 2015 (180),
 SP Football Life / PES 2021 (312) and the classic PES 5 / PES 6 option files (124-byte records),
@@ -139,19 +135,9 @@ tab": the release is read off the file you import, so a tab could only disagree 
 | `scale` | the text scale in use, from 1.0 to 2.0, and the widgets that follow it |
 | `watch` | the resize sweep driven under a real window manager (the suite runs this one) |
 
-## The Tk build (`editor.py`)
-
-Still the fuller editor: SP Football Life / PES 2021 records (25 abilities, appearance, career
-block), club/coach/stadium editing, undo/redo with a change drawer, player photos, sections that
-fold, CSV in and out, and its own PES 2015/PES 2019 tabs driven by the same panel shape. Run it with
-`./bin/pesforge` (needs `tkinter`; see the install notes in the launcher) — and with arguments it
-runs the headless CLI instead of opening a window (`./bin/pesforge --find messi`). Both windows
-share `~/.config/pesforge/config.json` and the backups folder.
-
 ## Headless
 
 Both CLIs read the same config file, so the folder they use is the one the app already found.
-`pesforge` here is the Tk build's launcher name; the CLIs are just Python.
 
 ```bash
 python3 cli.py     --find "messi"                     # list matches
@@ -263,27 +249,24 @@ column, `#number` in the card); formation, kit and squad editing stay out of sco
 
 ## Settings
 
-`~/.config/pesforge/config.json`, shared by both windows and the CLIs; `SPFL_CONFIG`, `SPFL_DIR` and
+`~/.config/pesforge/config.json`, shared by the app and the CLIs; `SPFL_CONFIG`, `SPFL_DIR` and
 `SPFL_STATE` override it.
 
 | Setting | Meaning |
 |---|---|
 | Game folder | Folder holding `download/data_s2627.cpk`; checked before it is accepted |
-| Database | An imported CPK that wins over the game folder (the Tk build's Club tab, the CLIs) |
+| Database | An imported CPK that wins over the game folder (the CLIs) |
 | PES 2015 / PES 2019 folder | The install each vintage panel reads; empty = found automatically |
 | PES 5 / PES 6 folder | The classic install, for resolving the option file it plays; empty = found automatically |
 | Backup folder | Where previous file versions go; blank = `~/.local/share/pesforge/backups` |
 | Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
-| Ask before writing the game file | Tk build: show the review sheet before a save is written |
-| Load player photos from pesmaster (online) | Tk build: fetch each face once; off = fully offline |
-| Theme | Tk build: Amber, Crimson, Ice or Pitch |
+| Theme | Amber, Crimson, Ice or Pitch |
 
 The app reads the SP Football Life / PES 2019 / PES 2015 folders (`SPFL_DIR` /
 `PES2019_DIR` / `PES2015_DIR` override them) and the classic install folders (`PES5_DIR` /
 `PES6_DIR`), plus the
 backup folder and cap. Its Settings popover sets the theme mode (follow the desktop, light or
-dark), the palette and the backup cap; the Tk-only rows (save confirmation, photos) stay in the
-file.
+dark), the palette and the backup cap.
 
 ## Files
 
@@ -297,7 +280,6 @@ file.
 | `pes6.py` | PES 6: the same shape for `KONAMI-WIN32PES6OPT` — its own block map, cipher key and club numbering |
 | `editor_gtk.py` | the entry point and self-checks (the window lives in `pesforge_gtk/`) |
 | `pesforge_gtk/` | the app: shell, panes, batch bar, saving, layout, stylesheet, self-checks |
-| `legacy/editor.py` | the Tk window (SP Football Life / PES 2021 and the vintage tabs); `bin/pesforge` still runs it |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
 | `cli2015.py` | headless PES 2015 find / show / set / export / tables / backups / restore |
 | `settings.py` | config file: game folder, backups, save confirmation, photos, theme, window size |
@@ -307,11 +289,10 @@ file.
 | `data/countries.json` | nationality names keyed by the record's field |
 | `assets/pesforge.png` | window and menu icon |
 | `bin/pesforge-gtk4` | launcher (finds an interpreter with PyGObject) |
-| `bin/pesforge` | Tk launcher (finds an interpreter with tkinter) |
 | `bin/pesforge2015` | launcher for the PES 2015 CLI (plain Python, no display) |
 | `install.sh` | user-level install: launchers + menu entries, no root |
 | `tests/run_all.py` | the whole suite: `python3 tests/run_all.py` (needs a display) |
-| `docs/` | architecture, testing, accessibility, the Tk vs GTK comparison, the in-game checklist |
+| `docs/` | architecture, testing, accessibility, the in-game checklist |
 | `REPORT.md` | the hardening pass: what moved, what was measured, what is left |
 
 ## Tests
@@ -322,11 +303,9 @@ python3 tests/run_all.py         # plain asserts, no pytest; prints N/N passed
 
 Covers the CPK/WESYS layer, both record maps, the classic option-file codecs (synthetic
 fixtures gate CI, with no game data; the shipped and live files are decoded and written when one
-is installed), the CLI sandbox round-trips, the Tk window's layout
-and form behaviour, and the app through its self-checks above. The app's checks run under
-`PESFORGE_GTK4_PYTHON` (or the first interpreter that can `import gi`); the Tk checks need
-`tkinter`. Any check that wants a window skips rather than fails without a display, and the suite
-runs the GUI ones on a throwaway window (`-alpha 0.0`) so it never flashes over your desktop.
+is installed), the CLI sandbox round-trips, and the app through its
+self-checks above. The app's checks run under `PESFORGE_GTK4_PYTHON` (or the first interpreter
+that can `import gi`). Any check that wants a window skips rather than fails without a display.
 
 ## File format notes (PES 2021 / SP Football Life)
 
@@ -391,8 +370,8 @@ for a byte-identical copy of the shipped file — so edits are patched into the 
 (the table's own bytes, same length; or appended with its TOC entry repointed when the recompressed
 table needs a few extra bytes). An edit that fits never changes the file size.
 
-**A CPK outside a game folder.** `cli.py` and the Tk build's Database row take any `.cpk` (an
-import is stored as `database` in the config and wins over the game folder). The app imports
+**A CPK outside a game folder.** `cli.py` takes any `.cpk` (an import is stored as `database`
+in the config and wins over the game folder). The app imports
 whatever file you drop in the hub and remembers the folder for the next chooser.
 
 ## Ability and skill tables (eFootball ↔ PES 2021)

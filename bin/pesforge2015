@@ -4,7 +4,7 @@
 #   pesforge2015 --find messi
 #   pesforge2015 --set 7511 Speed=90 --save
 #
-# Plain Python is enough here: no tkinter, no display. Set SPFL_EDITOR_DIR to point at the
+# Plain Python is enough here: no display. Set SPFL_EDITOR_DIR to point at the
 # checkout if it is not found automatically, PES2015_DIR at the game folder.
 set -uo pipefail
 

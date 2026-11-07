@@ -119,9 +119,9 @@ cell. `docs/accessibility.md` has the Orca walkthrough and says plainly what was
 **Phase 6 — the Tk build.** Tagged `tk-final`, moved to `legacy/`, marked unmaintained,
 launcher and installer updated, out of the zipapp. Nothing had to move into the data layer:
 nothing in the CLIs, the data layer or the app imports `editor`, and `editor` imports the
-data layer — it is a leaf. `docs/tk-vs-gtk.md` lists what only the Tk build has (compare
+data layer — it is a leaf. `docs/tk-vs-gtk.md` (removed) listed what only the Tk build has (compare
 players, coaches, restore vanilla, CSV import/export via the CLIs, opening the backups folder)
-and what this build added. **Deleting it is your call**; the commands are in that file.
+and what this build added. **Deleting it is your call**; done on 2026-11-07.
 
 **Phase 7 — verification and the in-game side.** The GUI checks and the sweep run headless on
 Xvfb under `bin/check` (exactly what CI runs, on every push and pull request). Each save now
@@ -160,9 +160,9 @@ you care about and I will pin it in the README. Flatpak: evaluated, not built �
 
 ## Decisions for the owner
 
-1. **The Tk build is not deleted** (hard rule 7). It is in `legacy/`, unmaintained, and the
-   two commands to remove it are in `docs/tk-vs-gtk.md`. I recommend deleting it: it is 5,260
-   lines that no other module imports, and its tests are the slowest tests in the suite.
+1. **The Tk build was not deleted in this pass** (hard rule 7). **Removed 2026-11-07 at the
+   owner's request**, along with its launcher, tests and docs. It was 5,260 lines that no other
+   module imported, and its tests were the slowest in the suite.
 2. **No `Gtk.LayoutManager`, no `Adw.BreakpointBin`.** The brief prefers a LayoutManager unless
    the code already depends on Adw; it does not, and making libadwaita a requirement is a new
    runtime dependency (rule 4). The panes' sizes come from GTK's own box measurement, and the
