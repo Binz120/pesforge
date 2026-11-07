@@ -1,17 +1,21 @@
-# PESForge GTK4
+# PESForge
 
-The GTK4 build of [PESForge](https://github.com/Binz120/pesforge). One repo, two windows onto the
-same data layer: the GTK4 window (`editor_gtk.py` over the `pesforge_gtk/` package, what this
-fork is about) and the original Tk window (`legacy/editor.py`), which stays here because it still
-has the features the GTK4 build does not. The CPK/WESYS readers, the CLIs and the test suite are
-shared.
+A player and club database editor for **four PES releases** on Linux: SP Football Life 2027 /
+PES 2021, PES 2019, PES 2015, and the classic PES 5 option file. One GTK4 window covers all of
+them, with headless CLIs, timestamped backups and byte-verified writes; the game itself never has
+to run.
 
 ![The GTK4 window, dark palette](docs/screenshot-dark.png)
 
 ![The GTK4 window, light palette](docs/screenshot-light.png)
 
-GTK4 and PyGObject ship with every current desktop, so the GTK4 build needs nothing installed and
-no venv. It draws through Wayland or X11 directly — none of Tk's XWayland workarounds appear here.
+The window (`editor_gtk.py` over the `pesforge_gtk/` package) is what this build is about. The
+original Tk window (`legacy/editor.py`) stays in the repo because it still has a few features the
+GTK4 build does not, and the readers, the CLIs and the test suite are shared. GTK4 and PyGObject
+ship with every current desktop, so nothing needs installing and no venv is needed; it draws
+through Wayland or X11 directly.
+
+The Tk window's own README is kept at `docs/tk-build.md`.
 
 ## Run
 
@@ -233,7 +237,7 @@ Where the file is: PES 5 Original Season redirects into
 template shipped in `<game>/misc/Option File/`. The game reads it at boot, so close the game before
 saving. A save rewrites the whole file (re-encrypted, checksums recomputed) after keeping a copy
 under `<state>/backups/pes5/` — one file, one backup, and `pes5.backup_list()` /
-`pes5.restore_backup()` put it back byte for byte.
+`pes5.restore_backup()` put it back byte for byte. PES 6's own option file (`KONAMI-WIN32PES6OPT`, 1,191,936 bytes) is a different layout and is not read.
 
 Editable in this build: names (full UTF-16LE; shirt names keep the game's own A–Z, `.`, `_` and
 space alphabet), the 26 abilities, age/height/weight/
