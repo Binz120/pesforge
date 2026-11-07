@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PESForge GTK4 — portable launcher for the GTK4 build of the editor.
+# PESForge — portable launcher for the editor.
 #
 # GTK4 draws through Wayland directly, so none of the Tk build's XWayland setup is needed here:
 # no cursor theme, no DISPLAY probing, no DPI workarounds. Set PESFORGE_GTK4_DIR to point at the

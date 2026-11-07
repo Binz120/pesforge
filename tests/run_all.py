@@ -1971,7 +1971,7 @@ def test_gtk4_theme_follows_the_system():
     """The app paints light or dark as the desktop asks, with readable contrast either way."""
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     seen = {}
     for mode in ("light", "dark"):
         env = dict(os.environ, PESFORGE_THEME=mode, PESFORGE_GTK_SELFTEST="theme")
@@ -1996,7 +1996,7 @@ def test_gtk4_compact_layout_fits_without_scrolling():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     # 941 is the size the app is used at; 917 is one tile narrower on this desktop and the app
     # keeps the split layout there too (the form's grid is 584px wide, not 607), so the promise
     # holds at both — see test_gtk4_layout_is_a_function_of_size for the way back
@@ -2020,7 +2020,7 @@ def test_gtk4_layout_is_a_function_of_size():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="sweep", PESFORGE_GTK_SIZE="700x1030",
                SPFL_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
@@ -2040,7 +2040,7 @@ def test_gtk4_every_control_has_an_accessible_name():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     for size, columns in (("941x1030", 4), ("1504x1030", 6)):
         env = dict(os.environ, PESFORGE_GTK_SELFTEST="a11y", PESFORGE_GTK_SIZE=size,
                    SPFL_DIR=game)
@@ -2069,7 +2069,7 @@ def test_gtk4_follows_the_desktop_text_scale():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     heights = []
     for scale in ("1.0", "1.25", "1.5", "2.0"):
         env = dict(os.environ, PESFORGE_GTK_SELFTEST="scale", PESFORGE_GTK_SCALE=scale,
@@ -2099,7 +2099,7 @@ def test_gtk4_ability_boxes_share_one_column():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     for size, expect_cells in (("941x1030", 26), ("1504x1030", 26)):
         env = dict(os.environ, PESFORGE_GTK_SELFTEST="align", PESFORGE_GTK_SIZE=size,
                    SPFL_DIR=game)
@@ -2210,7 +2210,7 @@ def test_gtk4_edits_and_saves_pes2021():
     game = os.path.dirname(os.path.dirname(pes2021_database()))
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2021", SPFL_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=900)
@@ -2376,11 +2376,11 @@ def gtk4_python():
                                              ' from gi.repository import Gtk'], capture_output=True)
         if probe.returncode == 0:
             return path
-    raise RuntimeError("no interpreter with GTK4 (PyGObject) for the GTK4 app")
+    raise RuntimeError("no interpreter with GTK4 (PyGObject) for the app")
 
 
 def test_gtk4_app_builds_and_searches():
-    """The GTK4 screen builds on the installed PES 2019 table and its search narrows the list.
+    """The app's screen builds on the installed PES 2019 table and its search narrows the list.
 
     Drives the app through its own self-check (`PESFORGE_GTK_SELFTEST=1`): a window that opens is
     not the same as a list holding the real rows with a record loaded into the form. The same run
@@ -2390,7 +2390,7 @@ def test_gtk4_app_builds_and_searches():
     game = pes2019_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="1")
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")],
                          capture_output=True, text=True, env=env, timeout=600)
@@ -2425,7 +2425,7 @@ def test_gtk4_bulk_matrix_stages_and_commits():
     before = open(cpk, "rb").read()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PES2019_DIR=game, SPFL_STATE=os.path.join(box, "state"),
                PESFORGE_GTK_SELFTEST="write")
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
@@ -2448,7 +2448,7 @@ def test_gtk4_starts_empty_and_imports_on_demand():
     game = pes2019_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="empty")
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=600)
@@ -2555,7 +2555,7 @@ def test_gtk4_import_cycle_across_installs():
     game = pes2019_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="cycle", PES2019_DIR=game,
                SPFL_DIR=settings.game_dir() or "")
     try:
@@ -2586,7 +2586,7 @@ def test_gtk4_clicking_a_player_shows_that_player():
     game = pes2019_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="select", PES2019_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=900)
@@ -2599,7 +2599,7 @@ def test_gtk4_import_hub_describes_a_pick():
     """The hub names what a pick holds and marks whether this build can open it."""
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="hub", PES2019_DIR=pes2019_install(),
                SPFL_DIR=settings.game_dir() or "")
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
@@ -2621,7 +2621,7 @@ def test_gtk4_edits_and_saves_pes2015():
     game = pes2015_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2015", PES2015_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=900)
@@ -2779,7 +2779,7 @@ def test_gtk4_edits_and_saves_pes5():
     game = pes5_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="write5", PES5_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=900)
@@ -2925,7 +2925,7 @@ def test_gtk4_edits_and_saves_pes6():
     game = pes6_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     env = dict(os.environ, PESFORGE_GTK_SELFTEST="write6", PES6_DIR=game)
     out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
                          text=True, env=env, timeout=900)
@@ -2943,7 +2943,7 @@ def test_system_theme_matches_the_desktop():
     """
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("no display for the GTK4 app")
+        raise RuntimeError("no display for the app")
     scheme = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
                             capture_output=True, text=True).stdout.strip().strip("'")
     if scheme not in ("prefer-dark", "prefer-light"):

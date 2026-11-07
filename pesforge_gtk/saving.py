@@ -161,7 +161,7 @@ class SavingMixin:
         """
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = os.path.join(settings.backups_dir(), f"changes-{stamp}.txt")
-        lines = [f"# PESForge GTK4 save, {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        lines = [f"# PESForge save, {time.strftime('%Y-%m-%d %H:%M:%S')}",
                  f"# release: {VINTAGES[self.vintage]['label']}",
                  f"# written: {', '.join(written)}",
                  f"# players: {len(edits)}"]

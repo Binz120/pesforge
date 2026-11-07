@@ -2,8 +2,8 @@
 
 Everything here is the state of the harness at the end of the hardening pass. The short
 version: `bin/check` runs exactly what CI runs; on this machine that means the whole suite
-on a headless X display, and it must be run **with the Wayland backend disabled** or GTK
-windows land on the user's live desktop.
+on a headless X display, and it must be run **with the Wayland backend disabled** or the app's
+window lands on the user's live desktop.
 
 ## Running
 
@@ -21,7 +21,7 @@ suite without the GUI checks and says so. It always strips `WAYLAND_DISPLAY` and
 
 A Hermes/CI shell on this machine inherits `WAYLAND_DISPLAY=wayland-1` as well as a
 `DISPLAY`. `Gdk.Display.get_default()` then returns **wayland-1** even when `DISPLAY=:99`
-was exported for the run, so every GTK check drew its window on the user's live session,
+was exported for the run, so every check drew its window on the user's live session,
 and the compositor tiled the window to ~917x1030 — the fit check measured that tile and
 reported a failure that had nothing to do with the code under test. Verified with a probe:
 `env -u WAYLAND_DISPLAY GDK_BACKEND=x11 DISPLAY=:99` is the correct incantation;
@@ -68,7 +68,7 @@ scroll), 900 stacks (the panes scroll, as designed), 917 and 941 are split with 
 ## What the suite covers
 
 - 91 original tests: data layer, CLIs (each on its own sandbox copy of the real CPK),
-  the Tk editor through real windows, and the GTK4 app through `PESFORGE_GTK_SELFTEST`.
+  the Tk editor through real windows, and the app through `PESFORGE_GTK_SELFTEST`.
 - Synthetic fixture tests (no game data, so CI can gate on them): container validity via an
   independent TOC/WESYS reader, deterministic builds, no-edit save byte-identity, single
   field edit touching only its record and byte span, batch edit touching only its records,
@@ -82,7 +82,7 @@ scroll), 900 stacks (the panes scroll, as designed), 917 and 941 are split with 
 Tests that need a real install raise `FileNotFoundError`/`RuntimeError` and the runner
 counts them as skipped; read the skip lines, not just the "N/N passed" tail.
 
-## Self-check modes (GTK4)
+## Self-check modes
 
 `PESFORGE_GTK_SELFTEST=` `1` | `empty` | `cycle` | `select` | `hub` | `write` | `write5` |
 `write2015` | `write2021` | `fit` | `sweep` | `a11y` | `scale` | `theme`, plus

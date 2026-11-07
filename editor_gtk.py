@@ -1,4 +1,4 @@
-"""PESForge in GTK4 — the entry point. The application lives in the `pesforge_gtk` package.
+"""PESForge — the entry point. The application lives in the `pesforge_gtk` package.
 
 Run:  ./bin/pesforge-gtk4              (or: python3 editor_gtk.py; GTK4 via gi, no other dependency)
 

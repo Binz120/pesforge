@@ -1,4 +1,4 @@
-# PESForge GTK4 — architecture
+# PESForge — architecture
 
 Read this before changing anything. It describes the tree as it stands after the first
 hardening pass: the package the app lives in, the contracts that must survive a refactor,
@@ -16,7 +16,7 @@ read-back check after.
 Run it with `./bin/pesforge-gtk4`, `python3 editor_gtk.py`, or `dist/pesforge-gtk4` (the
 zipapp). The older Tk build (`editor.py`) still exists in the tree; it is a separate app.
 
-## The GTK4 app: `editor_gtk.py` + `pesforge_gtk/`
+## The app: `editor_gtk.py` + `pesforge_gtk/`
 
 `editor_gtk.py` is the entry point the launcher, the zipapp and the tests drive (they run it
 as a script). It is a shim: it puts the package on the path, re-exports the names that used
@@ -93,8 +93,8 @@ traps that cost real time in this split:
 
 ## Testing
 
-`bin/check` runs exactly what CI runs. 98 tests: the data layer, the CLIs, the Tk editor and
-the GTK4 app (through `PESFORGE_GTK_SELFTEST` subprocesses), plus synthetic-fixture tests
+`bin/check` runs exactly what CI runs: the data layer, the CLIs, the Tk editor and
+the app (through `PESFORGE_GTK_SELFTEST` subprocesses), plus synthetic-fixture tests
 that need no game data (`tests/fixtures.py` builds minimal faithful CPKs for all three CPK
 releases plus the classic option files (PES 5, PES 6), a table-less stub and a mislabeled
 file, and re-reads written containers with an

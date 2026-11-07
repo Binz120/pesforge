@@ -2,7 +2,7 @@
 # PESForge — portable launcher for the Tk player editor.
 #
 # UNMAINTAINED: the Tk build moved to legacy/editor.py in the hardening pass (tag tk-final is
-# its last maintained state). The GTK4 build, ./bin/pesforge-gtk4, is the one to use. This
+# its last maintained state). The app, ./bin/pesforge-gtk4, is the one to use. This
 # launcher is kept so the old build stays runnable.
 #
 # Works from any install location and any desktop: Tk draws through X11, or through XWayland

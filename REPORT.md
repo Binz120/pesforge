@@ -4,11 +4,7 @@ Branch `gtk4-hardening`, one concern per commit, clean tree, **101/101 tests gre
 build's last state is tagged `tk-final`; the state the pass started from is tagged
 `gtk4-pre-hardening` with a bundle at `../pesforge-gtk4-pre-hardening.bundle` (7 refs).
 
-Nothing has been pushed anywhere. The command, when you want it:
-
-```sh
-git push origin gtk4-hardening        # or: git switch gtk4 && git merge gtk4-hardening
-```
+Update (2026-11-07): the pass landed on `master` via PR #1 and is pushed to GitHub.
 
 ## Before and after
 
@@ -16,8 +12,8 @@ git push origin gtk4-hardening        # or: git switch gtk4 && git merge gtk4-ha
 |---|---|---|
 | tests | 91 | **101** (10 new: seven fixtures, layout sweep, a11y, text scale) |
 | `editor_gtk.py` | 3,196 lines | 70 (a shim: package on the path, names re-exported, `main()`) |
-| largest GTK module | 3,196 (one file) | 793 (`selftest.py`, imported only when asked) — nothing over 800 |
-| GTK4 app total | 3,196 + data layer | 3,814 lines across 16 modules + 119 lines of CSS |
+| largest app module | 3,196 (one file) | 793 (`selftest.py`, imported only when asked) — nothing over 800 |
+| app total | 3,196 + data layer | 3,814 lines across 16 modules + 119 lines of CSS |
 | stylesheet | a Python f-string | `pesforge_gtk/style.css` as a package resource (rendered output byte-identical) |
 | load, 26,395 players | 0.90 s (0.61 rows, 0.15 list) | **0.93 s** (0.64 rows, 0.14 list) |
 | zipapp | 335,666 bytes | **367,867 bytes** (+9.6 %; the package, the stylesheet and the self-checks are inside it) |
@@ -57,7 +53,7 @@ directory, so the mistake cannot be repeated. Nothing else in the pass wrote out
 ## The phases
 
 **Phase 0 — protect the work.** `.gitignore` covers `dist/`, caches, `backups/`, `captures/`,
-`*.cpk`, `*.bin` and top-level screenshots; the uncommitted GTK4 body of work was committed as
+`*.cpk`, `*.bin` and top-level screenshots; the uncommitted body of work was committed as
 it stood, tagged `gtk4-pre-hardening`, bundled (7 refs, verified) to
 `../pesforge-gtk4-pre-hardening.bundle`, and `gtk4-hardening` branched from it.
 
@@ -122,10 +118,10 @@ cell. `docs/accessibility.md` has the Orca walkthrough and says plainly what was
 
 **Phase 6 — the Tk build.** Tagged `tk-final`, moved to `legacy/`, marked unmaintained,
 launcher and installer updated, out of the zipapp. Nothing had to move into the data layer:
-nothing in the CLIs, the data layer or the GTK4 app imports `editor`, and `editor` imports the
+nothing in the CLIs, the data layer or the app imports `editor`, and `editor` imports the
 data layer — it is a leaf. `docs/tk-vs-gtk.md` lists what only the Tk build has (compare
 players, coaches, restore vanilla, CSV import/export via the CLIs, opening the backups folder)
-and what the GTK4 build added. **Deleting it is your call**; the commands are in that file.
+and what this build added. **Deleting it is your call**; the commands are in that file.
 
 **Phase 7 — verification and the in-game side.** The GUI checks and the sweep run headless on
 Xvfb under `bin/check` (exactly what CI runs, on every push and pull request). Each save now
@@ -214,7 +210,7 @@ byte-identical, the 2008-09 rosters decode exactly (Messi 1033, Buffon 300, Manc
 squad with correct numbers).
 
 Wired through: `VINTAGES` + probe + folder resolution (`importing.py`), `settings.py`
-(`pes6_dir`), the zipapp module list, the GTK self-check `write6`, `tests/fixtures.py`
+(`pes6_dir`), the zipapp module list, the self-check `write6`, `tests/fixtures.py`
 (`build_option_file6`) and five new tests — **113/113 green** on this machine. Format map:
 `references/pes6-option-file.md` in the pes-database-editing skill; reference sources under
 `~/Downloads/pes6-refs/`. One nuance found on the way: `KONAMI-WIN32PES6000` (290,816 bytes,

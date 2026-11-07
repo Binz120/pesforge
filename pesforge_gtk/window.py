@@ -47,7 +47,7 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
 
     def __init__(self, app, table=None, table_source=None, teams=None, assign=None):
         """Starts with no database: nothing is read until the user imports one."""
-        super().__init__(application=app, title="PESForge GTK4")
+        super().__init__(application=app, title="PESForge")
         self.set_default_size(1504, 1030)       # below ~1030 the panes stack and scroll
         self.table = table
         self.teams = teams

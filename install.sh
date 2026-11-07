@@ -58,7 +58,7 @@ done
 cat > "$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
-Name=PESForge
+Name=PESForge (Tk)
 GenericName=Player editor
 Comment=Edit players, appearance and clubs in SP Football Life 2027
 Exec=$LAUNCHER
@@ -74,16 +74,16 @@ chmod 644 "$DESKTOP"
 cat > "$DESKTOP_GTK4" <<EOF
 [Desktop Entry]
 Type=Application
-Name=PESForge GTK4
+Name=PESForge
 GenericName=Player editor
-Comment=Edit players in the PES 2019 database (GTK4 build)
+Comment=Edit players and clubs in five PES releases
 Exec=$LAUNCHER_GTK4
 TryExec=$LAUNCHER_GTK4
 Icon=pesforge
 StartupWMClass=dev.pesforge.gtk4
 Terminal=false
 Categories=Game;
-Keywords=pes;pesdb;football;pes2019;editor;gtk4;
+Keywords=pes;pesdb;football;pes2021;pes2019;pes2015;pes5;pes6;editor;
 StartupNotify=true
 EOF
 chmod 644 "$DESKTOP_GTK4"
@@ -94,7 +94,7 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 echo "installed:"
 echo "  launcher : $LAUNCHER"
 echo "  PES 2015 : $LAUNCHER2015"
-echo "  GTK4     : $LAUNCHER_GTK4"
+echo "  app      : $LAUNCHER_GTK4"
 echo "  menu     : $DESKTOP, $DESKTOP_GTK4"
 echo
 if ! "$LAUNCHER" --check; then
@@ -102,4 +102,4 @@ if ! "$LAUNCHER" --check; then
   echo "PESForge is installed; start it once and pick your game folder when asked."
 fi
 echo
-echo "Start it from your app menu (\"PESForge\") or by running: pesforge"
+echo "Start it from your app menu (\"PESForge\") or by running: pesforge-gtk4"

@@ -1,4 +1,4 @@
-"""PESForge GTK4 — the GTK4 build of the editor, as a package.
+"""PESForge — the desktop editor, as a package.
 
 The entry point stays `editor_gtk.py` at the repo root (a launcher and the zipapp both run
 that file); it imports this package and re-exports the names the tests use. The split:
