@@ -4,8 +4,9 @@ Every fixture is built from the modules' own record maps through their own table
 records are filled with deterministic pseudo-random values (random.Random(seed)), wrapped
 into a WESYS payload by the release's own writer, and stored in a minimal but faithful CRI
 CPK container (header @UTF, `TOC ` block, TOC @UTF, 2 KiB-aligned payloads behind 2048-byte
-leads) assembled here. `build_option_file` does the same for the classic era, whose database
-is a single KONAMI-WIN32PES5OPT written through `pes5.save()`.
+leads) assembled here. `build_option_file` / `build_option_file6` do the same for the
+classic era, whose databases are single KONAMI-WIN32PES5OPT / KONAMI-WIN32PES6OPT files
+written through `pes5.save()` / `pes6.save()`.
 
 What the fixtures are for:
 
@@ -32,6 +33,7 @@ import pes2015
 import pes2019
 import pes2021
 import pes5
+import pes6
 import pesdb
 
 LEAD = 0x800                 # 2048: the lead block in front of every payload
@@ -331,6 +333,45 @@ def build_option_file(path, seed=7, players_n=48, clubs_n=8):
     return path
 
 
+def build_option_file6(path, seed=7, players_n=48, clubs_n=8):
+    """A synthetic PES 6 option file: the real layout and crypto, seeded records inside.
+
+    Written through `pes6.save()`, so the raw signature at 0x140C and the ten block
+    checksums are the module's own. Players 1..players_n are named and filled from the
+    record map; the first clubs_n clubs get a name and a four-player squad each.
+    """
+    rng = random.Random(seed)
+    data = bytearray(pes6.FILESIZE)
+    for off, size in zip(pes6.BLOCK, pes6.BLOBSIZE):
+        struct.pack_into("<III", data, off - 12, size, 0, 0xD00)   # size, checksum, marker
+    blob = bytes((pes6.PLAYERS + pes6.CREATED) * pes6.REC)
+    table = pes6.PlayerTable(blob)
+    for i in range(1, players_n + 1):
+        table.set_name(i, full=f"PLAYER {i:04d}", shirt=f"P{chr(65 + (i - 1) % 26)}")
+        for label in pes6.ABILITIES:
+            table.set(i, label, 40 + rng.randrange(60))
+        table.set(i, "Position", rng.randrange(len(pes6.POSITION_NAMES)))
+        table.set(i, "Nationality", rng.randrange(len(pes6.NATION_NAMES)))
+        table.set(i, "Height", 160 + rng.randrange(40))
+        table.set(i, "Age", 18 + rng.randrange(20))
+        for skill in pes6.SKILLS:
+            table.set(i, "Skill: " + skill, rng.randrange(2))
+    payload = table.to_payload()
+    data[pes6.BLOCK[4]:pes6.BLOCK[4] + pes6.PLAYER_BYTES] = payload[:pes6.PLAYER_BYTES]
+    data[pes6.BLOCK[3]:pes6.BLOCK[3] + pes6.CREATED_BYTES] = payload[pes6.PLAYER_BYTES:]
+    for c in range(clubs_n):
+        name = f"CLUB {c:03d}".encode("utf-8")
+        base = pes6.CLUB_BLOCK + c * pes6.CLUB_REC
+        data[base:base + len(name)] = name
+        for s in range(4):
+            pid = 1 + (c * 4 + s) % players_n
+            struct.pack_into("<H", data, pes6.SQUAD_BLOCK + 9774 + c * 64 + s * 2, pid)
+            data[pes6.SQUAD_BLOCK + 1679 + c * 32 + s] = s        # stored one below 1..4
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    pes6.save(data, path)
+    return path
+
+
 # ---------------------------------------------------------------- independent reader
 def read_utf(buf, base):
     """A second, independent @UTF parser — deliberately not `cpk.Utf`.
@@ -486,5 +527,11 @@ if __name__ == "__main__":                    # a quick self-check: build and re
     _path = build_option_file(os.path.join(_box, "KONAMI-WIN32PES5OPT"))
     _db = pes5.Cpk(_path)
     print(f"pes5: {_path} ({os.path.getsize(_path):,} bytes, "
+          f"{len(_db.read_table('Player'))} player slots, checksums "
+          f"{'ok' if not _db.bad_sums else _db.bad_sums}) ok")
+    _box = tempfile.mkdtemp(prefix="pesforge-fixture-")
+    _path = build_option_file6(os.path.join(_box, "KONAMI-WIN32PES6OPT"))
+    _db = pes6.Cpk(_path)
+    print(f"pes6: {_path} ({os.path.getsize(_path):,} bytes, "
           f"{len(_db.read_table('Player'))} player slots, checksums "
           f"{'ok' if not _db.bad_sums else _db.bad_sums}) ok")

@@ -2,7 +2,7 @@
 
 Each mode drives the real window and prints one marker line per step; a failure prints
 SELFTEST FAIL and the process exits non-zero. Modes: `1` (build, search, chrome, club
-repair), `empty`, `cycle`, `select`, `hub`, `write`, `write5`, `write2015`, `write2021`,
+repair), `empty`, `cycle`, `select`, `hub`, `write`, `write5`, `write6`, `write2015`, `write2021`,
 `fit`, `theme`. The write modes never touch the game: they build a scratch install, edit it,
 save, read back, and hash the game's own file before and after to prove it never moved.
 """
@@ -851,6 +851,61 @@ def _selftest_write5(win):
     return False
 
 
+def _selftest_write6(win):
+    """Load a copy of the PES 6 option file, edit it, save, and read the edits back.
+
+    The copy is a KONAMI-WIN32PES6OPT in a scratch folder of its own, so the save writes that
+    and never the game's file — the original's hash is checked before it finishes.
+    """
+    try:
+        src = vintage_database("pes6")
+        if not src or not os.path.isfile(src):
+            return _fail(win, f"no PES 6 option file (set PES6_DIR): {src!r}")
+        before = hashlib.sha256(open(src, "rb").read()).hexdigest()
+        root = os.path.join(os.environ.get("TMPDIR") or "/tmp", "pesforge-pes6-check")
+        copy = os.path.join(root, "KONAMI-WIN32PES6OPT")
+        os.makedirs(root, exist_ok=True)
+        shutil.copyfile(src, copy)
+        win.load_database(copy)
+        if win.table is None:
+            return _fail(win, f"could not load the copy: {win.status.get_text()}")
+        if win.vintage != "pes6" or len(win.rows) < 5000:
+            return _fail(win, f"loaded {win.vintage} with {len(win.rows)} rows")
+        if not win.name_entries["Name"].get_text().strip():
+            return _fail(win, "the first load put the option file's blank record in the form")
+        i = 3
+        pid = win.table.pid(i)
+        label = "Speed" if "Speed" in win.mod.FIELD_BY_LABEL else ability_order(win.mod)[0]
+        was = win.table.get(i, label)
+        want = min(99, was + 3)
+        win.table.set(i, label, want)
+        win._mark_dirty(i, label)
+        win.table.set_name(i, shirt="SELFTEST")
+        win._mark_dirty(i, "name:shirt")
+        win._save()
+        if "saved" not in win.status.get_text():
+            return _fail(win, f"save said {win.status.get_text()!r}")
+        reopened = win.mod.Cpk(copy)
+        back = reopened.read_table("Player")
+        hits = back.find(str(pid))
+        if not hits:
+            return _fail(win, f"player {pid} vanished from the copy")
+        j = hits[0]
+        if back.get(j, label) != want or back.shirt(j) != "SELFTEST":
+            return _fail(win, f"read back {back.get(j, label)!r}/{back.shirt(j)!r}, "
+                               f"want {want}/'SELFTEST'")
+        if reopened.bad_sums:
+            return _fail(win, f"the written file's checksums do not add up: {reopened.bad_sums}")
+        if hashlib.sha256(open(src, "rb").read()).hexdigest() != before:
+            return _fail(win, "the game's own option file was modified")
+        print(f"SELFTEST WRITE6 OK players={len(win.rows)} pid={pid} "
+              f"{label}={was}->{want} shirt=SELFTEST", flush=True)
+    except Exception as exc:
+        return _fail(win, f"{type(exc).__name__}: {exc}")
+    win.close()
+    return False
+
+
 def run(win):
     """`PESFORGE_GTK_SELFTEST=1`: prove the screen built against real data, then quit.
 
@@ -871,6 +926,8 @@ def run(win):
         return _selftest_write2015(win)
     if mode == "write5":
         return _selftest_write5(win)
+    if mode == "write6":
+        return _selftest_write6(win)
     if mode == "write2021":
         return _selftest_write2021(win)
     if mode == "fit":

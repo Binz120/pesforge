@@ -31,7 +31,7 @@ class ImportHub(Gtk.Window):
         box.set_size_request(460, -1)
         self.set_child(box)
 
-        zone = Gtk.Label(label="Drop a CPK, a PES 5 option file or a game folder here",
+        zone = Gtk.Label(label="Drop a CPK, a PES 5 / PES 6 option file or a game folder here",
                          justify=Gtk.Justification.CENTER)
         zone.add_css_class("hint")
         zone.set_size_request(-1, 84)
@@ -100,7 +100,7 @@ class ImportHub(Gtk.Window):
         self.load_btn.set_sensitive(can_load)
         self.load_btn.set_tooltip_text("" if can_load else
                                        "this build edits PES 2021 / SP Football Life, PES 2019, "
-                                       "PES 2015 and PES 5 databases")
+                                       "PES 2015 and the classic PES 5 / PES 6 option files")
 
     def _load(self):
         if self.path:

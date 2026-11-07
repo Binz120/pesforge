@@ -208,7 +208,7 @@ class FormPaneMixin:
 
         # PES 2015 stores the same style ids as 2019 (0 None, 17 Defensive Goalkeeper) but its
         # map carries no names, so it borrows the shared list; a map with STYLE_NAMES = None
-        # (PES 5) numbers the style field, and gets the spinbutton below.
+        # (the classic maps) number the style field, and get the spinbutton below.
         names = style_names(self.mod)
         if names:
             self.style = ellipsizing_dropdown(names)       # roomy: no truncation, the box is the longest style
@@ -227,9 +227,9 @@ class FormPaneMixin:
         # line below it, so their labels started at a different x than the rows above and the
         # boxes looked like they were floating. The grid sizes each value column to its widest
         # member, so the boxes line up and a country name is never cut short.
-        # A release's own bio rows and ranges win: PES 5's height stops at 211 cm and its
-        # weak-foot fields run 1..8 where the CPK releases' run 1..4; the window's lists are
-        # the fallback every other vintage uses.
+        # A release's own bio rows and ranges win: the classic maps' height stops at 211 cm
+        # and their weak-foot fields run 1..8 where the CPK releases' run 1..4; the window's
+        # lists are the fallback every other vintage uses.
         bio_labels = getattr(self.mod, "BIO_LABELS", None) or self.BIO_LABELS
         bio_ranges = getattr(self.mod, "BIO_RANGES", None) or self.BIO_RANGES
         fields = [(label, bio_ranges[label]) for label in bio_labels
@@ -251,7 +251,7 @@ class FormPaneMixin:
                 if hasattr(widget, "set_enable_search"):
                     widget.set_enable_search(True)
             elif key in getattr(self.mod, "CHOICE_FIELDS", {}):
-                # a stored code whose meaning is a word (PES 5's injury tolerance is C/B/A)
+                # a stored code whose meaning is a word (the classic maps' injury tolerance is C/B/A)
                 widget = ellipsizing_dropdown(self.mod.CHOICE_FIELDS[key], 5)
             else:
                 lo, hi = span

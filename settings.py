@@ -43,6 +43,7 @@ DEFAULTS = {
     "pes2015_dir": "",          # the PES 2015 install folder; empty = found automatically
     "pes2019_dir": "",          # the PES 2019 install folder, same deal
     "pes5_dir": "",             # the PES 5 install folder, same deal
+    "pes6_dir": "",             # the PES 6 install folder, same deal
     "backups_dir": "",          # empty = <state>/backups
     "max_backups": 50,          # 0 keeps everything
     "confirm_save": True,

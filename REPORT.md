@@ -201,3 +201,22 @@ you care about and I will pin it in the README. Flatpak: evaluated, not built �
    * `docs/ARCHITECTURE.md` (written in Phase 1) claimed the panes fit 941×1030 exactly; they
      did not once the frame settled. That is fixed and the doc now says where the numbers come
      from.
+
+## PES 6 — the fifth vintage (2026-11-07)
+
+`pes6.py` reads and writes `KONAMI-WIN32PES6OPT` (1,191,936 bytes), the classic-era database of
+PES 6 and its patches: the same crypto family as PES 5 with its own constants — a 446-entry
+word cipher (`((w - KEY[j]) + 0x7AB3684C) ^ 0x7AB3684C`, j reset per block), ten blocks, one
+ability per u16 word, 140 × 88-byte clubs, squads at the file's own team ids 73..212. Derived
+from Compulsion's PES Editor 6 (Java, the PESFan line) and PeterC10's COFPES-OF-Editor-6
+(Python), byte-verified on the Gladiator Patch 2008-09 file: 10/10 checksums, re-encode
+byte-identical, the 2008-09 rosters decode exactly (Messi 1033, Buffon 300, Manchester United's
+squad with correct numbers).
+
+Wired through: `VINTAGES` + probe + folder resolution (`importing.py`), `settings.py`
+(`pes6_dir`), the zipapp module list, the GTK self-check `write6`, `tests/fixtures.py`
+(`build_option_file6`) and five new tests — **113/113 green** on this machine. Format map:
+`references/pes6-option-file.md` in the pes-database-editing skill; reference sources under
+`~/Downloads/pes6-refs/`. One nuance found on the way: `KONAMI-WIN32PES6000` (290,816 bytes,
+same XOR, no word cipher) is a second file the game writes beside the option file — it is not
+the database and stays untouched.

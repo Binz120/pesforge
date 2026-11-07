@@ -10,6 +10,7 @@ import pes2015
 import pes2019
 import pes2021
 import pes5
+import pes6
 import pesdb
 import settings
 
@@ -29,16 +30,20 @@ VINTAGES = {
     # there is no installed path to name, so game_file is empty and the module resolves it.
     "pes5": {"label": "PES 5", "module": pes5, "env": "PES5_DIR",
              "cfg_key": "pes5_dir", "exe": ("pes5.exe",)},
+    # PES 6's option file is the same shape of thing as PES 5's (see pes6.py) — its own
+    # size, block map and cipher constants.
+    "pes6": {"label": "PES 6", "module": pes6, "env": "PES6_DIR",
+             "cfg_key": "pes6_dir", "exe": ("pes6.exe",)},
 }
 EDITABLE = tuple(VINTAGES)
-VINTAGE_NAMES = {"pes2019": "PES 2019", "pes2015": "PES 2015", "pes5": "PES 5",
+VINTAGE_NAMES = {"pes2019": "PES 2019", "pes2015": "PES 2015", "pes5": "PES 5", "pes6": "PES 6",
                  "pes2021": "SP Football Life / PES 2021"}
 PROBE_LIMIT = 12          # CPKs to open before calling a folder empty: the ranking puts the
                           # real candidates first, and a game folder holds 40+ entries
 NOT_READ = ("Reads CRI CPK databases — PES 2021 / SP Football Life, PES 2019 and PES 2015 "
-            "player records — and the classic PES 5 option file, KONAMI-WIN32PES5OPT "
-            "(124-byte records). PES save files (EDIT00000000), .ted/.ced containers and "
-            "spreadsheets are not read at all.")
+            "player records — and the classic option files, KONAMI-WIN32PES5OPT and "
+            "KONAMI-WIN32PES6OPT (124-byte records). PES save files (EDIT00000000), "
+            ".ted/.ced containers and spreadsheets are not read at all.")
 
 GAME = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
 
@@ -74,12 +79,13 @@ def probe_database(path):
 
     Each vintage has its own container quirks, so the readers are tried in turn and the
     first that yields a whole table wins. The record size is the release's signature:
-    124 bytes PES 5's option file, 180 PES 2015, 188 PES 2019, 312 PES 2020/2021. Detection
-    has to read the table: filenames moved between releases and a PES 2015 pack also ships
-    a Player.bin. The PES 5 reader checks size and signature first, so a CPK costs it one
-    stat call.
+    124 bytes for the classic option files (PES 5, PES 6), 180 PES 2015, 188 PES 2019,
+    312 PES 2020/2021. Detection has to read the table: filenames moved between releases and
+    a PES 2015 pack also ships a Player.bin. The classic-era readers check size and signature
+    first, so a CPK costs them one stat call.
     """
     attempts = (("pes5", pes5.REC, lambda q: pes5.Cpk(q).read_raw("Player")[0]),
+                ("pes6", pes6.REC, lambda q: pes6.Cpk(q).read_raw("Player")[0]),
                 ("pes2019", pes2019.REC, lambda q: pes2019.Cpk2019(q).read_raw("Player")[0]),
                 ("pes2015", pes2015.REC, lambda q: pes2015.Cpk2015(q).read_raw("Player")[0]),
                 ("pes2021", pesdb.REC, lambda q: pesdb.table_rows(pesdb.table_blob(q, "Player"))))
@@ -87,7 +93,7 @@ def probe_database(path):
     for vintage, rec, read in attempts:
         try:
             payload = read(path)
-        except pes5.NotAnOptionFile:         # a CPK is no option file: nothing here to find
+        except (pes5.NotAnOptionFile, pes6.NotAnOptionFile):  # a CPK holds no option file
             missing += 1
             continue
         except KeyError:                     # the container opened, it has no Player entry
@@ -192,9 +198,9 @@ def find_database(folder):
     Probing decides, never the filename. SP Football Life's `Data/dt10_x64.cpk` is an 86 KB stub
     with no player table, so naming the file a folder "should" hold points at nothing and the
     Load button stays dead. A folder with no database of its own is then answered by the install
-    around it (its `Data/` holds 47 CPKs, its `download/` holds the real one). A PES 5 install
-    has no CPK at all: its answer is the option file the game reads, which the module resolves
-    (usually outside the install, under Documents).
+    around it (its `Data/` holds 47 CPKs, its `download/` holds the real one). The classic
+    era (PES 5, PES 6) has no CPK at all: its answer is the option file the game reads, which
+    the module resolves (usually outside the install, under Documents).
     """
     files = cpk_files(folder)
     found, vintage, note = probe_candidates(files, pack_order(files))
@@ -206,7 +212,7 @@ def find_database(folder):
         found, vintage, note = probe_candidates(ifiles, pack_order(ifiles))
     if found:
         return found, vintage, note
-    option = pes5.option_file(folder)
+    option = pes5.option_file(folder) or pes6.option_file(folder)
     if option:
         vintage, note = probe_database(option)
         if vintage in VINTAGES:

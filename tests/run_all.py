@@ -38,6 +38,7 @@ import pes2015
 import pes2019
 import pes2021
 import pes5
+import pes6
 import settings
 
 # Any machine: SPFL_GAME wins, else whatever the editor would auto-detect.
@@ -2788,6 +2789,151 @@ def test_gtk4_edits_and_saves_pes5():
 
 
 
+# ------------------------------------------------------------------ PES 6
+def pes6_install():
+    """The PES 6 install, or a skip when this machine has none (set PES6_DIR)."""
+    folder = os.environ.get("PES6_DIR") or pes6.find_game_dir()
+    if not folder or not pes6.is_pes6_dir(folder):
+        raise FileNotFoundError(2, "no PES 6 install (set PES6_DIR)", "pes6.exe")
+    return folder
+
+
+def pes6_option():
+    """The option file to decode: the install's shipped copy (a template), else the live one."""
+    try:
+        shipped = os.path.join(pes6_install(), "misc", "Option File", pes6.OPT_NAME)
+        if os.path.isfile(shipped):
+            return shipped
+    except FileNotFoundError:
+        pass
+    live = pes6.live_option_file()
+    if not live:
+        raise FileNotFoundError(2, "no PES 6 option file (set PES6_DIR)", pes6.OPT_NAME)
+    return live
+
+
+def test_pes6_reads_the_shipped_option_file():
+    """Messi and Buffon decode exactly, and the squads invert back into club rosters."""
+    path = pes6_option()
+    db = pes6.Cpk(path)
+    assert db.bad_sums == [], db.bad_sums
+    table = db.read_table("Player")
+    assert len(table) == pes6.PLAYERS + pes6.CREATED, len(table)
+    messi = table.find("Messi")[0]
+    assert messi == 1033 and (table.get(messi, "Age"), table.get(messi, "Height")) == (21, 170)
+    assert pes6.NATION_NAMES[table.get(messi, "Nationality")] == "Argentina"
+    assert pes6.POSITION_NAMES[table.get(messi, "Position")] == "SS"
+    assert table.get(messi, "Attack") == 95 and table.get(messi, "Dribble Accuracy") == 95
+    assert table.get(messi, "Skill: Dribbling") == 1
+    gk = table.find("Buffon")[0]
+    assert gk == 300 and table.get(gk, "GK Ability") == 94
+    assert table.get(gk, "Skill: 1-on-1 Stopper") == 1
+    teams = pes6.TeamTable(*db.read_raw("Team"))
+    assert len(teams) == 140 and teams.name(0) == "Arsenal FC", len(teams)
+    assign = pes6.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    united = {assign.number(r): table.name(assign.player(r))
+              for r in range(len(assign)) if assign.team(r) == 73 + 10}
+    assert (united.get(7), united.get(10)) == ("C. Ronaldo", "Rooney"), sorted(united.items())[:6]
+    assert table.find("1033") == [1033] and table.find("32768") == [pes6.PLAYERS]
+
+
+def test_pes6_skills_are_the_games_own_names():
+    """PES 6's specials are the same games' own list as PES 5's, on its own bits."""
+    assert pes6.SKILLS == pes5.SKILLS
+    assert "Skill: GK Kick" not in pes6.FIELD_BY_LABEL
+
+
+def test_pes6_fixture_round_trip_and_detection():
+    """The codec on a synthetic option file: no game data needed, so CI gates on it.
+
+    The raw signature the shipped files carry, a no-edit save that is byte identical, an
+    edit confined to its own record, checksums that still pass after a write, and detection
+    reading the bytes rather than the file's name.
+    """
+    box = tempfile.mkdtemp(prefix="pesforge-pes6-fixture-")
+    try:
+        path = os.path.join(box, "KONAMI-WIN32PES6OPT")
+        fixtures.build_option_file6(path)
+        raw = open(path, "rb").read()
+        assert len(raw) == pes6.FILESIZE, len(raw)
+        assert raw[pes6.SIG_OFF:pes6.SIG_OFF + 4] == b"\xc3\xb0\x05\xfa", raw[pes6.SIG_OFF:pes6.SIG_OFF + 4].hex()
+        db = pes6.Cpk(path)
+        assert db.bad_sums == []
+        table = db.read_table("Player")
+        assert len(table) == pes6.PLAYERS + pes6.CREATED
+        assert table.name(1) == "PLAYER 0001" and table.shirt(1) == "PA"
+        assert 40 <= table.get(1, "Attack") <= 99
+        again = os.path.join(box, "again.bin")
+        pes6.save(db.data, again)                     # no edits: byte for byte
+        assert open(again, "rb").read() == raw
+        orig = bytes(db.data)                         # the plaintext before the edit
+        was = table.get(1, "Attack")
+        table.set(1, "Attack", was + 1 if was < 99 else was - 1)
+        db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+        back = pes6.Cpk(path)
+        assert back.bad_sums == [], back.bad_sums
+        assert back.read_table("Player").get(1, "Attack") != was
+        lo = pes6.BLOCK[4] + pes6.REC                       # record 1's own bytes
+        hi = pes6.BLOCK[4] + 2 * pes6.REC
+        checksum = (pes6.BLOCK[4] - 8, pes6.BLOCK[4] - 4)   # block 4's recomputed sum
+        ranges = pes2015_diffs(orig, back.data)
+        assert any(lo <= r[0] and r[1] <= hi for r in ranges), ranges
+        assert all((lo <= r[0] and r[1] <= hi) or (checksum[0] <= r[0] and r[1] <= checksum[1])
+                   for r in ranges), ranges
+        names = pes6.backup_list(os.path.join(box, "backups"))
+        assert names and os.path.basename(names[0]).startswith(pes6.OPT_NAME)
+        pes6.restore_backup(names[0])
+        assert open(path, "rb").read() == raw
+        from pesforge_gtk import importing as imp       # no gi: the data layer, headless
+        vintage, note = imp.probe_database(path)
+        assert vintage == "pes6" and "5,184 players" in note, (vintage, note)
+        renamed = os.path.join(box, "definitely-a-pes2019-pack.cpk")
+        shutil.copy2(path, renamed)
+        assert imp.probe_database(renamed)[0] == "pes6"
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_pes6_probe_and_resolution():
+    """A folder pick resolves to the file the game reads, and junk is refused, not mis-read."""
+    pes6_option()                                   # skip when this machine has none
+    from pesforge_gtk import importing as imp
+    live = imp.vintage_database("pes6")
+    assert os.path.isfile(live), live
+    assert os.path.basename(live) == pes6.OPT_NAME
+    install = pes6_install()
+    found, vintage, _note = imp.find_database(install)
+    assert vintage == "pes6" and os.path.isfile(found), (found, vintage)
+    details, can_load, target = imp.describe_pick(install)
+    assert can_load and target and os.path.isfile(target), details
+    junk = os.path.join(tempfile.gettempdir(), f"pesforge-not-an-option6-{os.getpid()}.bin")
+    with open(junk, "wb") as fh:
+        fh.write(b"not an option file")
+    try:
+        assert imp.probe_database(junk)[0] != "pes6", imp.probe_database(junk)
+    finally:
+        os.unlink(junk)
+
+
+def test_gtk4_edits_and_saves_pes6():
+    """PES 6 is editable: load the option file, change a player, save into a copy, read it back.
+
+    The check copies KONAMI-WIN32PES6OPT into a scratch folder first, and asserts the game's
+    own file is byte-identical when it finishes.
+    """
+    pes6_option()                                   # skip when this machine has none
+    game = pes6_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write6", PES6_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE6 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+
+
 def test_system_theme_matches_the_desktop():
     """The app paints as the desktop actually declares itself, not as a False-by-default flag says.
 
@@ -2990,7 +3136,7 @@ def test_data_layer_imports_stay_toolkit_free():
     """The data layer must not import gi or tkinter (it has to run headless, e.g. in CI)."""
     script = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import cpk, pesdb, pesdb_maps, pes5, pes2015, pes2019, pes2021, settings, theme\n"
+        "import cpk, pesdb, pesdb_maps, pes5, pes6, pes2015, pes2019, pes2021, settings, theme\n"
         "bad = [m for m in ('gi', 'gi.repository', 'tkinter') if m in sys.modules]\n"
         "print('toolkit-free', not bad, bad)\n"
     ) % ROOT

@@ -37,9 +37,9 @@ def style_names(mod):
 def country_name(mod, code):
     """A nationality code's name, read from the release's own list when it ships one.
 
-    PES 5's country list is the classic-era enum (109 entries, England 6), not the vendor's
-    country ids — running one through the other silently shows a plausible wrong country,
-    so a module with NATION_NAMES answers for itself.
+    PES 5's country list is the classic-era enum (109 entries, England 6; PES 6 ships its
+    own list of 106), not the vendor's country ids — running one through the other silently
+    shows a plausible wrong country, so a module with NATION_NAMES answers for itself.
     """
     names = getattr(mod, "NATION_NAMES", None)
     if names:
@@ -123,6 +123,8 @@ OVR_ALIASES = {
              "Acceleration": "Acceleration", "Jump": "Jump", "Stamina": "Stamina",
              "Ball Winning": None, "Tight Possession": None},
 }
+# PES 6's map is PES 5's vocabulary on a different record layout (see pes6.py): same aliases.
+OVR_ALIASES["pes6"] = OVR_ALIASES["pes5"]
 
 
 def overall_rating(table, index, mod):
