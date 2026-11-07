@@ -204,14 +204,17 @@ _BIO = (
     # the panel's one style row edits the dribble style (the editor's own type 5: shown +1)
     ("Playing Style", 6, 0, 3, 1),
 )
-# (label, off, shift) — one bit each, the editor's special-ability names (Stats.java).
+# (label, off, shift) — one bit each, in the edit menu's own order and under the games' own
+# names: the strings the installs carry in dat/e_text.afs (PES 5 and PES 6 byte-identical),
+# not the PESFan editor's abbreviations — "Anti-Dribble" and "1-T Pass" are in neither game.
 _SPECIALS = (
-    ("Dribbling", 24, 4), ("Anti-Dribble", 24, 5), ("Positioning", 24, 6), ("Reaction", 24, 7),
+    ("Dribbling", 24, 4), ("Tactical Dribble", 24, 5), ("Positioning", 24, 6), ("Reaction", 24, 7),
     ("Playmaking", 28, 4), ("Passing", 28, 5), ("Scoring", 28, 6), ("1-1 Scoring", 28, 7),
-    ("Post", 32, 4), ("Line Position", 32, 5), ("Mid shooting", 32, 6), ("Side", 32, 7),
-    ("Centre", 35, 5), ("Penalties", 35, 6), ("1-T Pass", 35, 7), ("Outside", 36, 0),
-    ("Marking", 36, 1), ("Sliding", 36, 2), ("Cover", 36, 3), ("D-L Control", 36, 4),
-    ("Penalty GK", 36, 5), ("1-on-1 GK", 36, 6), ("Long Throw", 36, 7), ("GK Kick", 20, 7),
+    ("Post Player", 32, 4), ("Lines", 32, 5), ("Middle Shooting", 32, 6), ("Side", 32, 7),
+    ("Centre", 35, 5), ("Penalties", 35, 6), ("1-Touch Pass", 35, 7), ("Outside", 36, 0),
+    ("Marking", 36, 1), ("Sliding Tackle", 36, 2), ("Covering", 36, 3), ("D-Line Control", 36, 4),
+    ("Penalty Stopper", 36, 5), ("1-on-1 Stopper", 36, 6), ("Long Throw", 36, 7),
+    ("GK Kick", 20, 7),
 )
 
 ABILITIES = tuple(label for label, _o, _s, _m in _STATS)

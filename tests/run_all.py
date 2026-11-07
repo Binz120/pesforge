@@ -2669,7 +2669,7 @@ def test_pes5_reads_the_shipped_option_file():
     assert table.get(zid, "Skill: Playmaking") == 1 and table.get(zid, "Skill: Dribbling") == 0
     gk = table.find("Buffon")[0]
     assert gk == 300 and table.get(gk, "GK Ability") == 97
-    assert table.get(gk, "Skill: 1-on-1 GK") == 1 and table.get(gk, "Skill: GK Kick") == 1
+    assert table.get(gk, "Skill: 1-on-1 Stopper") == 1 and table.get(gk, "Skill: GK Kick") == 1
     teams = pes5.TeamTable(*db.read_raw("Team"))
     assert len(teams) == 138 and teams.name(0) == "Arsenal FC", len(teams)
     assign = pes5.AssignmentTable(*db.read_raw("PlayerAssignment"))
