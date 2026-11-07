@@ -43,6 +43,8 @@ Read off its menus at the tag; the CLIs cover two of them.
 - **Accessibility**: names for every control and list column, focus rings, accelerators,
   text that follows the desktop's text scale (`docs/accessibility.md`).
 - **The write flow's change report** written next to each backup.
+- **Undo and redo** in the window itself (`Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`, one step per
+  user action, 100 steps deep, with a `nothing to undo` status line and suite coverage).
 
 ## What deleting the Tk build would remove
 

@@ -106,8 +106,12 @@ each copy to check the edit landed. It reports which files were written, or whic
 read back. **Revert** drops the pending edits and re-reads from disk. The status line always names
 the database it is reporting on.
 
-**What this build does not do** (the Tk build and the CLIs do): undo/redo, per-field revert, the
-pesmaster photo, appearance/coach/stadium editing, roster CSV, and club search as its own tab.
+**What this window does not do** (the Tk window, and some of the CLIs, do): the two-player
+compare dialog, the coaches and appearance editors, the career block, celebration and motion
+slots, the player radar, the optional pesmaster photo, per-field revert, restoring a whole-file
+backup, and stadium or squad editing from the window. Roster CSV, transfers, squad numbers and
+stadium or coach assignment are covered by the CLIs, headlessly. Undo and redo are here too
+(`Ctrl+Z` / `Ctrl+Y`, one step per action).
 All four vintages are read *and* edited here: PES 2019 (188-byte records), PES 2015 (180),
 SP Football Life / PES 2021 (312) and the classic PES 5 option file (124-byte records), each
 through its own map module. There is no separate "PES 2015
