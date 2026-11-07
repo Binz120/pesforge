@@ -2669,7 +2669,7 @@ def test_pes5_reads_the_shipped_option_file():
     assert table.get(zid, "Skill: Playmaking") == 1 and table.get(zid, "Skill: Dribbling") == 0
     gk = table.find("Buffon")[0]
     assert gk == 300 and table.get(gk, "GK Ability") == 97
-    assert table.get(gk, "Skill: 1-on-1 Stopper") == 1 and table.get(gk, "Skill: GK Kick") == 1
+    assert table.get(gk, "Skill: 1-on-1 Stopper") == 1
     teams = pes5.TeamTable(*db.read_raw("Team"))
     assert len(teams) == 138 and teams.name(0) == "Arsenal FC", len(teams)
     assign = pes5.AssignmentTable(*db.read_raw("PlayerAssignment"))
@@ -2677,6 +2677,22 @@ def test_pes5_reads_the_shipped_option_file():
                for r in range(len(assign)) if assign.team(r) == teams.id(0)]
     assert arsenal[0] == (1, "Lehmann"), arsenal[:3]
     assert table.find("205") == [205] and table.find("32768") == [pes5.PLAYERS]
+
+
+def test_pes5_skills_are_the_games_own_names():
+    """The classic panel shows the abilities the games themselves name, in their order.
+
+    The PESFan editor's table (Stats.java) abridged them — "Anti-Dribble" and "1-T Pass" are
+    in neither game — and mapped byte 20 bit 7 as "GK Kick", which sits on 59.3% of the live
+    roster (measured 2026-11-07) and on no edit menu. The names below are the games' own
+    strings (dat/e_text.afs, byte-identical in PES 5 and PES 6).
+    """
+    assert pes5.SKILLS == (
+        "Dribbling", "Tactical Dribble", "Positioning", "Reaction", "Playmaking", "Passing",
+        "Scoring", "1-1 Scoring", "Post Player", "Lines", "Middle Shooting", "Side", "Centre",
+        "Penalties", "1-Touch Pass", "Outside", "Marking", "Sliding Tackle", "Covering",
+        "D-Line Control", "Penalty Stopper", "1-on-1 Stopper", "Long Throw")
+    assert "Skill: GK Kick" not in pes5.FIELD_BY_LABEL
 
 
 def test_pes5_fixture_round_trip_and_detection():

@@ -214,8 +214,10 @@ _SPECIALS = (
     ("Centre", 35, 5), ("Penalties", 35, 6), ("1-Touch Pass", 35, 7), ("Outside", 36, 0),
     ("Marking", 36, 1), ("Sliding Tackle", 36, 2), ("Covering", 36, 3), ("D-Line Control", 36, 4),
     ("Penalty Stopper", 36, 5), ("1-on-1 Stopper", 36, 6), ("Long Throw", 36, 7),
-    ("GK Kick", 20, 7),
 )
+# Byte 20 bit 7 is not one of them: the game's own edit list has no 24th entry, and the bit is
+# set on 59.3% of the live roster (measured 2026-11-07) — yet the PESFan table calls it "GK
+# Kick". Left unmapped: not shown, and never written (writes only touch named fields).
 
 ABILITIES = tuple(label for label, _o, _s, _m in _STATS)
 SKILLS = tuple(label for label, _o, _s in _SPECIALS)
