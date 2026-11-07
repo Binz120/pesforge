@@ -23,6 +23,8 @@ import unicodedata
 from tkinter import ttk, messagebox, filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pes2015
+import pes2019
 import pesdb
 import settings
 import theme
@@ -49,6 +51,16 @@ def bar_value(x, width):
     """Click position on an ability bar -> 40..99 (left edge 40, right edge 99)."""
     frac = max(0.0, min(1.0, x / max(1, width - 1)))
     return 40 + round(59 * frac)
+
+
+def bar_width(bar):
+    """A just-built canvas reports width 1 until it is mapped — use its design width until then.
+
+    `winfo_width() or cget("width")` looked safe but 1 is truthy, so every bar rebuilt in place
+    (a palette switch) was drawn one pixel wide and read as blank.
+    """
+    w = bar.winfo_width()
+    return w if w > 1 else (int(bar.cget("width")) or 80)
 
 
 def group_average(get, labels):
@@ -388,13 +400,17 @@ def norm(text):
     """Lowercase and strip accents: 'München' -> 'munchen', 'Atlético' -> 'atletico'."""
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
+# PES 2021's own playing-style ids — the binary enum the game reads at bit 155 (verified
+# against the game's data; the eFootball-era ordering this list used to carry shifted nearly
+# every style, so e.g. an Orchestrator read as a full-back).
 PLAY_STYLES = [
-    "Goal Poacher", "Dummy Runner", "Fox in the Box", "Target Man", "Deep-Lying Forward",
-    "Creative Playmaker", "Prolific Winger", "Roaming Flank", "Cross Specialist",
-    "Box-to-Box", "The Destroyer", "Orchestrator", "Anchor Man", "Defensive Full-back",
-    "Offensive Full-back", "Full-back Finisher", "Build Up", "Offensive Goalkeeper",
-    "Defensive Goalkeeper", "None 19", "None 20", "None 21", "None 22", "None 23",
-    "None 24", "None 25", "None 26", "None 27", "None 28", "None 29", "None 30", "None 31",
+    "None", "Goal Poacher", "Dummy Runner", "Fox in the Box", "Prolific Winger",
+    "Classic No. 10", "Hole Player", "Box-to-Box", "Anchor Man", "The Destroyer",
+    "Extra Frontman", "Offensive Full-back", "Defensive Full-back", "Target Man",
+    "Creative Playmaker", "Build Up", "Offensive Goalkeeper", "Defensive Goalkeeper",
+    "Roaming Flank", "Cross Specialist", "Orchestrator", "Full-back Finisher",
+    "None 22", "None 23", "None 24", "None 25", "None 26", "None 27", "None 28",
+    "None 29", "None 30", "None 31",
 ]
 
 
@@ -447,11 +463,69 @@ def load_tables(cpk_path):
     return tables
 
 
+def pes2015_vintage(path):
+    """True when the file is a PES 2015-vintage CPK with a player table (dt10 / DT80 packs).
+
+    The record size is what tells the vintages apart: every release from 2015 on ships a
+    Player.bin, only PES 2015's divides by 180 (PES 2019's divides by 188).
+    """
+    try:
+        db = pes2015.Cpk2015(path)
+        return bool(db.entry("Player")) and len(db.read_raw("Player")[0]) % pes2015.REC == 0
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def pes2019_vintage(path):
+    """True when the file is a PES 2019 database CPK (dt10_x64.cpk / the dt80_*_x64 packs).
+
+    Checks the player table's own record size — a PES 2015 CPK carries a Player.bin too, and
+    only the 188-byte record marks this release.
+    """
+    try:
+        db = pes2019.Cpk2019(path)
+        return bool(db.entry("Player")) and len(db.read_raw("Player")[0]) % pes2019.REC == 0
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def validate_database(path):
+    """A CPK the editor can load: readable Player/Team/PlayerAssignment in PES 2021 shapes.
+
+    Raises ValueError with a short reason when the file cannot drive the editor — a foreign
+    vintage (PES 2015's tables are 180-byte records, PES 2019's 188) or a file that is not a
+    database at all.
+    """
+    if not path or not os.path.isfile(path):
+        raise ValueError("file not found")
+    for name, rec in (("Player", pesdb.REC), ("Team", pesdb.TEAM_REC),
+                      ("PlayerAssignment", pesdb.ASSIGN_REC)):
+        try:
+            rows = pesdb.read_table(path, name)
+        except KeyError:
+            raise ValueError(f"no {name}.bin inside") from None
+        except (ValueError, OSError) as exc:
+            raise ValueError(str(exc) or exc.__class__.__name__) from None
+        if not rows or len(rows) % rec:
+            if name == "Player" and pes2019_vintage(path):
+                raise ValueError("this is a PES 2019 database (188-byte records) — the editor "
+                                 "speaks PES 2021 / SP Football Life; edit PES 2019 from the "
+                                 "\"PES 2019\" tab")
+            if name == "Player" and pes2015_vintage(path):
+                raise ValueError("this is a PES 2015 database (180-byte records) — the editor "
+                                 "speaks PES 2021 / SP Football Life; edit PES 2015 from the "
+                                 "menu: \"PES 2015 database…\"")
+            raise ValueError(f"{name}.bin does not look like a PES 2021 table "
+                             f"({len(rows):,} bytes)")
+    return path
+
+
 class Editor(tk.Tk):
     # fields bulk edit may touch: every ability plus the plain numeric identity values
     NUMERIC_FIELDS = [l for l, *_ in pesdb.ATTRS] + [l for l, *_ in pesdb.CAREER] + \
                      ["Age", "Height (cm)", "Weight (kg)", "Form", "Weak Foot Usage",
                       "Weak Foot Accuracy", "Injury Resistance"]
+    IMPORT_ENTRY = "Import database…"
 
     def __init__(self):
         super().__init__()
@@ -484,7 +558,10 @@ class Editor(tk.Tk):
         self.game_dir = settings.game_dir(self.cfg)      # searches the disk if that folder is gone
         self.auto_found = configured != self.game_dir
         self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
-        self.cpk_path = settings.database_path(self.game_dir)
+        if self.cfg.get("database") and not settings.imported_database(self.cfg):
+            self.cfg["database"] = ""                    # the imported file moved away
+            settings.save(self.cfg)
+        self.cpk_path = settings.current_database(self.game_dir, self.cfg)
         if not os.path.exists(self.cpk_path):
             # First run on a new machine: ask where the game is instead of refusing to start.
             self.withdraw()
@@ -508,9 +585,10 @@ class Editor(tk.Tk):
                         parent=self)
                     continue
                 self.cfg["game_dir"] = folder
+                self.cfg["database"] = ""                # a picked install is its own database
                 settings.save(self.cfg)
                 self.game_dir, self.auto_found = folder, True
-                self.cpk_path = settings.database_path(folder)
+                self.cpk_path = settings.current_database(folder, self.cfg)
             self.deiconify()
         self.pristine = pristine_cpk(self.cpk_path)
         self.edit_saves = settings.edit_save_files()
@@ -526,6 +604,7 @@ class Editor(tk.Tk):
         self._radar_job = None
         self._radar_poly = None
         self._radar_axes = None
+        self._career_job = None
         self.index = None          # record index shown
         self.view_mode = tk.StringVar(value="players")   # the list's Players/Clubs tab
         self.reindex()
@@ -536,6 +615,7 @@ class Editor(tk.Tk):
         self._edited_pids = set()  # players touched this session, for the "changed only" view
         self._changes = {}         # (table, record id, field) -> pending edit, the change ledger
         self._field_widgets = {}   # (table, record id, field) -> the widget that shows it
+        self._field_labels = {}    # field name -> its row label, so dead rows can collapse
         self._field_section = {}   # field name -> section key, for the per-section counts
         self._section_counts = {}  # section key -> the label that carries its changed count
         self._ovr_cache = {}       # record index -> OVR, invalidated when an ability changes
@@ -547,16 +627,20 @@ class Editor(tk.Tk):
         self.populate("")
         where = " · database found automatically" if self.auto_found else ""
         shadow = " · in-game EDIT save overrides the database on load" if self.edit_saves else ""
-        self.status(f"{len(self.table.records):,} players loaded from {self.game_dir}{where}{shadow}")
-        self.after(150, self._update_career_note)     # one pass over the table, off the open path
+        self._main_status = (f"{len(self.table.records):,} players loaded from {self.game_dir}"
+                             f"{where}{shadow}")
+        self.status(self._main_status)
+        # one pass over the table, off the open path; the id is kept so destroy() can drop it
+        self._career_job = self.after(150, self._update_career_note)
         self._park_if_asked()
 
     def _career_empties(self):
         """Career fields that hold nothing in any record of the loaded table.
 
         The shipped data leaves OwnerClub zero for all 26,395 players (the schema puts it at
-        byte 4; it is not a decoding bug), and Contract/Loan/MarketValue are blank for all but
-        a few dozen. Showing "0 —" made those look broken; the form says which they are instead.
+        byte 4; it is not a decoding bug), so that row collapses to nothing instead of a dead
+        "0 —". Contract/Loan/MarketValue are blank for all but a few dozen players and stay
+        visible; the note above the grid says which is which.
         """
         cached = getattr(self, "_career_empty_cache", None)
         if cached is not None:
@@ -570,22 +654,42 @@ class Editor(tk.Tk):
         self._career_empty_cache = empty
         return empty
 
+    def _compact_career_rows(self, empty):
+        """Re-flow the career grid around hidden fields, so their cells leave no hole."""
+        g = getattr(self, "_career_grid", None)
+        if not g:
+            return
+        n = 0
+        for label in g["labels"]:
+            lab, wid = self._field_labels.get(label), self._field_widgets.get(label)
+            if lab is None or wid is None:
+                continue
+            if label in empty:
+                lab.grid_remove()
+                wid.grid_remove()
+                continue
+            r, c = divmod(n, g["cols"])
+            lab.grid(row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            wid.grid(row=r, column=c * 2 + 1, sticky="w", pady=1, padx=(0, 8))
+            n += 1
+
     def _update_career_note(self):
         note = getattr(self, "career_note", None)
         if note is None or not note.winfo_exists():
             return
         empty = self._career_empties()
+        # a field the whole database leaves empty collapses to nothing instead of a dead "0 —",
+        # and the rows after it move up into its cell: no hole in the grid
+        self._compact_career_rows(empty)
         if not empty:
             note.configure(text="")
             return
         names = ", ".join(empty)
         text = (f"{names} {'is' if len(empty) == 1 else 'are'} blank in all "
-                f"{len(self.table.records):,} records of this database \u2014 the shipped "
-                "data, not a read error.")
+                f"{len(self.table.records):,} records \u2014 shipped data, not a read error, so "
+                f"the {'row is' if len(empty) == 1 else 'rows are'} hidden.")
         if "Owner Club" in empty:
-            text += (" The game keeps per-player ownership in its EDIT save, which PESForge "
-                     "cannot read yet.")
-        text += " Type a club name or id to set one."
+            text += " Per-player ownership lives in the game's EDIT save."
         note.configure(text=text)
 
     # ------------------------------------------------------------------ tables
@@ -654,6 +758,7 @@ class Editor(tk.Tk):
         self._pane_canvases = []
         self._section_counts = {}
         self._field_widgets = {}
+        self._field_labels = {}
         self._field_section = {}
         self._name_counters = {}
         self.vars = {}
@@ -746,8 +851,15 @@ class Editor(tk.Tk):
     # ---------------------------------------------------------------- ui
     def _build_ui(self):
         self._build_header()
+        # the tab row is a full-width strip: it stays visible (and clickable) whichever tab is
+        # active, including "PES 2015", which swaps the body underneath it
+        self._tabs_bar = tk.Frame(self, bg=C_BG)
+        self._tabs_bar.pack(fill="x", padx=12, pady=(4, 0))
         body = tk.Frame(self, bg=C_BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        # the "PES 2015" tab swaps this in place of the body (it is packed only while active)
+        self._pes2015_host = tk.Frame(self, bg=C_BG)
+        self._pes2019_host = tk.Frame(self, bg=C_BG)
         # The list pane is built once and re-gridded, never rebuilt: relaying it out used to
         # re-scan all 26,395 players and recreate the tree on every fold, which is what made a
         # resize blank the window for most of a second.
@@ -962,6 +1074,9 @@ class Editor(tk.Tk):
                          command=self._later(self.open_backups))
         menu.add_separator()
         menu.add_command(label="Reload database", command=self._later(self.reload))
+        menu.add_command(label="Import database…", command=self._later(self.import_database))
+        menu.add_command(label="PES 2015 database…", command=self._later(self.open_pes2015))
+        menu.add_command(label="PES 2019 database…", command=self._later(self.open_pes2019))
         menu.add_command(label="Restore vanilla", command=self._later(self.restore_vanilla))
         menu.add_separator()
         menu.add_command(label="Export roster CSV…", command=self._later(self._export_dialog))
@@ -1359,10 +1474,11 @@ class Editor(tk.Tk):
                                    command=lambda: self.populate(self.q.get()))
         self.pill_free.pack(anchor="w", pady=(0, 3))
 
-        # The two result kinds are tabs rather than a hidden mode switch: a club search keeps
-        # its players on the Players tab and its clubs on the Clubs tab, with counts.
-        tabs = tk.Frame(left, bg=C_BG)
-        tabs.pack(fill="x", pady=(2, 4))
+        # The result kinds are tabs rather than a hidden mode switch: a club search keeps its
+        # players on the Players tab and its clubs on the Clubs tab, with counts. The PES 2015
+        # tab swaps the whole body for the other vintage's editor (import + its own fields).
+        # The strip itself lives in _build_ui, above the body, so it survives that swap.
+        tabs = self._tabs_bar
         self.tab_players = tk.Label(tabs, text="Players", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
                                     cursor="hand2", font=self.F_LABEL)
         self.tab_players.pack(side="left", padx=(0, 4))
@@ -1371,6 +1487,14 @@ class Editor(tk.Tk):
                                   cursor="hand2", font=self.F_LABEL)
         self.tab_clubs.pack(side="left")
         self.tab_clubs.bind("<Button-1>", lambda e: self.set_view_mode("clubs"))
+        self.tab_pes2015 = tk.Label(tabs, text="PES 2015", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                    cursor="hand2", font=self.F_LABEL)
+        self.tab_pes2015.pack(side="left", padx=(4, 0))
+        self.tab_pes2015.bind("<Button-1>", lambda e: self.set_view_mode("pes2015"))
+        self.tab_pes2019 = tk.Label(tabs, text="PES 2019", bg=C_PANEL2, fg=C_DIM, padx=8, pady=3,
+                                    cursor="hand2", font=self.F_LABEL)
+        self.tab_pes2019.pack(side="left", padx=(4, 0))
+        self.tab_pes2019.bind("<Button-1>", lambda e: self.set_view_mode("pes2019"))
 
         cols = ("id", "name", "club", "pos", "ovr", "age")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="extended")
@@ -1706,9 +1830,13 @@ class Editor(tk.Tk):
         self.career_note.pack(fill="x", pady=(0, 3))
         self._wrap(self.career_note, cap=340)
         # a relayout rebuilds this section; the note's text has to be put back on the new label
-        self.after_idle(self._update_career_note)
+        if self._career_job is not None:
+            self.after_cancel(self._career_job)
+        self._career_job = self.after_idle(self._update_career_note)
         # one grid, so the date row shares its columns with every row below it
-        self._field_grid(rest, dates + others + list(pesdb.MOTIONS), cols, section="career")
+        fields = dates + others + list(pesdb.MOTIONS)
+        self._career_grid = {"labels": [f[0] for f in fields], "cols": cols}
+        self._field_grid(rest, fields, cols, section="career")
 
     def _country_id(self, name):
         return (getattr(self, "_country_ids", {}) or {}).get(name)
@@ -1734,8 +1862,9 @@ class Editor(tk.Tk):
         for n, spec in enumerate(fields):
             label = spec[0]
             r, c = divmod(n, cols)
-            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=16, font=F).grid(
-                row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            lab = tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=16, font=F)
+            lab.grid(row=r, column=c * 2, sticky="w", pady=1, padx=(0, 4))
+            self._field_labels[label] = lab
             key = label
             v = tk.StringVar()
             self.vars[key] = v
@@ -1825,6 +1954,9 @@ class Editor(tk.Tk):
             bar.bind("<Button-1>", lambda e, l=label: self.drag_bar(l, e))
             bar.bind("<B1-Motion>", lambda e, l=label: self.drag_bar(l, e))
             bar.bind("<Button-3>", lambda e, l=label: self.reset_field(l))
+            # the canvas gets its real width only once it is mapped (and changes on resize):
+            # redraw then, or a bar built during a palette switch keeps its design width
+            bar.bind("<Configure>", lambda _e, l=label: self._redraw_field_bar(l))
             self.vars[label + "::bar"] = bar
             self._field_widgets[label] = sp
             self._field_section[label] = "abilities"
@@ -1864,7 +1996,9 @@ class Editor(tk.Tk):
             self.vars["Skill " + label] = v
             chip = Pill(grid, label, self._chip_font,
                         lambda l=label: self.toggle_skill(l))
-            chip.grid(row=r, column=c, sticky="w", padx=(0, 8), pady=1)
+            # padx 4, the same figure _filter_skills re-grids with: at 8 the 4-column grid
+            # needs 517px and overflows the 511px pane it is planned into
+            chip.grid(row=r, column=c, sticky="w", padx=(0, 4), pady=1)
             chip.bind("<Button-3>", lambda e, l=label: self.toggle_skill(l))
             self._skill_chips[label] = chip
             self._field_section["Skill " + label] = "skills"
@@ -2008,8 +2142,7 @@ class Editor(tk.Tk):
         tk.Label(number, text="worn in this club", bg=C_BG, fg=C_HINT,
                  font=self.F_TINY).pack(side="left", padx=4)
 
-        sec2 = self._section(parent, "Club name in the database", key="clubname",
-                             hint="Team.bin")
+        sec2 = self._section(parent, "Club name", key="clubname", hint="Team.bin")
         self.team_vars = {}
         for label in ("English", "Database", "Short"):
             r = tk.Frame(sec2, bg=C_BG)
@@ -2022,11 +2155,13 @@ class Editor(tk.Tk):
                 self.cb_db = ttk.Combobox(r, textvariable=self.db_var, width=24, font=F,
                                           state="readonly", postcommand=self._refresh_databases)
                 self.cb_db.pack(side="left", fill="x", expand=True, padx=6)
-                self.cb_db.bind("<<ComboboxSelected>>",
-                                lambda e: self.switch_database(self.db_var.get()))
+                self.cb_db.bind("<<ComboboxSelected>>", self._database_chosen)
+                self.btn_unmount = ttk.Button(r, text="Unmount", style="Ghost.TButton",
+                                              command=self.unmount_database)
+                self.btn_unmount.pack(side="left")
                 # the disk is only walked when the dropdown opens or the database changes
-                self.cb_db["values"] = getattr(self, "_db_paths", None) or [
-                    self._short_path(self.cpk_path)]
+                self.cb_db["values"] = (getattr(self, "_db_paths", None)
+                                        or [self._short_path(self.cpk_path)]) + [self.IMPORT_ENTRY]
                 continue
             v = tk.StringVar()
             self.team_vars[label] = v
@@ -2038,9 +2173,9 @@ class Editor(tk.Tk):
                 ttk.Button(r, text="Apply", style="Ghost.TButton",
                            command=self.apply_team_name).pack(side="left")
         self._field_section["Club name"] = "clubname"
-        note = "Transfers and club names are written to Team.bin + PlayerAssignment.bin on save."
+        note = "Written to Team.bin + PlayerAssignment.bin on save."
         if self.edit_saves:
-            note += ("\nAn in-game edit save overrides this database: "
+            note += ("\nIn-game edit save overrides this database: "
                      + ", ".join(os.path.basename(p) for p in self.edit_saves))
         note_lbl = tk.Label(parent, text=note, bg=C_BG, fg=C_WARN if self.edit_saves else C_HINT,
                             anchor="w", justify="left", font=self.F_TINY)
@@ -2215,6 +2350,23 @@ class Editor(tk.Tk):
             win.destroy()
         self._app_win = AppearanceWindow(self)
 
+    def open_vintage(self, mode):
+        """Open (or raise) one vintage's database window — one per vintage, never two."""
+        spec = vintage_spec(mode)
+        attr = f"_{mode}_win"
+        win = getattr(self, attr, None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            win.focus_set()
+            return
+        setattr(self, attr, spec["window"](self))
+
+    def open_pes2015(self):
+        self.open_vintage("pes2015")
+
+    def open_pes2019(self):
+        self.open_vintage("pes2019")
+
     def load_club(self, i, pid):
         rows = self.assign_by_pid.get(pid, [])
         club_rows = [j for j in rows if self.assign.team(j) > pesdb.NATIONAL_MAX]
@@ -2224,11 +2376,10 @@ class Editor(tk.Tk):
         self.lbl_club.configure(text=name)
         if team_id:
             squad = self.club_counts.get(team_id, 0)
-            scope = (f"Coach, stadium and squad number belong to this club and every one of "
-                     f"its {squad} players, not to the player above.  team id {team_id} · "
-                     f"{len(club_rows)} club row(s), {len(rows)} total")
+            scope = (f"club-level \u2014 shared by all {squad} players \u00b7 "
+                     f"team {team_id} \u00b7 {len(club_rows)} club row(s)")
         else:
-            scope = "This player has no club row — a transfer creates one."
+            scope = "no club row yet \u2014 a transfer creates one."
         self.lbl_club_scope.configure(text=scope)
         self.club_target.set("")
         idx = self.team_index.get(team_id)
@@ -2250,20 +2401,46 @@ class Editor(tk.Tk):
                            if self.shirt_rows else "—")
 
     def _refresh_databases(self):
-        """Fill the Database dropdown: every data_s*.cpk on disk, current one first."""
+        """Fill the Database dropdown: every data_s*.cpk on disk, current one first, Import last."""
         paths = settings.find_databases()
         if self.cpk_path not in paths:
             paths.insert(0, self.cpk_path)
         self._db_paths = [self._short_path(p) for p in paths]
-        self.cb_db["values"] = self._db_paths
+        self.cb_db["values"] = self._db_paths + [self.IMPORT_ENTRY]
 
     @staticmethod
     def _short_path(path):
         home = os.path.expanduser("~")
         return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 
+    def _database_chosen(self, evt=None):
+        """The Database dropdown: a path switches the database, the last entry imports one."""
+        if self.db_var.get() == self.IMPORT_ENTRY:
+            self.import_database()
+        else:
+            self.switch_database(self.db_var.get())
+
+    def import_database(self):
+        """Pick any data CPK on disk and make it the database the loads and saves go to."""
+        if self.dirty_tables:
+            self.db_var.set(self._short_path(self.cpk_path))
+            self.status("unsaved changes — save or revert before switching database")
+            return
+        path = filedialog.askopenfilename(
+            title="Import a data CPK", parent=self,
+            initialdir=os.path.dirname(self.cpk_path) or os.path.expanduser("~"),
+            filetypes=[("CRI CPK database", "*.cpk"), ("All files", "*")])
+        if not path:
+            self.db_var.set(self._short_path(self.cpk_path))   # cancelled: keep showing the truth
+            return
+        self.switch_database(path)
+
     def switch_database(self, path):
-        """Point the editor (loads and saves) at another install's data CPK."""
+        """Point the editor (loads and saves) at another database.
+
+        An install's own data CPK re-points at that folder; any other file — a copy kept
+        elsewhere, or a second data_s*.cpk in the same download/ — is imported as-is.
+        """
         path = os.path.expanduser(path or "")
         if not path or os.path.realpath(path) == os.path.realpath(self.cpk_path):
             return
@@ -2272,14 +2449,41 @@ class Editor(tk.Tk):
             self.status("unsaved changes — save or revert before switching database")
             return
         game_dir = os.path.dirname(os.path.dirname(path))     # <game>/download/data_sXXXX.cpk
-        if not settings.has_database(game_dir):
-            self.db_var.set(self._short_path(self.cpk_path))
-            self.status(f"no data_s*.cpk in {os.path.join(game_dir, 'download')}")
+        if settings.has_database(game_dir) and \
+                os.path.realpath(settings.database_path(game_dir)) == os.path.realpath(path):
+            self.cfg["game_dir"] = game_dir
+            self.cfg["database"] = ""                        # the install's own CPK wins again
+        else:
+            try:
+                validate_database(path)
+            except ValueError as exc:
+                self.db_var.set(self._short_path(self.cpk_path))
+                self.status(f"not a usable database: {os.path.basename(path)} — {exc}")
+                return
+            self.cfg["database"] = path                      # use this very file
+        self._reload_database()
+
+    def unmount_database(self):
+        """Drop an imported database: the install's own data CPK is the database again.
+
+        The button stays live even when nothing is imported — a dead grey button reads as a
+        broken one, so a click there says what the editor is using instead.
+        """
+        if self.dirty_tables:
+            self.status("unsaved changes — save or revert before switching database")
             return
-        self.cfg["game_dir"] = game_dir
+        if not settings.imported_database(self.cfg):
+            self.status(f"nothing imported — the install's own "
+                        f"{self._short_path(self.cpk_path)} is in use")
+            return
+        self.cfg["database"] = ""
+        self._reload_database()
+
+    def _reload_database(self):
+        """Point every path at the current database, load it, and re-fill the window."""
         settings.save(self.cfg)
         self.game_dir = settings.game_dir(self.cfg)
-        self.cpk_path = settings.database_path(self.game_dir)
+        self.cpk_path = settings.current_database(self.game_dir, self.cfg)
         self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
         self.pristine = pristine_cpk(self.cpk_path)
         self.edit_saves = settings.edit_save_files()
@@ -2297,7 +2501,8 @@ class Editor(tk.Tk):
         self.lbl_club.configure(text="—")
         self.populate(self.q.get())
         self.db_var.set(self._short_path(self.cpk_path))
-        self.status(f"database → {self.cpk_path} · {len(self.table.records):,} players")
+        source = " (imported)" if self.cfg["database"] else ""
+        self.status(f"database → {self.cpk_path}{source} · {len(self.table.records):,} players")
 
     def _filter_target_values(self, evt):
         """Type-ahead in the Move to club box: names, accents and nicknames all match."""
@@ -2530,6 +2735,11 @@ class Editor(tk.Tk):
         players that match the club stay listed, the club rows are one click away, and the
         counts on the tabs make the choice visible.
         """
+        if self.view_mode.get() in VINTAGE_MODES:
+            # a vintage tab owns the body: keep it shown and leave the PES 2021 list alone
+            self._show_vintage(self.view_mode.get())
+            return
+        self._hide_vintage()
         q = query.strip().lower()
         club_rows = []
         if q and not q.isdigit():
@@ -2591,17 +2801,62 @@ class Editor(tk.Tk):
 
     def set_view_mode(self, mode):
         self.view_mode.set(mode)
+        if mode in VINTAGE_MODES:
+            self._show_vintage(mode)
         self.populate(self.q.get())
+
+    def _show_vintage(self, mode):
+        """Swap the PES 2021 list/form body for a vintage's panel (built on first use)."""
+        spec = vintage_spec(mode)
+        host, attr = getattr(self, spec["host"]), spec["panel_attr"]
+        if getattr(self, attr, None) is None:
+            panel = spec["panel"](host, self)
+            setattr(self, attr, panel)
+            panel.pack(fill="both", expand=True)
+            self._apply_cursors(host)
+        for other in VINTAGE_MODES:                     # one vintage body at a time
+            if other != mode and getattr(self, vintage_spec(other)["host"]).winfo_manager():
+                getattr(self, vintage_spec(other)["host"]).pack_forget()
+        self._one_page_body.pack_forget()
+        # before=…: the body normally sits above the status bar, and re-packing it later would
+        # otherwise land it after the bar in the pack order
+        host.pack(fill="both", expand=True, padx=12, pady=(0, 8), before=self.statusbar.master)
+        self._update_mode_tabs()
+        panel = getattr(self, attr)
+        self.status(
+            f"{spec['label']} view: {len(panel.copies):,} players from {spec['file']} + the "
+            "mounted data packs — its Save writes those files, not the SP Football database"
+            if panel.copies else f"{spec['label']} view: no database imported yet")
+
+    def _hide_vintage(self):
+        """Put the PES 2021 body back when no vintage tab is showing."""
+        packed = [m for m in VINTAGE_MODES
+                  if getattr(self, vintage_spec(m)["host"]).winfo_manager()]
+        if not packed:
+            return
+        for mode in packed:
+            getattr(self, vintage_spec(mode)["host"]).pack_forget()
+        self._one_page_body.pack(fill="both", expand=True, padx=12, pady=(0, 8),
+                                 before=self.statusbar.master)
+        self.status(getattr(self, "_main_status", ""))
 
     def _update_mode_tabs(self):
         counts = getattr(self, "_mode_counts", {"players": 0, "clubs": 0})
-        for mode, lab in (("players", getattr(self, "tab_players", None)),
-                          ("clubs", getattr(self, "tab_clubs", None))):
+        entries = [("players", getattr(self, "tab_players", None),
+                    f"Players  {counts.get('players', 0):,}"),
+                   ("clubs", getattr(self, "tab_clubs", None),
+                    f"Clubs  {counts.get('clubs', 0):,}")]
+        for mode in VINTAGE_MODES:
+            spec = vintage_spec(mode)
+            panel = getattr(self, spec["panel_attr"], None)
+            entries.append((mode, getattr(self, spec["tab_attr"]),
+                            f"{spec['label']}  {len(panel.copies):,}"
+                            if panel is not None and panel.copies else spec["label"]))
+        for mode, lab, text in entries:
             if lab is None:
                 continue
             active = self.view_mode.get() == mode
-            lab.configure(text=f"{mode.title()}  {counts.get(mode, 0):,}",
-                          fg=C_ACCENT if active else C_DIM,
+            lab.configure(text=text, fg=C_ACCENT if active else C_DIM,
                           bg=C_SEL if active else C_PANEL2)
 
     def _render_players(self, rows, select_first=False):
@@ -2827,7 +3082,7 @@ class Editor(tk.Tk):
     def destroy(self):
         self._closing = True
         for attr in ("_portrait_job", "_radar_job", "_after", "_club_after",
-                     "_resize_repaint_job", "_one_page_job", "_fold_job"):
+                     "_resize_repaint_job", "_one_page_job", "_fold_job", "_career_job"):
             job = getattr(self, attr, None)
             if job:
                 setattr(self, attr, None)
@@ -2882,9 +3137,9 @@ class Editor(tk.Tk):
         natural = "/".join(nm for nm in pesdb.POS_NAMES if t.get(i, "Pos " + nm) >= 1) or "—"
         foot = "left foot" if t.get(i, "Stronger Foot") else "right foot"
         self.lbl_hero.configure(text=t.name(i) or "(no name)")
-        self.lbl_sub.configure(text=f"ID {pid}   ·   {club}   ·   "
-                                   f"{pesdb.country_name(t.get(i, 'Nationality')) or '—'}   ·   "
-                                   f"{natural}   ·   {foot}")
+        self.lbl_sub.configure(text=f"ID {pid} · {club} · "
+                                   f"{pesdb.country_name(t.get(i, 'Nationality')) or '—'} · "
+                                   f"{natural} · {foot}")
         rating = self.ovr(i)
         self.ovr_big.configure(text=str(rating), fg=self._ovr_colour(rating))
         style_i = t.get(i, "Playing Style")
@@ -3280,16 +3535,28 @@ class Editor(tk.Tk):
     def drag_bar(self, label, evt):
         """Click or drag an ability bar to set it: left edge 40, right edge 99."""
         bar = self.vars[label + "::bar"]
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         val = bar_value(evt.x, width)
         if str(val) != self.vars[label].get():
             self.vars[label].set(str(val))
             self.apply_field(label)
 
+    def _redraw_field_bar(self, label):
+        """A canvas that was just mapped (or resized): redraw the bar at its real width."""
+        bar = self.vars.get(label + "::bar")
+        if bar is None or self.index is None:
+            return
+        try:
+            val = int(self.vars[label].get())
+        except (TypeError, ValueError):
+            return                                   # no player loaded yet; load_form will draw
+        entry = self._changes.get(("Player", self.table.pid(self.index), label))
+        self._draw_bar(bar, val, base=entry["base"] if entry is not None else None)
+
     def _draw_bar(self, bar, val, base=None):
         """Redraw one ability bar: track, tiered fill, and a ghost tick at the value it started with."""
         bar.delete("all")
-        width = bar.winfo_width() or int(bar.cget("width")) or 80
+        width = bar_width(bar)
         height = int(bar.cget("height"))
         bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
         frac = max(0.0, min(1.0, (val - 40) / 59))
@@ -3904,7 +4171,9 @@ class Editor(tk.Tk):
         def commit():
             gd = os.path.expanduser(game.get().strip())
             pid = self.table.pid(self.index) if self.index is not None else None
-            cpk = settings.database_path(gd)
+            if gd != self.cfg["game_dir"]:
+                self.cfg["database"] = ""             # a new folder means that install's database
+            cpk = settings.current_database(gd, self.cfg)
             if not os.path.exists(cpk):
                 err.configure(text=f"no download/data_s*.cpk in {gd}")
                 return
@@ -3922,7 +4191,7 @@ class Editor(tk.Tk):
             settings.save(self.cfg)
             self.game_dir = settings.game_dir(self.cfg)
             self.backups_dir = settings.backups_dir(self.cfg, STATE_DIR)
-            self.cpk_path = settings.database_path(self.game_dir)
+            self.cpk_path = settings.current_database(self.game_dir, self.cfg)
             dlg.destroy()
             self.pristine = pristine_cpk(self.cpk_path)
             self.edit_saves = settings.edit_save_files()
@@ -3968,6 +4237,607 @@ class Editor(tk.Tk):
         """
         colours = {"info": C_DIM, "ok": C_GREEN, "warn": C_WARN, "error": C_MAGENTA}
         self.statusbar.configure(text=msg, fg=colours.get(level, C_DIM))
+
+
+class VintagePanel(tk.Frame):
+    """A pre-2021 vintage's player tables — the body of its tab and of its popup window.
+
+    The main window speaks PES 2021 (312-byte records, ~97 fields); the older releases store
+    fewer abilities, the primary position, three name slots, a bio block (height/weight/age/
+    foot/weak foot/form/injury/playing style/nationality) and one bit per skill / COM style,
+    so each vintage gets its own panel body. Everything here is driven by the subclass's
+    module: MOD is the table module (its ABILITIES / POSITION_NAMES / SKILLS / COM_STYLES /
+    FIELD_BY_LABEL names drive the widgets), LABEL the tab title, ENV the folder override,
+    CFG_KEY the remembered folder and GAME_FILE the pack that identifies an install.
+
+    An applied edit lands in EVERY copy of the player — base Player.bin and each numbered
+    update slot, in the base pack and in the mounted data packs — because the slots override
+    by id and a base-only edit can be shadowed. Save writes through MOD.Cpk.patch() and keeps
+    the same region backups the CLI uses (state/backups/<module>, restorable byte for byte).
+    """
+
+    MOD = pes2015
+    LABEL = "PES 2015"
+    ENV = "PES2015_DIR"
+    CFG_KEY = "pes2015_dir"
+    GAME_FILE = os.path.join("Data", "dt10.cpk")
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C_BG)
+        self.app = app
+        self.ABILITIES = tuple(self.MOD.ABILITIES)   # the game's own field order
+        self.dirty = set()                         # pids applied to memory, not yet written
+        self.applied = {}                          # pid -> {label: value}, for the save verify
+        self.copies = {}                           # pid -> [(cpk, stem, table, row), ...]
+        self.display = {}                          # pid -> the copy the form shows
+        self.paths = []
+        self.pid = None
+        self.dir = self._game_dir()
+        self._build()
+        app._apply_cursors(self)                   # no explicit cursor means no pointer at all
+        if self.dir:
+            self.load()
+        else:
+            self.note.configure(text=f"No {self.LABEL} database yet — press Import database…")
+
+    # ---- install
+    def _game_dir(self):
+        """PES2015_DIR, then the remembered folder, then the usual wine/Steam places."""
+        for cand in (os.environ.get(self.ENV), self.app.cfg.get(self.CFG_KEY)):
+            cand = os.path.expanduser(cand or "")
+            if cand and os.path.isfile(os.path.join(cand, self.GAME_FILE)):
+                return cand
+        return self.MOD.find_game_dir()
+
+    def choose_dir(self):
+        folder = filedialog.askdirectory(
+            title=f"Select the {self.LABEL} folder (the one with {self.GAME_FILE})", parent=self)
+        if not folder:
+            return
+        folder = os.path.expanduser(folder)
+        if not os.path.isfile(os.path.join(folder, self.GAME_FILE)):
+            self.note.configure(text=f"no {self.GAME_FILE} inside {folder}")
+            return
+        self.app.cfg[self.CFG_KEY] = folder
+        settings.save(self.app.cfg)
+        self.dir = folder
+        self.load()
+
+    def unmount_dir(self):
+        """Forget an imported folder: the environment or auto-detection provides the install.
+
+        Like the main window's Unmount, the button stays live when nothing was imported and
+        the note says what the panel is using instead.
+        """
+        if not self.app.cfg.get(self.CFG_KEY):
+            self.note.configure(text="nothing imported — already using "
+                                     + (self.dir or "nothing found"))
+            return
+        self.app.cfg[self.CFG_KEY] = ""
+        settings.save(self.app.cfg)
+        self.dir = self._game_dir()                # the fallback, not the folder we just dropped
+        self.load()
+
+    def _backup_dir(self):
+        return settings.backups_dir(self.app.cfg, STATE_DIR)
+
+    # ---- ui
+    def _build(self):
+        ui = self.app.ui
+        top = tk.Frame(self, bg=C_BG)
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(top, text="Search", bg=C_BG, fg=C_DIM, font=self.app.F_LABEL).pack(side="left")
+        self.q = tk.StringVar()
+        ent = ttk.Entry(top, textvariable=self.q, font=self.app.F_VALUE)
+        ent.pack(side="left", fill="x", expand=True, padx=8)
+        ent.bind("<KeyRelease>", lambda _e: self.fill())
+        self.count = tk.Label(top, text="", bg=C_BG, fg=C_HINT, font=self.app.F_TINY)
+        self.count.pack(side="left")
+        ttk.Button(top, text="Import database…", style="Ghost.TButton",
+                   command=self.choose_dir).pack(side="left", padx=(8, 0))
+        self.btn_unmount = ttk.Button(top, text="Unmount", style="Ghost.TButton",
+                                      command=self.unmount_dir)
+        self.btn_unmount.pack(side="left", padx=(4, 0))
+        ttk.Button(top, text="Reload", style="Ghost.TButton",
+                   command=self.revert).pack(side="left", padx=(4, 0))
+
+        mid = tk.Frame(self, bg=C_BG)
+        mid.pack(fill="both", expand=True, padx=14)
+        # narrow list on the left, the form beside it — the proportions the PES 2021 view
+        # uses, instead of a list that swallowed the whole body
+        left = tk.Frame(mid, bg=C_BG)
+        left.pack(side="left", fill="both")
+        self.tree = ttk.Treeview(
+            left, columns=("id", "name", "club", "pos", "spd", "bc", "fin", "sta"),
+            show="headings", selectmode="browse")
+        for col, width, text, anchor in (("id", 46, "ID", "e"), ("name", 110, "Name", "w"),
+                                         ("club", 96, "Club", "w"),
+                                         ("pos", 38, "Pos", "w"), ("spd", 42, "SPD", "e"),
+                                         ("bc", 42, "BC", "e"), ("fin", 42, "FIN", "e"),
+                                         ("sta", 42, "STA", "e")):
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=int(width * ui), anchor=anchor,
+                             stretch=(col == "name"))
+        self.tree.tag_configure("edited", foreground=C_ACCENT)
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.scroll = SlimScroll(left, self.tree.yview)    # overlays the edge, like the main list
+        self.tree.configure(yscrollcommand=self.scroll.set)
+        self.tree.bind("<<TreeviewSelect>>", self.pick)
+        self.tree.bind("<Return>", lambda _e: self.pick())
+
+        col_a = tk.Frame(mid, bg=C_BG)
+        col_a.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        col_b = tk.Frame(mid, bg=C_BG)
+        col_b.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        # scroll only ever appears if the window is squeezed below the form's design size
+        col_a_body = self.app._scroll_pane(col_a)
+        col_b_body = self.app._scroll_pane(col_b)
+
+        # the player card the PES 2021 view opens with: hero name, meta line, chips, names
+        card = self.app._section(col_a_body, "Player")
+        self.who = tk.Label(card, text="no player selected", bg=C_BG, fg=C_FG, anchor="w",
+                            font=(self.app.FONT, 16, "bold"))
+        self.who.pack(fill="x", pady=(0, 2))
+        self.copies_lbl = tk.Label(card, text="", bg=C_BG, fg=C_HINT, anchor="w",
+                                   font=self.app.F_SMALL)
+        self.copies_lbl.pack(fill="x", pady=(0, 4))
+        chip_row = tk.Frame(card, bg=C_BG)
+        chip_row.pack(fill="x", pady=(0, 6))
+        self.chips = {}
+        for name in ("Height", "Weight", "Age", "Foot"):
+            chip = Pill(chip_row, "\u2014", self.app._chip_font)
+            chip.pack(side="left", padx=(0, 6))
+            self.chips[name] = chip
+        nrow = tk.Frame(card, bg=C_BG)
+        nrow.pack(fill="x")
+        self.name_vars = {}
+        for n, label in enumerate(("Name", "Shirt Name", "Japanese Name")):
+            tk.Label(nrow, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=15,
+                     font=self.app.F_LABEL).grid(row=n, column=0, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.name_vars[label] = v
+            ttk.Entry(nrow, textvariable=v, width=30,
+                      font=self.app.F_VALUE).grid(row=n, column=1, sticky="we",
+                                                  padx=(4, 0), pady=1)
+        nrow.columnconfigure(1, weight=1)
+
+        grid = self.app._section(col_a_body, "Abilities", hint="40 \u2013 99")
+        tk.Label(grid, text="Position", bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                 font=self.app.F_LABEL).grid(row=0, column=0, sticky="w", pady=2)
+        self.pos_var = tk.StringVar()
+        pos = ttk.Combobox(grid, textvariable=self.pos_var, values=list(self.MOD.POSITION_NAMES),
+                           state="readonly", width=8, font=self.app.F_VALUE)
+        pos.grid(row=0, column=1, columnspan=2, sticky="w", pady=2)
+        self.stat_vars = {}
+        self._ab_bars = {}
+        for n, label in enumerate(self.ABILITIES):
+            row, col = n // 2 + 1, (n % 2) * 3
+            tk.Label(grid, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                     font=self.app.F_LABEL).grid(row=row, column=col, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.stat_vars[label] = v
+            tk.Spinbox(grid, textvariable=v, from_=40, to=99, width=3,
+                       font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
+                                                   padx=(0, 6), pady=1)
+            bar = tk.Canvas(grid, width=44, height=int(18 * ui), bg=C_BAR,
+                            highlightthickness=1, highlightbackground=C_LINE,
+                            cursor="sb_h_double_arrow")
+            bar.grid(row=row, column=col + 2, sticky="we", padx=(0, 10), pady=1)
+            bar.bind("<Button-1>", lambda e, l=label: self._drag_ab_bar(l, e))
+            bar.bind("<B1-Motion>", lambda e, l=label: self._drag_ab_bar(l, e))
+            bar.bind("<Configure>", lambda _e, l=label: self._sync_ab_bar(l))
+            self._ab_bars[label] = bar
+            v.trace_add("write", lambda *a, l=label: self._sync_ab_bar(l))
+        for c in range(2):
+            grid.columnconfigure(c * 3 + 2, weight=1)
+
+        bio = self.app._section(col_b_body, "Bio")
+        self.bio_vars = {}
+        bio_rows = ("Height", "Weight", "Age", "Nationality", "Playing Style", "Form",
+                    "Weak Foot Usage", "Weak Foot Accuracy", "Injury Resistance")
+        for n, label in enumerate(bio_rows):
+            row, col = n // 2, (n % 2) * 2
+            tk.Label(bio, text=label, bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                     font=self.app.F_LABEL).grid(row=row, column=col, sticky="w", pady=1)
+            v = tk.StringVar()
+            self.bio_vars[label] = v
+            tk.Spinbox(bio, textvariable=v, from_=0, to=999, width=4,
+                       font=self.app.F_VALUE).grid(row=row, column=col + 1, sticky="w",
+                                                   padx=(0, 16), pady=1)
+        tk.Label(bio, text="Foot", bg=C_BG, fg=C_DIM, anchor="w", width=18,
+                 font=self.app.F_LABEL).grid(row=4, column=2, sticky="w", pady=1)
+        self.foot_var = tk.StringVar()
+        ttk.Combobox(bio, textvariable=self.foot_var, values=("Right", "Left"),
+                     state="readonly", width=6, font=self.app.F_VALUE).grid(
+                         row=4, column=3, sticky="w", pady=1)
+
+        # the flags as the same pill chips the PES 2021 skills use
+        sk = self.app._section(col_b_body, "Skills & COM styles", hint="click to toggle")
+        self.flag_vars = {}
+        grid_b = tk.Frame(sk, bg=C_BG)
+        grid_b.pack(fill="x")
+        for n, name in enumerate(self.MOD.SKILLS):
+            v = tk.BooleanVar()
+            self.flag_vars[("Skill", name)] = v
+            CheckPill(grid_b, name, self.app._chip_font, v).grid(
+                row=n // 3, column=n % 3, sticky="w", padx=(0, 8), pady=2)
+        com_row = (len(self.MOD.SKILLS) + 2) // 3
+        tk.Label(grid_b, text="COM styles", bg=C_BG, fg=C_HINT, anchor="w",
+                 font=self.app.F_TINY).grid(row=com_row, column=0, columnspan=3, sticky="w",
+                                            pady=(6, 0))
+        for n, name in enumerate(self.MOD.COM_STYLES):
+            v = tk.BooleanVar()
+            self.flag_vars[("Style", name)] = v
+            CheckPill(grid_b, name, self.app._chip_font, v).grid(
+                row=com_row + 1 + n // 3, column=n % 3, sticky="w", padx=(0, 8), pady=2)
+
+        self.note = tk.Label(self, text="", bg=C_BG, fg=C_ACCENT, anchor="w",
+                             font=self.app.F_LABEL)
+        self.note.pack(fill="x", padx=14, pady=(6, 0))
+        buttons = tk.Frame(self, bg=C_BG)
+        buttons.pack(fill="x", padx=14, pady=10)
+        ttk.Button(buttons, text="Revert", style="Ghost.TButton",
+                   command=self.revert).pack(side="left")
+        ttk.Button(buttons, text="Apply to player", style="Ghost.TButton",
+                   command=self.apply).pack(side="right")
+        ttk.Button(buttons, text="Save to game", style="Save.TButton",
+                   command=self.save).pack(side="right", padx=(0, 8))
+
+    # ---- data
+    def load(self):
+        """(Re)read every table of the install and rebuild the list."""
+        self.copies.clear()
+        self.display.clear()
+        self.dirty.clear()
+        self.applied.clear()
+        self.pid = None
+        self.paths = self.MOD.database_cpks(self.dir) if self.dir else []
+        self.team_names = {}                       # roster id -> team name
+        self.club_of = {}                          # pid -> (club team id, squad number)
+        for path in self.paths:
+            db = self.MOD.Cpk(path)
+            for stem in self.MOD.TEAM_STEMS:
+                if not db.entry(stem):
+                    continue
+                teams = self.MOD.TeamTable(*db.read_raw(stem))
+                for i in range(len(teams)):
+                    if teams.name(i):
+                        self.team_names.setdefault(teams.id(i), teams.name(i))
+            for stem in self.MOD.ASSIGN_STEMS:
+                if not db.entry(stem):
+                    continue
+                assign = self.MOD.AssignmentTable(*db.read_raw(stem))
+                for i in range(len(assign)):
+                    if assign.team(i) >= 100:      # the club row; national rows sit below 100
+                        self.club_of[assign.player(i)] = (assign.team(i), assign.number(i))
+            for stem in self.MOD.PLAYER_STEMS:
+                if not db.entry(stem):
+                    continue
+                table = db.read_table(stem)
+                for i in range(len(table)):
+                    self.copies.setdefault(table.pid(i), []).append((path, stem, table, i))
+        for pid, copies in self.copies.items():     # show the newest update slot, else base
+            self.display[pid] = max(
+                copies, key=lambda c: (self.paths.index(c[0]), self.MOD.PLAYER_STEMS.index(c[1])))
+        self.fill()
+        if self.dir:
+            src = ", ".join(os.path.basename(p) for p in self.paths)
+            self.who.configure(text=f"{len(self.copies):,} players · {src}")
+        else:
+            self.note.configure(text="No PES 2015 install found — press Choose folder…")
+
+    def _club_text(self, pid):
+        club = self.club_of.get(pid)
+        if not club:
+            return ""
+        return self.team_names.get(club[0], str(club[0]))
+
+    def _sync_ab_bar(self, label):
+        """Repaint one ability bar — the same palette and 40-99 scale as the PES 2021 form."""
+        bar = self._ab_bars.get(label)
+        if bar is None:
+            return
+        try:
+            val = int(self.stat_vars[label].get())
+        except (TypeError, ValueError):
+            val = 40
+        bar.delete("all")
+        width = bar_width(bar)
+        height = int(bar.cget("height"))
+        bar.create_rectangle(0, 0, width, height, fill=C_BAR, width=0)
+        frac = max(0.0, min(1.0, (val - 40) / 59))
+        bar.create_rectangle(0, 0, max(1, int(width * frac)), height,
+                             fill=C_ACCENT if val >= 80 else
+                             (C_ACCENT_LO if val >= 65 else C_BAR_LOW), width=0)
+
+    def _drag_ab_bar(self, label, evt):
+        """Click or drag an ability bar to set it: left edge 40, right edge 99."""
+        bar = self._ab_bars[label]
+        width = bar_width(bar)
+        val = bar_value(evt.x, width)
+        if str(val) != self.stat_vars[label].get():
+            self.stat_vars[label].set(str(val))     # the var's trace repaints the bar
+
+    def fill(self):
+        low = norm(self.q.get().strip())
+        self.tree.delete(*self.tree.get_children())
+        shown = 0
+        for pid in sorted(self.copies):
+            _path, _stem, table, i = self.display[pid]
+            if low and low not in norm(table.name(i)) and low not in norm(table.shirt(i)) \
+                    and low not in str(pid):
+                continue
+            pos = table.get(i, "Position")
+            self.tree.insert("", "end", iid=str(pid), values=(
+                pid, table.name(i), self._club_text(pid),
+                self.MOD.POSITION_NAMES[pos] if pos < len(self.MOD.POSITION_NAMES) else "?",
+                table.get(i, "Speed"), table.get(i, "Ball Control"),
+                table.get(i, "Finishing"), table.get(i, "Stamina")),
+                tags=("edited",) if pid in self.dirty else ())
+            shown += 1
+            if shown >= 800:                       # 12k rows are a scrollbar, not a list
+                break
+        total = len(self.copies)
+        self.count.configure(text=f"{shown:,} of {total:,} players"
+                             + (" — type to narrow" if shown < total else ""))
+
+    def pick(self, _e=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        self.pid = int(sel[0])
+        _path, _stem, table, i = self.display[self.pid]
+        copies = self.copies[self.pid]
+        club = self.club_of.get(self.pid)
+        club_text = ""
+        if club:
+            club_text = f"  ·  {self.team_names.get(club[0], club[0])} (#{club[1]})"
+        self.who.configure(text=table.name(i) or f"id {self.pid}")
+        self.copies_lbl.configure(
+            text=f"id {self.pid}{club_text}  \u00b7  {len(copies)} "
+                 f"cop{'ies' if len(copies) > 1 else 'y'}: "
+                 + ", ".join(f"{os.path.basename(p)}:{s}" for p, s, _t, _r in copies))
+        for name in ("Height", "Weight", "Age"):
+            self.chips[name].set_text(f"{name} {table.get(i, name)}")
+        self.chips["Foot"].set_text("Left" if table.get(i, "Foot") else "Right")
+        pos = table.get(i, "Position")
+        self.pos_var.set(self.MOD.POSITION_NAMES[pos]
+                         if pos < len(self.MOD.POSITION_NAMES) else self.MOD.POSITION_NAMES[0])
+        for label, v in self.stat_vars.items():
+            v.set(str(table.get(i, label)))
+        for label, v in self.bio_vars.items():
+            v.set(str(table.get(i, label)))
+        self.foot_var.set("Left" if table.get(i, "Foot") else "Right")
+        for (family, name), v in self.flag_vars.items():
+            v.set(bool(table.get(i, f"{family}: {name}")))
+        self.name_vars["Name"].set(table.name(i))
+        self.name_vars["Shirt Name"].set(table.shirt(i))
+        self.name_vars["Japanese Name"].set(table.japanese(i))
+
+    def refresh_row(self, pid):
+        if not self.tree.exists(str(pid)):
+            return
+        _path, _stem, table, i = self.display[pid]
+        pos = table.get(i, "Position")
+        self.tree.item(str(pid), values=(
+            pid, table.name(i), self._club_text(pid),
+            self.MOD.POSITION_NAMES[pos] if pos < len(self.MOD.POSITION_NAMES) else "?",
+            table.get(i, "Speed"), table.get(i, "Ball Control"),
+            table.get(i, "Finishing"), table.get(i, "Stamina")),
+            tags=("edited",) if pid in self.dirty else ())
+
+    @staticmethod
+    def _read_field(table, i, label):
+        if label == "Name":
+            return table.name(i)
+        if label == "Shirt Name":
+            return table.shirt(i)
+        if label == "Japanese Name":
+            return table.japanese(i)
+        return table.get(i, label)
+
+    def apply(self):
+        """Write the form into every in-memory copy of the selected player."""
+        if self.pid is None:
+            self.note.configure(text="pick a player in the list first")
+            return
+        wanted = {}
+        for label, v in self.stat_vars.items():
+            try:
+                wanted[label] = max(40, min(99, int(v.get())))
+            except ValueError:
+                self.note.configure(text=f"{label} needs a number (40-99)")
+                return
+        try:
+            wanted["Position"] = self.MOD.POSITION_NAMES.index(self.pos_var.get())
+        except ValueError:
+            self.note.configure(text="pick a position from the list")
+            return
+        for label, v in self.bio_vars.items():
+            try:
+                value = int(v.get())
+            except ValueError:
+                self.note.configure(text=f"{label} needs a number")
+                return
+            bit, width, add = self.MOD.FIELD_BY_LABEL[label]
+            wanted[label] = max(add, min(add + (1 << width) - 1, value))
+        wanted["Foot"] = 1 if self.foot_var.get() == "Left" else 0
+        for (family, name), v in self.flag_vars.items():
+            wanted[f"{family}: {name}"] = 1 if v.get() else 0
+        for label, v in self.name_vars.items():
+            wanted[label] = v.get().strip()
+        copies = self.copies[self.pid]
+        touched = 0
+        for _path, _stem, table, i in copies:
+            changed = False
+            for label, value in wanted.items():
+                if label == "Name":
+                    if table.name(i) != value:
+                        table.set_name(i, full=value)
+                        changed = True
+                elif label == "Shirt Name":
+                    if table.shirt(i) != value:
+                        table.set_name(i, shirt=value)
+                        changed = True
+                elif label == "Japanese Name":
+                    if table.japanese(i) != value:
+                        table.set_name(i, japanese=value)
+                        changed = True
+                elif self._read_field(table, i, label) != value:
+                    table.set(i, label, value)
+                    changed = True
+            touched += changed
+        if touched:
+            self.applied[self.pid] = dict(wanted)
+            self.dirty.add(self.pid)
+            self.refresh_row(self.pid)
+            self.note.configure(
+                text=f"applied to {len(copies)} copy{'ies' if len(copies) > 1 else ''} in "
+                     f"memory — Save to write · {len(self.dirty)} player(s) pending")
+        else:
+            self.note.configure(text="nothing changed")
+
+    def save(self):
+        """Patch every touched table into its CPK, then re-read and verify the edits."""
+        if not self.dir:
+            self.note.configure(text="no PES 2015 install — press Choose folder…")
+            return
+        if not self.dirty:
+            self.note.configure(text="nothing to save — edit a player first")
+            return
+        targets = {}
+        for pid in self.dirty:
+            for path, stem, table, _i in self.copies[pid]:
+                targets[(path, stem)] = table
+        backup_dir = self._backup_dir()
+        if self.app.cfg.get("confirm_save", True):
+            listing = "\n".join(f"  {os.path.basename(p)} · {s}.bin" for p, s in sorted(targets))
+            if not messagebox.askyesno(
+                    "Write to PES 2015",
+                    f"Write {len(self.dirty):,} changed player(s) to:\n\n{listing}\n\n"
+                    f"Region backups go to {backup_dir}/pes2015 — byte-exact restorable.\n"
+                    "Close PES 2015 while this writes.",
+                    parent=self):
+                return
+        dbs = {}
+        for (path, stem), table in targets.items():
+            if path not in dbs:
+                dbs[path] = self.MOD.Cpk(path)
+            dbs[path].patch(stem, table.to_payload(), backup_dir=backup_dir)
+        applied = dict(self.applied)
+        self.load()                               # re-read from disk and verify
+        bad = []
+        for pid, wanted in applied.items():
+            for _path, _stem, table, i in self.copies.get(pid, []):
+                for label, value in wanted.items():
+                    got = self._read_field(table, i, label)
+                    if got != value:
+                        bad.append(f"id {pid} {label}: {got!r} != {value!r}")
+        tables = ", ".join(f"{os.path.basename(p)}:{s}.bin" for p, s in sorted(targets))
+        if bad:
+            self.note.configure(text=f"wrote {tables} — VERIFY FAILED: " + "; ".join(bad[:3]))
+        else:
+            self.note.configure(
+                text=f"wrote {len(applied):,} player(s) to {tables} — re-read ok; "
+                     f"start PES 2015 to see them")
+
+    def revert(self):
+        """Throw the in-memory edits away and reload everything from disk."""
+        if self.dirty and self.app.cfg.get("confirm_save", True) and not messagebox.askyesno(
+                "Discard edits",
+                f"Discard {len(self.dirty):,} changed player(s) that were not saved?",
+                parent=self):
+            return
+        self.load()
+        self.note.configure(text="reloaded from disk — unsaved edits discarded")
+
+    def confirm_close(self):
+        """For the popup shell: ask before dropping applied-but-unsaved edits."""
+        if self.dirty and self.app.cfg.get("confirm_save", True) and not messagebox.askyesno(
+                "Close PES 2015 editor",
+                f"{len(self.dirty):,} changed player(s) were applied but not saved.\n"
+                "Close and lose them?", parent=self):
+            return False
+        return True
+
+
+class Pes2015Panel(VintagePanel):
+    """PES 2015: the base class's own defaults (180-byte records, 19 abilities)."""
+
+
+class Pes2019Panel(VintagePanel):
+    """PES 2019: 188-byte records, 23 abilities, the 15 playability flags and 48 skill bits.
+
+    Its own module carries the map (pes2019.py, recovered from the Ejogc editor's PES 2019
+    schema and checked field for field against the shipped tables and pesdb.net's cards), and
+    its own install — a CPY disc under Wine, unless PES2019_DIR or the remembered folder says
+    otherwise. Only the identifiers change; the widgets come from the base class.
+    """
+
+    MOD = pes2019
+    LABEL = "PES 2019"
+    ENV = "PES2019_DIR"
+    CFG_KEY = "pes2019_dir"
+    GAME_FILE = os.path.join("Data", "dt10_x64.cpk")
+
+
+def vintage_spec(mode):
+    """What the tab machinery needs for one vintage, resolved when it runs.
+
+    The panel and window classes are defined below Editor, so this cannot be a class table.
+    """
+    if mode == "pes2019":
+        return {"label": "PES 2019", "host": "_pes2019_host", "panel_attr": "_pes2019_panel",
+                "tab_attr": "tab_pes2019", "panel": Pes2019Panel, "window": Pes2019Window,
+                "file": "Data/dt10_x64.cpk", "module": pes2019}
+    return {"label": "PES 2015", "host": "_pes2015_host", "panel_attr": "_pes2015_panel",
+            "tab_attr": "tab_pes2015", "panel": Pes2015Panel, "window": Pes2015Window,
+            "file": "Data/dt10.cpk", "module": pes2015}
+
+
+VINTAGE_MODES = ("pes2015", "pes2019")
+
+
+class VintageWindow(tk.Toplevel):
+    """The popup around a VintagePanel (Menu → "<vintage> database…").
+
+    The same panel also lives in the main window's own tab; this shell adds the title bar and
+    asks before discarding applied edits. The panel class supplies the title.
+    """
+
+    PANEL = Pes2015Panel
+
+    def __init__(self, app):
+        super().__init__(app)
+        ui = app.ui
+        self.title(f"{self.PANEL.LABEL} — player tables")
+        self.geometry(f"{int(1080 * ui)}x{int(890 * ui)}")
+        self.minsize(int(640 * ui), int(480 * ui))
+        self.transient(app)
+        self.panel = self.PANEL(self, app)
+        self.panel.pack(fill="both", expand=True)
+        app._apply_cursors(self)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def __getattr__(self, name):
+        # callers (and the tests) drive the window through the panel's API
+        if name == "panel":
+            raise AttributeError(name)
+        return getattr(self.panel, name)
+
+    def on_close(self):
+        if self.panel.confirm_close():
+            self.destroy()
+
+
+class Pes2015Window(VintageWindow):
+    """PES 2015's popup shell."""
+
+
+class Pes2019Window(VintageWindow):
+    """PES 2019's popup shell."""
+
+    PANEL = Pes2019Panel
 
 
 class CoachWindow(tk.Toplevel):
@@ -4368,16 +5238,16 @@ def check():
     folder = settings.game_dir(cfg)
     print("config      :", settings.CONFIG_PATH)
     print("game folder :", folder or "(not found)")
-    if folder and settings.has_database(folder):
-        cpk = settings.database_path(folder)
+    if settings.has_current_database(folder, cfg):
+        cpk = settings.current_database(folder, cfg)
         print("database    :", cpk, "%.1f MB" % (os.path.getsize(cpk) / 1e6))
     else:
-        print("database    : NOT FOUND — set the game folder in Settings")
+        print("database    : NOT FOUND — set the game folder in Settings, or import a CPK")
     print("countries   :", f"{len(pesdb.COUNTRIES)} names" if pesdb.COUNTRIES
           else "MISSING data/countries.json — nationality will be blank")
     saves = settings.edit_save_files()
     print("edit saves  :", ", ".join(saves) if saves else "none (database edits are live)")
-    return 0 if folder and settings.has_database(folder) else 1
+    return 0 if settings.has_current_database(folder, cfg) else 1
 
 
 if __name__ == "__main__":

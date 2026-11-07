@@ -26,16 +26,25 @@ def decrypt_utf(buf, m=0x0000655F, t=0x00004115):
     return bytes(out)
 
 
+def encrypt_utf(buf, m=0x0000655F, t=0x00004115):
+    """A writable table's bytes, obfuscated for storage — the cipher is its own inverse."""
+    return decrypt_utf(buf, m, t)
+
+
 class Utf:
     def __init__(self, data, base=0):
         self.d = data
         self.base = base
         self.encrypted = False
         self.raw_base = base
+        self.raw = None
         if data[base:base + 4] == MAGIC_ENC:
-            # encrypted table: decrypt the header first to learn the size, then the table
+            # encrypted table: decrypt the header first to learn the size, then the table.
+            # The decrypted copy is a bytearray so callers can patch rows; cipher() turns it
+            # back into the bytes that belong in the file.
             size = struct.unpack_from('>I', decrypt_utf(data[base:base + 8]), 4)[0]
-            data = decrypt_utf(data[base:base + size])
+            self.raw = bytes(data[base:base + size])
+            data = bytearray(decrypt_utf(self.raw))
             self.d = data
             self.base = base = 0
             self.encrypted = True
@@ -85,6 +94,10 @@ class Utf:
 
     def string(self, off):
         return self.strings.get(off, '')
+
+    def cipher(self):
+        """The table as it belongs in the file: re-encrypted when the table was encrypted."""
+        return encrypt_utf(self.d) if self.encrypted else bytes(self.d)
 
     def row_cells(self, index):
         """{column: (file offset, type)} for the per-row values of row `index`."""

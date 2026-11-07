@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Build the single-file executable: dist/pesforge-gtk4 (a zipapp with a python3 shebang).
+set -eu
+cd "$(dirname "$0")/.."
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+for m in editor_gtk pes5 pes2015 pes2019 pes2021 pesdb pesdb_maps cpk settings theme; do
+    cp "$m.py" "$stage/"
+done
+# the app package, stylesheet included (`__pycache__` stays out of the archive)
+mkdir -p "$stage/pesforge_gtk"
+cp pesforge_gtk/*.py pesforge_gtk/*.css "$stage/pesforge_gtk/"
+cp -r data "$stage/data"
+cat > "$stage/__main__.py" <<'PY'
+import editor_gtk
+raise SystemExit(editor_gtk.main())
+PY
+mkdir -p dist
+/usr/bin/python3 -m zipapp "$stage" -o dist/pesforge-gtk4 -p "/usr/bin/python3"
+chmod +x dist/pesforge-gtk4
+echo "built: $(ls -l dist/pesforge-gtk4 | awk '{print $5" bytes"}')"

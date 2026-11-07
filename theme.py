@@ -38,6 +38,38 @@ BASE = {
     },
 }
 
+# The same palettes for a light desktop: amber's are hand-tuned, and every other palette takes
+# those surfaces and tints them toward its own hue (see light_base).
+LIGHT = {
+    "amber": {
+        "bg": "#f6f3ee", "panel": "#fffefc", "panel2": "#ece5da", "fg": "#2b2117",
+        "dim": "#6d6152", "accent": "#b0741b", "green": "#2f8f4e", "magenta": "#a03a72",
+        "warn": "#b23b2e", "line": "#dbd1c3",
+    },
+}
+
+LIGHT_TINT = 0.13        # how far a light palette's surfaces lean toward its own hue
+
+
+def light_base(name):
+    """A light base for any palette: the light surfaces, tinted with that palette's own hue.
+
+    The first version handed every palette amber's warm surfaces and only swapped the accent, so
+    choosing Ice on a light desktop painted an amber window with blue buttons — the setting looked
+    like it had not applied (reported with a screenshot of the palette row). Each palette's
+    surfaces and rules are blended a few percent toward its own accent instead: enough to read as
+    cool, green or rose at a glance, not enough to move the contrast floors the tokens are built
+    to hold. The accent is still darkened until it reads on them.
+    """
+    if name in LIGHT:
+        return LIGHT[name]
+    hue = BASE.get(name, BASE[DEFAULT])["accent"]
+    base = dict(LIGHT[DEFAULT])
+    for token in ("bg", "panel", "panel2", "line", "dim"):
+        base[token] = mix(base[token], hue, LIGHT_TINT)
+    base["accent"] = away(hue, base["panel2"], 4.5)
+    return base
+
 # Settings offers these in this order; the first is the default.
 CHOICES = (("amber", "Amber"), ("crimson", "Crimson"), ("ice", "Ice"), ("pitch", "Pitch"))
 DEFAULT = CHOICES[0][0]
@@ -45,9 +77,11 @@ DEFAULT = CHOICES[0][0]
 # tokens editor.py binds: contrast floor each one is blended to hold, against `bg` unless
 # the tuple names another token as the ground.
 FLOORS = {
-    "hint": 4.5,          # shortcut hints, secondary captions
+    "hint": 4.5,          # shortcut hints, secondary captions (darkest ground: panel, not bg)
     "bar_low": 3.0,       # a low ability fill must still read as a fill (on panel2)
     "ghost": 3.0,         # the pre-edit tick on an ability bar
+    "line_strong": 3.0,   # a control's own boundary (WCAG 1.4.11), unlike a decorative rule
+    "accent_text": 4.5,   # accent used as text rather than as a fill
 }
 
 
@@ -120,9 +154,27 @@ def away(fg, ground, ratio):
     return out
 
 
-def tokens(name=DEFAULT):
-    """Flat token dict for one palette. Keys are the C_* names, lowercased."""
-    base = BASE.get(name) or BASE[DEFAULT]
+def ink_on(accent):
+    """Dark-or-light ink that reads on an accent fill, whichever pole is further from it.
+
+    A mid-tone accent (light ice at #306e84) is too dark for black ink and too light for white,
+    so the pole with more contrast is picked and then pushed until it clears 4.5:1.
+    """
+    start = BLACK if contrast(BLACK, accent) >= contrast(WHITE, accent) else WHITE
+    return away(start, accent, 4.5)
+
+
+# the two poles `away()` blends toward; not palette colours, so apart from BASE
+WHITE, BLACK = "#ffffff", "#000000"
+
+
+def tokens(name=DEFAULT, mode="dark"):
+    """Flat token dict for one palette. Keys are the C_* names, lowercased.
+
+    `mode` picks the dark (default) or light base for that palette name; a palette with no light
+    variant of its own falls back to the light base, so a light desktop never gets a dark panel.
+    """
+    base = light_base(name) if mode == "light" else (BASE.get(name) or BASE[DEFAULT])
     bg, panel, panel2 = base["bg"], base["panel"], base["panel2"]
     accent, fg, dim = base["accent"], base["fg"], base["dim"]
     return {
@@ -133,11 +185,19 @@ def tokens(name=DEFAULT):
         "line_soft": toward(base["line"], bg, 1.6),      # a hairline that is still a line
         "hover": mix(panel2, fg, 0.07),
         "sel": mix(panel2, accent, 0.22),
-        "ink": mix(bg, accent, 0.10),                    # text on an accent fill
+        # text on an accent fill: dark ink on a dark theme, whichever pole reads for a light one
+        "ink": mix(bg, accent, 0.10) if mode != "light" else ink_on(accent),
         "fg": fg,
         "dim": dim,
-        "hint": toward(dim, bg, FLOORS["hint"]),
+        "hint": away(away(toward(dim, bg, FLOORS["hint"]), panel, FLOORS["hint"]), panel2,
+                     FLOORS["hint"]),
+        "line_strong": away(away(base["line"], panel, FLOORS["line_strong"]), bg,
+                            FLOORS["line_strong"]),
         "accent": accent,
+        # accent used as text lands on the section bands, which are `panel2`: floored against
+        # both, the way `hint` already is (amber's sat at 3.67 on panel2)
+        "accent_text": away(away(accent, panel, FLOORS["accent_text"]), panel2,
+                            FLOORS["accent_text"]),
         "accent_hi": mix(accent, fg, 0.22),
         "accent_lo": mix(accent, bg, 0.32),
         "green": base["green"],
@@ -152,9 +212,6 @@ def tokens(name=DEFAULT):
 
 
 TOKEN_NAMES = tuple(tokens().keys())
-
-# the two poles `away()` blends toward; not palette colours, so kept apart from BASE
-WHITE, BLACK = "#ffffff", "#000000"
 
 if __name__ == "__main__":                             # a quick contrast report
     for name, label in CHOICES:

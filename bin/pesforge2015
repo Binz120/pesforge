@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# PESForge 2015 — headless editor for the PES 2015 player tables (Data/dt10.cpk + dt80 packs).
+#
+#   pesforge2015 --find messi
+#   pesforge2015 --set 7511 Speed=90 --save
+#
+# Plain Python is enough here: no tkinter, no display. Set SPFL_EDITOR_DIR to point at the
+# checkout if it is not found automatically, PES2015_DIR at the game folder.
+set -uo pipefail
+
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+here=$(dirname "$self")
+
+PY="${SPFL_PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+
+for candidate in "${SPFL_EDITOR_DIR:-}" "$here" "$here/.." \
+                 "$HOME/Code/pesforge" "$HOME/pesforge" \
+                 /usr/local/share/pesforge /opt/pesforge; do
+  [ -n "$candidate" ] || continue
+  if [ -f "$candidate/cli2015.py" ]; then
+    exec "$PY" "$candidate/cli2015.py" "$@"
+  fi
+done
+
+echo "pesforge2015: cli2015.py not found. Set SPFL_EDITOR_DIR to the folder containing it." >&2
+exit 1

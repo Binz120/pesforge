@@ -39,11 +39,16 @@ _adopt_old_home()
 
 DEFAULTS = {
     "game_dir": DEFAULT_GAME_DIR,
+    "database": "",             # an imported CPK (Database row's Import…); wins over game_dir
+    "pes2015_dir": "",          # the PES 2015 install folder; empty = found automatically
+    "pes2019_dir": "",          # the PES 2019 install folder, same deal
+    "pes5_dir": "",             # the PES 5 install folder, same deal
     "backups_dir": "",          # empty = <state>/backups
     "max_backups": 50,          # 0 keeps everything
     "confirm_save": True,
     "photos": True,             # fetch the player's face from pesmaster on first view
     "theme": "amber",           # palette name from theme.CHOICES
+    "mode": "",                 # "", "dark" or "light"; empty follows the desktop
     "window": "",               # "1518x956" remembered from the last session
     "collapsed": ["career", "clubname"],   # sections that start folded (rarely touched)
 }
@@ -123,6 +128,22 @@ def has_database(folder):
     return bool(folder) and os.path.isfile(database_path(folder))
 
 
+def imported_database(cfg=None):
+    """An explicitly imported CPK (the Database row's Import…), or '' when it is gone."""
+    path = os.path.expanduser(((cfg or {}).get("database") or "").strip())
+    return path if path and os.path.isfile(path) else ""
+
+
+def current_database(folder, cfg=None):
+    """The CPK loads and saves go to: an imported database wins over the folder's own."""
+    return imported_database(cfg) or database_path(folder)
+
+
+def has_current_database(folder, cfg=None):
+    """True when there is a database to work with: an imported file, or the folder's CPK."""
+    return bool(imported_database(cfg)) or has_database(folder)
+
+
 def load():
     cfg = dict(DEFAULTS)
     try:
@@ -177,17 +198,26 @@ def backups_dir(cfg=None, state=None):
 
 
 def prune_backups(directory, keep):
-    """Delete all but the newest `keep` files. 0 or less keeps everything."""
+    """Delete all but the newest `keep` backups. 0 or less keeps everything.
+
+    A backup is a base name plus every file beside it (the region dump and its `.json`
+    sidecar), so a pair is never split and a kept backup keeps its sidecar.
+    """
     if not keep or keep <= 0 or not os.path.isdir(directory):
         return 0
-    files = [os.path.join(directory, f) for f in os.listdir(directory)]
-    files = sorted((f for f in files if os.path.isfile(f)),
-                   key=os.path.getmtime, reverse=True)
+    groups = {}
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        if os.path.isfile(path):
+            groups.setdefault(name.rsplit(".", 1)[0], []).append(path)
+    order = sorted(groups.values(),
+                   key=lambda files: max(os.path.getmtime(p) for p in files), reverse=True)
     removed = 0
-    for path in files[keep:]:
-        try:
-            os.remove(path)
-            removed += 1
-        except OSError:
-            pass
+    for files in order[keep:]:
+        for path in files:
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
     return removed

@@ -1,0 +1,22 @@
+name: tests
+
+# The layout of this workflow is what bin/check runs locally: the whole assert suite,
+# GUI checks included, on a virtual X display. Nothing here reaches the network beyond
+# apt/pip for the runner itself, and no game data is required — the synthetic fixtures in
+# tests/fixtures.py cover the container and round-trip checks without one.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 xvfb
+      - name: tests
+        run: bin/check

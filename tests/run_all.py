@@ -7,6 +7,8 @@ game directory.
 """
 import csv
 import contextlib
+import gi
+import importlib
 import json
 import os
 import re
@@ -18,9 +20,24 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# The Tk build lives in legacy/ since the hardening pass (tag tk-final is its last maintained
+# state; it is unmaintained and the owner may delete it). The tests below still drive it —
+# and skip cleanly, rather than error, once it is gone.
+LEGACY = os.path.join(ROOT, "legacy")
+if os.path.isfile(os.path.join(LEGACY, "editor.py")):
+    sys.path.insert(0, LEGACY)
+else:
+    class _NoTk:
+        def __getattr__(self, name):
+            raise FileNotFoundError("the Tk build (legacy/editor.py) is not in this tree")
+
+    sys.modules["editor"] = _NoTk()
 import pesdb
 import pesdb_maps as maps
-import settings
+import pes2015
+import pes2019
+import pes2021
+import pes5
 import settings
 
 # Any machine: SPFL_GAME wins, else whatever the editor would auto-detect.
@@ -778,17 +795,20 @@ def test_csv_round_trip():
 
 def test_portrait_fits_slot():
     """A portrait is never clipped or stretched: the slot fits the image, oversized ones are halved."""
+    import editor
     with gui() as app:
+        side = int(editor.PHOTO_SIDE * app.ui)   # the slot is DPI-scaled: 128 at 96 dpi, 256 at 192
         path = os.path.join(tempfile.mkdtemp(), "portrait.ppm")
         with open(path, "wb") as f:              # Tk reads binary P6 only
-            f.write(b"P6\n256 256\n255\n" + bytes([200, 120, 90]) * (256 * 256))
+            f.write(b"P6\n%d %d\n255\n" % (side * 2, side * 2)
+                    + bytes([200, 120, 90]) * (side * side * 4))
         app._show_portrait(path)
-        assert (app.photo_img.width(), app.photo_img.height()) == (128, 128), \
+        assert (app.photo_img.width(), app.photo_img.height()) == (side, side), \
             (app.photo_img.width(), app.photo_img.height())
         app.update()
         # a photo is shown at its full size or not at all: never squashed into a narrow slot
         if app.photo.winfo_ismapped():
-            assert app.photo.winfo_width() >= 128 and app.photo.winfo_height() >= 128, \
+            assert app.photo.winfo_width() >= side and app.photo.winfo_height() >= side, \
                 (app.photo.winfo_width(), app.photo.winfo_height())
         shutil.rmtree(os.path.dirname(path))
 
@@ -976,6 +996,59 @@ def test_new_tables_patch_into_cpk():
     again = pesdb.AppearanceTable(pesdb.table_blob(box_cpk(box), "PlayerAppearance"))
     assert again.get(276, "Skin Colour") == 5 and len(again.records) == 26395
     assert again.pid(276) == 7511
+
+
+def test_blank_career_row_is_hidden():
+    """A career field the database leaves empty everywhere collapses; the value stays reachable."""
+    with gui() as app:
+        app.update()
+        assert "Owner Club" in app.vars, "the value must stay settable even when its row is hidden"
+        assert app._field_widgets["Owner Club"].winfo_manager() == "", "the dead row should be hidden"
+        assert app._field_widgets["Youth Club"].winfo_manager() == "grid", "a populated row stays"
+        assert app._field_labels["Owner Club"].winfo_manager() == "", "its label too"
+        # and the rows after it move up: the grid stays dense, no hole where the row was
+        g = app._career_grid
+        cells = []
+        for label in g["labels"]:
+            info = app._field_widgets[label].grid_info()
+            if info:
+                cells.append((int(info["row"]), int(info["column"]) // 2))
+        assert sorted(cells) == [divmod(i, g["cols"]) for i in range(len(cells))], \
+            f"career rows leave a hole: {sorted(cells)}"
+        assert len(cells) == len(g["labels"]) - 1, "Owner Club is the only hidden one"
+        note = app.career_note.cget("text")
+        assert "Owner Club" in note and "hidden" in note, note
+        assert "Type a club name" not in note, "nothing to type into if the row is hidden"
+
+
+def test_theme_switch_repaints_bars():
+    """A palette switch rebuilds the form: the bars must come back drawn, in the new palette."""
+    import editor
+    import theme
+    with gui() as app:
+        app.q.set("gerrard")
+        app.populate("gerrard", select_first=True)
+        for _ in range(8):
+            app.update()
+            app.update_idletasks()
+        try:
+            app._apply_theme("ice")
+            for _ in range(10):
+                app.update()
+                app.update_idletasks()
+            bar = app.vars["Speed::bar"]
+            ids = bar.find_all()
+            assert len(ids) == 2, f"track + fill expected, got {ids}"
+            track = bar.coords(ids[0])
+            assert track[2] >= bar.winfo_width() - 1, \
+                f"bar drawn {track[2]}px wide in a {bar.winfo_width()}px canvas: {track}"
+            assert bar.itemcget(ids[0], "fill").lower() == theme.tokens("ice")["bar"].lower()
+            fill = bar.itemcget(ids[1], "fill").lower()
+            assert fill in (editor.C_ACCENT.lower(), editor.C_ACCENT_LO.lower(),
+                            editor.C_BAR_LOW.lower()), fill
+        finally:
+            app._apply_theme(theme.DEFAULT)          # leave the process on the default palette
+            app.update()
 
 
 def test_career_and_appearance_ui():
@@ -1395,11 +1468,1546 @@ def test_popup_windows_have_cursors():
         assert str(aware.cget("cursor")), "the appearance window has no cursor"
         assert str(aware.tree.cget("cursor")), "the appearance tree has no cursor"
         aware.destroy()
+        app.open_pes2015()
+        pes = app._pes2015_win
+        pes.update()
+        assert str(pes.cget("cursor")), "the PES 2015 window has no cursor"
+        assert str(pes.tree.cget("cursor")), "the PES 2015 list has no cursor"
+        pes.destroy()
+
+
+# ---------------------------------------------------------------- PES 2015
+def pes2015_install():
+    """The PES 2015 install, or a skip when this machine has none (set PES2015_DIR)."""
+    folder = os.environ.get("PES2015_DIR") or pes2015.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+        raise FileNotFoundError(2, "no PES 2015 install (set PES2015_DIR)", "dt10.cpk")
+    return folder
+
+
+def pes2015_box():
+    """A private copy of dt10.cpk — edits patch it in place, so a symlink would hit the game."""
+    box = tempfile.mkdtemp(prefix="pesforge-2015-")
+    os.makedirs(os.path.join(box, "game", "Data"))
+    os.makedirs(os.path.join(box, "game", "download"))
+    shutil.copy2(os.path.join(pes2015_install(), "Data", "dt10.cpk"),
+                 os.path.join(box, "game", "Data", "dt10.cpk"))
+    return box
+
+
+def cli2015(box, *args, expect=0):
+    env = dict(os.environ, PES2015_DIR=os.path.join(box, "game"),
+               SPFL_STATE=os.path.join(box, "state"),
+               SPFL_CONFIG=os.path.join(box, "state", "config.json"))
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "cli2015.py")] + list(args),
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == expect, f"{args} -> rc {p.returncode}\n{p.stdout}\n{p.stderr}"
+    return p.stdout + p.stderr
+
+
+def pes2015_diffs(a, b, span=1 << 16):
+    """Byte ranges where two buffers differ; the tail is one range, chunks keep it fast."""
+    common = min(len(a), len(b))
+    ranges = []
+    for start in range(0, common, span):
+        end = min(start + span, common)
+        if a[start:end] == b[start:end]:
+            continue
+        i = start
+        while i < end:
+            if a[i:i + 1] != b[i:i + 1]:
+                j = i
+                while j < end and a[j:j + 1] != b[j:j + 1]:
+                    j += 1
+                ranges.append((i, j))
+                i = j
+            else:
+                i += 1
+    if len(a) != len(b):
+        ranges.append((common, max(len(a), len(b))))
+    return ranges
+
+
+def test_pes2015_reads_the_shipped_table():
+    db = pes2015.Cpk2015(os.path.join(pes2015_install(), "Data", "dt10.cpk"))
+    table = db.read_table("Player")
+    assert len(table) == 10091, len(table)
+    assert len(db.read_table("Player1")) == 1100
+    for i in range(len(table)):      # every shipped row carries an id and all three names
+        assert table.pid(i) and table.name(i) and table.shirt(i) and table.japanese(i), i
+    me = table.find("7511")[0]
+    assert table.name(me).upper() == "L. MESSI", table.name(me)
+    assert pes2015.POSITION_NAMES[table.get(me, "Position")] == "SS"
+
+
+def test_pes2015_default_targets_include_the_mounted_pack():
+    folder = pes2015_install()
+    paths = [os.path.basename(p) for p in pes2015.database_cpks(folder)]
+    assert paths and paths[0] == "dt10.cpk", paths
+    packs = pes2015.mounted_packs(folder)
+    assert packs, "DpFileList.bin names no data pack"
+    for pack in packs:
+        assert pack in paths, (pack, paths)
+
+
+def test_pes2015_cli_dry_run_then_save():
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    out = cli2015(box, "--set", "7511", "Speed=41")
+    assert "Speed" in out and "dry run" in out, out
+    assert open(cpk_path, "rb").read() == before, "a dry run wrote to the CPK"
+    out = cli2015(box, "--set", "7511", "Speed=41", "--save")
+    assert "all edits present" in out, out
+    shown = cli2015(box, "--show", "7511")
+    assert re.search(r"Speed\s+41\n", shown), shown
+    out = cli2015(box, "--set", "7511", "Speed=41")
+    assert "nothing changed" in out, out
+
+
+def test_pes2015_write_confines_its_changes():
+    """A save may touch only the header/TOC tables and the appended payload."""
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    db = pes2015.Cpk2015(cpk_path)
+    table = db.read_table("Player")
+    rows_before = [bytes(r) for r in table.records]
+    me = table.find("7511")[0]
+    table.set(me, "Speed", 42)
+    table.set_name(me, shirt="MESSI-TEST")
+    backup = os.path.join(box, "backup")
+    where, appended = db.patch("Player", table.to_payload(), backup_dir=backup)
+    assert appended and where >= len(before), (where, len(before))
+    after = open(cpk_path, "rb").read()
+    allowed = [(0x10, 0x10 + db.header.size), (db.toc_off, db.toc_off + db.toc.size)]
+    for lo, hi in pes2015_diffs(before, after):
+        assert any(lo >= a and hi <= b for a, b in allowed) or lo >= len(before), \
+            f"unexpected change at {lo:#x}..{hi:#x}"
+    fresh = pes2015.Cpk2015(cpk_path).read_table("Player")
+    assert len(fresh) == len(rows_before)
+    assert fresh.get(me, "Speed") == 42
+    assert fresh.shirt(me) == "MESSI-TEST"
+    for i in range(len(fresh)):
+        if i != me:
+            assert bytes(fresh.records[i]) == rows_before[i], f"row {i} moved"
+    folder = os.path.join(backup, "pes2015")
+    base = os.path.join(folder, [f for f in os.listdir(folder) if f.endswith(".json")][0][:-5])
+    pes2015.restore_backup(base)
+    assert open(cpk_path, "rb").read() == before, "restore did not return the original bytes"
+
+
+def test_pes2015_patch_in_place_keeps_the_file_size():
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    before = open(cpk_path, "rb").read()
+    db = pes2015.Cpk2015(cpk_path)
+    table = db.read_table("Player1")
+    small = pes2015.PlayerTable(b"".join(bytes(r) for r in table.records[:1]), table.prefix)
+    assert pes2015.wesys_records(small.to_payload()) == b"".join(
+        bytes(r) for r in small.records)
+    off = db.entry("Player1")[1][1]
+    where, appended = db.patch("Player1", small.to_payload())
+    assert not appended, "a one-row payload must fit the slot"
+    assert where == off + pes2015.LEAD, (where, off)
+    assert len(open(cpk_path, "rb").read()) == len(before), "an in-place patch grew the CPK"
+    again = pes2015.Cpk2015(cpk_path)
+    found = again.entry("Player1")
+    assert found and found[1][1] == off
+    assert len(again.read_table("Player1")) == 1
+
+
+def test_pes2015_name_slots_never_split_a_codepoint():
+    assert pes2015.encode_name("A" * 60) == b"A" * 45 + b"\x00"
+    cut = pes2015.encode_name("A" * 44 + "名")
+    assert len(cut) == 46 and cut.endswith(b"\x00\x00"), cut
+    cut.decode("utf-8")              # no half codepoint left behind
+    assert pes2015.encode_name("") == b"\x00" * 46
+
+
+# ---------------------------------------------------------------- importing a database
+def test_pes2015_unmount_returns_to_the_detected_install():
+    """The 2015 tab's Unmount forgets the imported folder and falls back to the install."""
+    folder = pes2015.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10.cpk")):
+        raise FileNotFoundError("no PES 2015 install")
+    saved_env = os.environ.get("PES2015_DIR")
+    os.environ["PES2015_DIR"] = folder
+    try:
+        with gui() as app:
+            app.cfg["pes2015_dir"] = folder
+            settings.save(app.cfg)
+            app.set_view_mode("pes2015")
+            app.update()
+            panel = app._pes2015_panel
+            assert panel.dir == folder, panel.dir
+            panel.unmount_dir()
+            app.update()
+            assert not settings.load().get("pes2015_dir")
+            assert panel.dir == folder, "the environment still points at the install"
+            assert panel.copies, "tables must reload from the fallback install"
+            panel.unmount_dir()                      # nothing imported: say so, change nothing
+            assert "nothing imported" in panel.note.cget("text")
+    finally:
+        if saved_env is None:
+            os.environ.pop("PES2015_DIR", None)
+        else:
+            os.environ["PES2015_DIR"] = saved_env
+
+
+def test_import_database_switches_the_editor():
+    """Import… takes any data CPK file: it becomes the database the editor reads and writes."""
+    box = sandbox()
+    source = box_cpk(box)                            # <box>/game/download/data_s2627.cpk
+    imported = os.path.join(box, "elsewhere", "custom_db.cpk")
+    os.makedirs(os.path.dirname(imported), exist_ok=True)
+    shutil.copy2(source, imported)                   # a copy outside any game-folder shape
+    import editor
+    saved_state, saved_vanilla = editor.STATE_DIR, editor.VANILLA
+    editor.STATE_DIR = os.path.join(box, "state")    # keep the test out of the real state dir
+    editor.VANILLA = os.path.join(editor.STATE_DIR, "Player.vanilla.bin")
+    saved_dir = os.environ.get("SPFL_DIR")
+    os.environ["SPFL_DIR"] = os.path.join(box, "game")
+    try:
+        with gui() as app:
+            assert app.IMPORT_ENTRY in list(app.cb_db["values"]), "no Import entry in the dropdown"
+            before = app.cpk_path
+            app.switch_database(imported)
+            assert app.cpk_path == imported, app.cpk_path
+            assert settings.load().get("database") == imported
+            assert len(app.table.records) == 26395
+            assert settings.imported_database({"database": imported}) == imported
+            app.switch_database(before)              # back to the install: folder mode again
+            assert app.cpk_path == before, app.cpk_path
+            assert not settings.load().get("database")
+            app.switch_database(imported)            # and now the button's own way back
+            assert app.cpk_path == imported
+            app.unmount_database()
+            assert app.cpk_path == before, app.cpk_path
+            assert not settings.load().get("database")
+            assert len(app.table.records) == 26395
+            app.unmount_database()                   # nothing imported: it must say so
+            assert app.cpk_path == before
+            assert "nothing imported" in app.statusbar.cget("text"), \
+                app.statusbar.cget("text")
+    finally:
+        editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
+        if saved_dir is None:
+            os.environ.pop("SPFL_DIR", None)
+        else:
+            os.environ["SPFL_DIR"] = saved_dir
+
+
+def test_import_database_validates_foreign_files():
+    """A file that is not a PES 2021 database is refused, not loaded."""
+    box = sandbox()
+    import editor
+    editor.validate_database(box_cpk(box))           # the shipped database passes
+    junk = os.path.join(box, "junk.cpk")
+    with open(junk, "wb") as f:
+        f.write(b"not a cpk at all" * 64)
+    try:
+        editor.validate_database(junk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-CPK file passed database validation")
+    for module, folder, pack, vintage in ((pes2015, pes2015.find_game_dir(), "dt10.cpk", "PES 2015"),
+                                          (pes2019, pes2019.find_game_dir(), "dt10_x64.cpk", "PES 2019")):
+        path = os.path.join(folder, "Data", pack) if folder else ""
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            editor.validate_database(path)
+        except ValueError as exc:
+            assert vintage in str(exc), exc                  # the refusal names the vintage
+            assert f"{vintage} database" in str(exc), exc    # and points at the tab
+        else:
+            raise AssertionError(f"a {vintage} CPK passed as a PES 2021 database")
+
+
+def test_pes2015_window_edits_a_sandbox():
+    """The PES 2015 window: loads a sandbox install, edits every copy of a player, saves, reverts."""
+    box = pes2015_box()
+    import editor
+    saved_state, saved_vanilla = editor.STATE_DIR, editor.VANILLA
+    editor.STATE_DIR = os.path.join(box, "state")
+    editor.VANILLA = os.path.join(editor.STATE_DIR, "Player.vanilla.bin")
+    saved_dir = os.environ.get("PES2015_DIR")
+    os.environ["PES2015_DIR"] = os.path.join(box, "game")
+    try:
+        with gui() as app:
+            app.cfg["confirm_save"] = False          # no dialogs in a test
+            menu = app.nametowidget(app.menu_btn.cget("menu"))
+            import tkinter as tk
+            labels = []
+            for n in range(menu.index("end") + 1):
+                try:
+                    labels.append(menu.entrycget(n, "label"))
+                except tk.TclError:
+                    pass                             # separators carry no -label
+            assert "PES 2015 database…" in labels, labels
+            app.open_pes2015()
+            win = app._pes2015_win
+            win.update()
+            assert win.dir == os.path.join(box, "game"), win.dir
+            assert len(win.copies) > 12000, len(win.copies)
+            multi = next(pid for pid, copies in win.copies.items() if len(copies) > 1)
+            win.tree.selection_set(str(multi))
+            win.pick()
+            win.stat_vars["Speed"].set("41")
+            win.name_vars["Shirt Name"].set("TESTSHIRT")
+            win.bio_vars["Height"].set("170")
+            win.foot_var.set("Right")
+            win.flag_vars[("Skill", "Scissors Feint")].set(True)
+            win.apply()
+            assert multi in win.dirty, "apply did not mark the player"
+            win.save()
+            assert not win.dirty, "save left edits pending"
+            for path, stem, _t, _i in win.copies[multi]:     # every copy landed on disk
+                fresh = editor.pes2015.Cpk2015(path).read_table(stem)
+                row = next(k for k in range(len(fresh)) if fresh.pid(k) == multi)
+                assert fresh.get(row, "Speed") == 41, (stem, fresh.get(row, "Speed"))
+                assert fresh.shirt(row) == "TESTSHIRT", (stem, fresh.shirt(row))
+                assert fresh.get(row, "Height") == 170, (stem, fresh.get(row, "Height"))
+                assert fresh.get(row, "Skill: Scissors Feint") == 1, stem
+                assert fresh.get(row, "Foot") == 0, stem
+            kept = editor.pes2015.Cpk2015(os.path.join(box, "game", "Data", "dt10.cpk"))
+            assert len(kept.read_table("Player")) == 10091
+            win.tree.selection_set(str(multi))               # Revert drops an unsaved edit
+            win.pick()
+            win.stat_vars["Speed"].set("42")
+            win.bio_vars["Height"].set("171")
+            win.apply()
+            assert multi in win.dirty
+            win.revert()
+            assert not win.dirty, "revert left edits pending"
+            _p, _s, table, i = win.display[multi]
+            assert table.get(i, "Speed") == 41, "revert did not reload from disk"
+            assert table.get(i, "Height") == 170, "revert did not reload the bio fields"
+            win.tree.selection_set("4522")                   # the form populates from disk
+            win.pick()
+            assert win.bio_vars["Height"].get() == "185", win.bio_vars["Height"].get()
+            assert win.foot_var.get() == "Right", win.foot_var.get()
+            assert win._club_text(4522) == "REAL MADRID", win._club_text(4522)
+            assert len(win.flag_vars) == len(editor.pes2015.SKILLS) + len(editor.pes2015.COM_STYLES)
+            assert "club" in win.tree["columns"]
+            # the same panel is the main window's "PES 2015" tab: it imports the database and
+            # swaps the PES 2021 body out while active
+            app.set_view_mode("pes2015")
+            app.update()
+            panel = app._pes2015_panel
+            assert panel.dir == os.path.join(box, "game"), panel.dir
+            assert len(panel.copies) > 12000, len(panel.copies)
+            assert not app._one_page_body.winfo_manager(), "the PES 2021 body stayed visible"
+            assert panel.winfo_ismapped(), "the PES 2015 panel is not mapped in its host"
+            assert "PES 2015" in app.tab_pes2015.cget("text"), app.tab_pes2015.cget("text")
+            assert str(panel.tree.cget("cursor")), "the PES 2015 tab list has no cursor"
+            for lab in (app.tab_players, app.tab_clubs, app.tab_pes2015):
+                assert lab.winfo_ismapped(), "the tab strip is not visible in PES 2015 mode"
+            panel.q.set("messi")
+            panel.fill()
+            assert "7511" in panel.tree.get_children(), "the search did not list Messi"
+            panel.tree.selection_set("7511")
+            panel.pick()
+            assert panel.name_vars["Name"].get().upper() == "L. MESSI", \
+                panel.name_vars["Name"].get()
+            assert panel.bio_vars["Height"].get() == "169", panel.bio_vars["Height"].get()
+            app.set_view_mode("players")
+            app.update()
+            assert app._one_page_body.winfo_manager() == "pack", "the body did not come back"
+            win.destroy()
+    finally:
+        editor.STATE_DIR, editor.VANILLA = saved_state, saved_vanilla
+        if saved_dir is None:
+            os.environ.pop("PES2015_DIR", None)
+        else:
+            os.environ["PES2015_DIR"] = saved_dir
+
+
+def test_playing_style_enum():
+    """The playing-style ids are PES 2021's binary enum, not the eFootball-era order."""
+    import editor
+    for idx, name in ((1, "Goal Poacher"), (3, "Fox in the Box"), (4, "Prolific Winger"),
+                      (5, "Classic No. 10"), (6, "Hole Player"), (7, "Box-to-Box"),
+                      (11, "Offensive Full-back"), (13, "Target Man"),
+                      (14, "Creative Playmaker"), (15, "Build Up"),
+                      (17, "Defensive Goalkeeper"), (18, "Roaming Flank"),
+                      (20, "Orchestrator"), (21, "Full-back Finisher")):
+        assert editor.PLAY_STYLES[idx] == name, (idx, editor.PLAY_STYLES[idx])
+    # the GTK build's 2021 adapter carries the same list, and the two must not drift apart
+    assert pes2021.STYLE_NAMES == tuple(editor.PLAY_STYLES), pes2021.STYLE_NAMES
+
+
+def test_pes2015_form_is_compact():
+    """The PES 2015 form must fit a modest window without scrolling: ~400px tall at ui=1."""
+    pes2015_install()                                   # skips cleanly when there is none
+    import editor
+    with gui() as app:
+        app.set_view_mode("pes2015")
+        app.update()
+        panel = app._pes2015_panel
+        assert panel.winfo_reqheight() <= int(560 * app.ui), panel.winfo_reqheight()
+
+
+def test_pes2015_teams_coaches_squads_roundtrip():
+    """Team and coach renames plus a squad-number move land on disk, verify, and restore."""
+    box = pes2015_box()
+    cpk_path = os.path.join(box, "game", "Data", "dt10.cpk")
+    original = open(cpk_path, "rb").read()
+
+    out = cli2015(box, "--teams", "barcelona")
+    assert "FC BARCELONA" in out, out
+    out = cli2015(box, "--set-team", "108", "Name=FC TEST", "Short=TEST")
+    assert "dry run" in out and "FC BARCELONA" in out, out
+    assert open(cpk_path, "rb").read() == original, "a dry run wrote to the CPK"
+    out = cli2015(box, "--set-team", "108", "Name=FC TEST", "Short=TEST", "--save")
+    assert "all edits present" in out, out
+    assert "FC TEST" in cli2015(box, "--teams", "108")
+
+    out = cli2015(box, "--set-coach", "mazzarri", "Name=V. COACH", "--save")
+    assert "all edits present" in out, out
+    assert "V. COACH" in cli2015(box, "--coaches", "18")
+
+    out = cli2015(box, "--set-squad", "L. Messi", "Team=108", "Number=77", "--save")
+    assert "all edits present" in out, out
+    shown = cli2015(box, "--squads", "L. Messi")
+    assert re.search(r"108\s+FC TEST\s+number 77", shown), shown
+
+    state = os.path.join(box, "state", "backups", "pes2015")
+    backups = [f[:-5] for f in os.listdir(state) if f.endswith(".json")]
+    backups.sort(key=lambda n: os.path.getmtime(os.path.join(state, n + ".json")), reverse=True)
+    assert len(backups) >= 3, backups
+    for name in backups:
+        cli2015(box, "--restore", name)
+    assert open(cpk_path, "rb").read() == original, "restore did not return the original bytes"
+
+
+
+# ---------------------------------------------------------------- PES 2019
+def pes2019_install():
+    """The PES 2019 install, or a skip when this machine has none (set PES2019_DIR)."""
+    folder = os.environ.get("PES2019_DIR") or pes2019.find_game_dir()
+    if not folder or not os.path.isfile(os.path.join(folder, "Data", "dt10_x64.cpk")):
+        raise FileNotFoundError(2, "no PES 2019 install (set PES2019_DIR)", "dt10_x64.cpk")
+    return folder
+
+
+def pes2019_box():
+    """A private copy of dt10_x64.cpk — a patch writes in place, so a link would hit the game."""
+    box = tempfile.mkdtemp(prefix="pesforge-2019-")
+    os.makedirs(os.path.join(box, "game", "Data"))
+    os.makedirs(os.path.join(box, "game", "download"))
+    shutil.copy2(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"),
+                 os.path.join(box, "game", "Data", "dt10_x64.cpk"))
+    return box
+
+
+def pes2019_mounted_database(game):
+    """The CPK the GTK app opens by default: the mounted dt80 pack, else the base table."""
+    packs = pes2019.database_cpks(game)
+    return next((p for p in reversed(packs) if p.endswith("dt80_200E_x64.cpk")),
+                packs[0] if packs else "")
+
+
+def pes2021_database():
+    """This machine's SP Football Life database (SPFL_DIR wins), or raise for a skip."""
+    folder = os.environ.get("SPFL_DIR") or settings.game_dir()
+    path = settings.database_path(folder) if folder else ""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(2, "no SP Football Life database", "data_s2627.cpk")
+    return path
+
+
+def test_pesdb_name_never_splits_a_codepoint():
+    """The 312-byte name slot is cut at a codepoint boundary, exactly like 2015/2019."""
+    box = sandbox()
+    table = pes2021.Cpk(box_cpk(box)).read_table("Player")
+    name = "\u6f22" * 19 + "ab" + "\u6f22" * 10          # 89 bytes: a naive cut splits char 21
+    table.set_name(3, full=name)
+    got = table.name(3)
+    assert "\ufffd" not in got, repr(got)
+    assert len(got.encode("utf-8")) <= pesdb.NAME_SLOT - 1, got
+    assert pesdb.encode_name(name).split(b"\x00")[0].decode("utf-8") == got, got
+
+
+def test_pes2021_reads_the_shipped_database():
+    """The 2021 adapter over the real FL27 bytes, in the vocabulary the panel asks for."""
+    db = pes2021.Cpk(pes2021_database())
+    table = db.read_table("Player")
+    teams = db.read_table("Team")
+    assign = db.read_table("PlayerAssignment")
+    assert (len(table), len(teams), len(assign)) == (26395, 745, 21240), \
+        (len(table), len(teams), len(assign))
+    i = table.find("7511")[0]
+    assert table.name(i) == "Lionel Messi", table.name(i)
+    assert (table.get(i, "Height"), table.get(i, "Age")) == (170, 39)
+    assert table.get(i, "Foot") == 1, "Messi is left-footed"
+    assert table.get(i, "Stronger Foot") == 1, "pesdb's own label reads the same field"
+    assert pes2021.STYLE_NAMES[table.get(i, "Playing Style")] == "Classic No. 10"
+    assert pes2021.POSITION_NAMES[table.get(i, "Position")] == "SS"
+    assert (len(pes2021.ABILITIES), len(pes2021.SKILLS)) == (25, 48)
+    assert len(pes2021.STYLE_NAMES) == 32, "the 5-bit style field, 22 of them named"
+    assert pes2021.STYLE_NAMES[21] == "Full-back Finisher"
+    assert table.japanese(i) == "", "a 312-byte record has no Japanese name slot"
+    assert "Height" in pes2021.FIELD_BY_LABEL and "Skill: Scissors Feint" in pes2021.FIELD_BY_LABEL
+    # the panel's own accessors land on the right rows
+    assert teams.id(0) == 1 and teams.name(0).lower() == "ireland"
+    rows = assign.find(7511)
+    assert len(rows) == 2 and all(assign.player(r) == 7511 for r in rows), rows
+    assert assign.number(rows[0]) >= 1
+    # a set/read round trip on a copy in memory: no file is touched here
+    was = table.get(i, "Speed")
+    table.set(i, "Speed", 99)
+    assert table.get(i, "Speed") == 99
+    table.set(i, "Speed", was)
+    assert table.get(i, "Speed") == was
+    table.set(i, "Speed", 250)                        # clamped, never wrapped around
+    assert table.get(i, "Speed") == 99, table.get(i, "Speed")
+
+
+def test_gtk4_theme_follows_the_system():
+    """The app paints light or dark as the desktop asks, with readable contrast either way."""
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    seen = {}
+    for mode in ("light", "dark"):
+        env = dict(os.environ, PESFORGE_THEME=mode, PESFORGE_GTK_SELFTEST="theme")
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                             text=True, env=env, timeout=300)
+        text = out.stdout + out.stderr
+        assert "SELFTEST THEME" in text, text[-500:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST THEME")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert line.split()[2] == mode, line
+        assert float(parts["contrast"]) >= 4.5, line
+        seen[mode] = parts["bg"]
+    assert seen["light"] != seen["dark"], seen          # the two modes are actually different
+
+
+def test_gtk4_compact_layout_fits_without_scrolling():
+    """The whole editor is on screen at the tiled size and at the default: no pane scrolls.
+
+    The panes sit in scroll areas as a safety net, so the check is that their content still fits
+    the page the scroller shows — this is what the user asked for (no scrolling, no resizing).
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    # 941 is the size the app is used at; 917 is one tile narrower on this desktop and the app
+    # keeps the split layout there too (the form's grid is 584px wide, not 607), so the promise
+    # holds at both — see test_gtk4_layout_is_a_function_of_size for the way back
+    for size in ("941x1030", "917x1030", "1504x1030"):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="fit", PESFORGE_GTK_SIZE=size, SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST FIT OK" in text, text[-700:]
+    assert "scrolls" not in text, text[-400:]
+
+
+def test_gtk4_layout_is_a_function_of_size():
+    """A window that has grown arranges itself the same way as one born that size (Phase 4).
+
+    The sweep resizes the live window up across the split layout's boundary and then re-asks the
+    policy at each size on the way back down. It fails on: a size deciding differently the second
+    time, a list narrower than the columns it shows, a squeezed list column (which is what a
+    blank column looks like), or an editor pane scrolling while the split layout is in use.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="sweep", PESFORGE_GTK_SIZE="700x1030",
+               SPFL_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                         capture_output=True, text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST SWEEP OK" in text, text[-900:]
+    assert "layout sweep" not in text, text[-900:]
+
+
+def test_gtk4_every_control_has_an_accessible_name():
+    """Nothing interactive is announced as its role alone, and no column renders blank (Phase 5).
+
+    Runs the a11y walk at two widths: the compact one shows four list columns, the wide one all
+    six, so the rendered-row check (one cell per visible column, none of them zero-width) is
+    exercised for both the hidden and the shown columns.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    for size, columns in (("941x1030", 4), ("1504x1030", 6)):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="a11y", PESFORGE_GTK_SIZE=size,
+                   SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST A11Y OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST A11Y OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert int(parts["columns"]) == columns, line
+        assert int(parts["cells"]) == columns, line
+        assert int(parts["named"]) > 50, line
+        assert "no accessible name" not in text, text[-900:]
+
+
+def test_gtk4_follows_the_desktop_text_scale():
+    """Text scaling moves the app's own text, without clipping anything (Phase 5).
+
+    GTK resolves a stylesheet's `px` font sizes against the screen, not against the desktop's
+    text-scaling factor — measured: the app's player-name line stayed 22px tall at every scale,
+    while an unstyled label doubled. So the app's font sizes are in `em`, and the fixed pixel
+    widths (column widths, field-label widths, the list pane's thresholds) are multiplied by the
+    factor when they are built. This runs the app at four scales and asserts the name line grows
+    with each, and that no widget is drawn outside its parent or on top of a sibling.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    heights = []
+    for scale in ("1.0", "1.25", "1.5", "2.0"):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="scale", PESFORGE_GTK_SCALE=scale,
+                   PESFORGE_GTK_SIZE="941x1030", SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST SCALE OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST SCALE OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert parts["scale"] == scale, line
+        heights.append(int(parts["hero_h"]))
+    assert heights == sorted(set(heights)), heights      # strictly grows with the scale
+    assert heights[-1] >= heights[0] * 1.8, heights      # and by roughly the factor (2.0 at most)
+
+
+def test_gtk4_ability_boxes_share_one_column():
+    """The abilities grid is straight: one label width, one value-box column (the user's report).
+
+    In a Box per cell, a label wider than its `set_size_request` takes its own natural width and
+    shifts the value box beside it, so the boxes line up per row instead of per column — what
+    "misaligned" looked like on a real screenshot (40px apart, in the rows whose neighbours had
+    long names like "Short Pass Accuracy"). The labels are measured and drawn at one step now;
+    this fails if a second label width or a second box x appears, at both shapes, Position
+    included.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    for size, expect_cells in (("941x1030", 26), ("1504x1030", 26)):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="align", PESFORGE_GTK_SIZE=size,
+                   SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST ALIGN OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST ALIGN OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert int(parts["cells"]) == expect_cells, line
+        assert int(parts["box_x"]) > int(parts["label_w"]), line
+
+
+def test_gtk4_resizes_under_a_window_manager():
+    """A real shrink and grow under a window manager: the same size decides the same layout.
+
+    `PESFORGE_GTK_SELFTEST=sweep` can only *ask* the policy what a smaller size would do, because
+    a window with no window manager will not honour a shrink. `xfwm4` does: this drives a real
+    resize against the live app with `xdotool` — 1400 → 900 → 1400 → 917 → 941 wide, at 1030 tall
+    — and reads the geometry the app prints (`=watch`). It fails when a size seen twice decided
+    differently, when an editor pane scrolls at a size where the split layout is in use, or when
+    917 (a tiled window on this desktop) is not split. Skips, not fails, where xfwm4, xdotool or
+    Xvfb are missing.
+    """
+    import shutil as _shutil
+    import time
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    xfwm4 = _shutil.which("xfwm4")
+    xdotool = _shutil.which("xdotool")
+    xvfb = _shutil.which("Xvfb") or os.path.expanduser("~/.local/opt/xvfb/usr/bin/Xvfb")
+    if not (xfwm4 and xdotool and os.path.exists(xvfb)):
+        raise RuntimeError("no window manager (xfwm4), xdotool or Xvfb: cannot drive a resize")
+    display = ":100"
+    log = os.path.join(tempfile.mkdtemp(prefix="pesforge-wm-"), "watch.log")
+    xvfb_p = subprocess.Popen([xvfb, display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"])
+    env = dict(os.environ, DISPLAY=display)
+    env.pop("WAYLAND_DISPLAY", None)
+    wm = None
+    app = None
+    try:
+        for _ in range(40):                      # wait for the X server to answer
+            if subprocess.run([xdotool, "getdisplaygeometry"], env=env,
+                              capture_output=True).returncode == 0:
+                break
+            time.sleep(0.25)
+        wm = subprocess.Popen([xfwm4, "--compositor=off"], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        app_env = dict(env, GDK_BACKEND="x11", PESFORGE_GTK_SELFTEST="watch",
+                       PESFORGE_GTK_SIZE="1400x1030", SPFL_DIR=game)
+        app = subprocess.Popen([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                               stdout=open(log, "w"), stderr=subprocess.STDOUT, env=app_env)
+        window = ""
+        for _ in range(80):                      # wait for the window, then its first line
+            found = subprocess.run([xdotool, "search", "--pid", str(app.pid)], env=env,
+                                   capture_output=True, text=True)
+            window = (found.stdout.split() or [""])[-1]
+            if window and "WATCH" in open(log).read():
+                break
+            time.sleep(0.5)
+        assert window, "the app never mapped a window under the window manager"
+        steps = [(1400, 1030), (900, 1030), (1400, 1030), (917, 1030), (941, 1030)]
+        seen = {}
+        for width, height in steps:
+            assert subprocess.run([xdotool, "windowsize", window, str(width), str(height)],
+                                  env=env, capture_output=True).returncode == 0
+            time.sleep(1.6 if width >= 917 else 1.2)     # the layout settles, it is not instant
+            lines = [ln for ln in open(log) if ln.startswith("WATCH")]
+            match = [ln for ln in lines if ln.split()[1].split("x")[0].isdigit()
+                     and abs(int(ln.split()[1].split("x")[0]) - width) <= 2
+                     and abs(int(ln.split()[1].split("x")[1]) - height) <= 2]
+            assert match, f"no geometry line for {width}x{height}: {lines[-3:]}"
+            line = match[-1]
+            seen[(width, height)] = (line, seen.get((width, height), (line,))[0])
+            print(f"wm resize {width}x{height}: {line.strip()}")
+        for (width, height), (now_line, first_line) in seen.items():
+            if now_line is not first_line:               # a size the driver visited twice
+                for key in ("paned=", "cols="):
+                    was = [w for w in first_line.split() if w.startswith(key)][0]
+                    got = [w for w in now_line.split() if w.startswith(key)][0]
+                    assert was == got, f"{width}x{height}: {key}{got} on the way back, {was} before"
+        for width, height in ((1400, 1030), (917, 1030), (941, 1030)):
+            line = seen[(width, height)][0]
+            assert "paned=h" in line, f"{width}: the split layout is not in use: {line.strip()}"
+            for pane in ("form=", "bio="):
+                cell = [w for w in line.split() if w.startswith(pane)][0]
+                assert "+h" not in cell and "+v" not in cell, \
+                    f"{width}: {pane} scrolls while split: {cell}"
+    finally:
+        for proc in (app, wm, xvfb_p):
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        shutil.rmtree(os.path.dirname(log), ignore_errors=True)
+
+
+def test_gtk4_edits_and_saves_pes2021():
+    """SP Football Life is editable: load the install's database copy, edit, save, read it back.
+
+    The check copies the database into a scratch folder shaped like an install
+    (`download/data_s2627.cpk`), edits an ability, a skill and the shirt name, saves, and reads
+    all three back off disk — the app hashes the game's own file and asserts it is untouched.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2021", SPFL_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE2021 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+    found = re.search(r"SELFTEST WRITE2021 OK players=(\d+) pid=(\d+)", text)
+    assert found and int(found.group(1)) == 26395, text[-400:]
+    shutil.rmtree(os.path.join(os.environ.get("TMPDIR") or "/tmp", "pesforge-2021-check"),
+                  ignore_errors=True)
+
+
+def national_first_count(cpk_path):
+    """Players whose first assignment row is a national team.
+
+    The count the CLUB column has to get right: those rows used to read IRELAND where the
+    player's club belongs. Computed here from the CPK, independently of the app.
+    """
+    db = pes2019.Cpk2019(cpk_path)
+    players = db.read_table("Player")
+    assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    teams_of = {}
+    for i in range(len(assign)):
+        teams_of.setdefault(assign.player(i), []).append(assign.team(i))
+    return sum(1 for i in range(len(players))
+               if teams_of.get(players.pid(i))
+               and teams_of[players.pid(i)][0] <= pesdb.NATIONAL_MAX)
+
+
+def test_pes2019_reads_the_shipped_table():
+    """The map against the real bytes: ids, names, bio and the pesdb.net card for Messi."""
+    db = pes2019.Cpk2019(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"))
+    table = db.read_table("Player")
+    assert len(table) == 13805, len(table)
+    found = table.find("7511")
+    assert found, "L. Messi is not in the shipped table"
+    i = found[0]
+    assert (table.name(i), table.shirt(i)) == ("L. MESSI", "MESSI"), table.name(i)
+    assert (table.get(i, "Height"), table.get(i, "Weight"), table.get(i, "Age")) == (170, 72, 31)
+    assert table.get(i, "Foot") == 1, "Messi is left-footed"
+    assert table.get(i, "Nationality") == 144, "country code 144 is Argentina"
+    assert pes2019.STYLE_NAMES[table.get(i, "Playing Style")] == "Creative Playmaker"
+    assert pes2019.POSITION_NAMES[table.get(i, "Position")] == "SS"
+    card = {"Attacking Prowess": 95, "Ball Control": 97, "Dribbling": 96, "Low Pass": 88,
+            "Lofted Pass": 86, "Finishing": 95, "Place Kicking": 90, "Swerve": 89,
+            "Speed": 86, "Explosive Power": 92, "Unwavering Balance": 95,
+            "Physical Contact": 66, "Jump": 67, "Stamina": 76, "Ball Winning": 48,
+            "Goalkeeping": 40, "GK Catch": 40, "Reflexes": 40}
+    got = {k: table.get(i, k) for k in card}
+    assert got == card, {k: (got[k], card[k]) for k in card if got[k] != card[k]}
+    # the goalie copy of the same map: Neuer's two skills are the two pesdb lists
+    neu = table.find("33185")[0]
+    assert (table.get(neu, "Height"), table.get(neu, "Weight")) == (193, 92)
+    skills = [label for label, _bit in pes2019.FLAG_FIELDS.items() if table.get(neu, label)]
+    assert sorted(skills) == ["Skill: GK Long Throw", "Skill: GK Low Punt"], skills
+
+
+def test_pes2019_teams_coaches_and_squads_line_up():
+    """Every foreign key resolves: assignment -> team, team -> coach, and the real squad."""
+    db = pes2019.Cpk2019(os.path.join(pes2019_install(), "Data", "dt10_x64.cpk"))
+    teams = pes2019.TeamTable(*db.read_raw("Team"))
+    coaches = pes2019.CoachTable(*db.read_raw("Coach"))
+    assign = pes2019.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    stadiums = pes2019.StadiumTable(*db.read_raw("Stadium"))
+    assert (len(teams), len(coaches), len(assign), len(stadiums)) == (529, 529, 14368, 44)
+    barca = teams.by_id()[108]
+    assert teams.name(barca) == "BARCELONA"
+    assert coaches.name(coaches.by_id()[teams.coach_id(barca)]) == "E. VALVERDE"
+    assert stadiums.name(stadiums.find("2")[0]) == "Camp Nou"
+    rows = assign.find(7511)
+    assert sorted((teams.name(teams.by_id()[assign.team(r)]), assign.number(r))
+                  for r in rows) == [("ARGENTINA", 10), ("BARCELONA", 10)], rows
+    known = set(teams.by_id())
+    unknown = {assign.team(r) for r in range(len(assign))} - known
+    assert not unknown, f"{len(unknown)} squad rows point at no team: {sorted(unknown)[:5]}"
+
+
+def test_pes2019_default_targets_include_the_mounted_packs():
+    """The writer's default list: the database pack first, then what DpFileList mounts."""
+    folder = pes2019_install()
+    paths = [os.path.basename(p) for p in pes2019.database_cpks(folder)]
+    assert paths[0] == "dt10_x64.cpk", paths
+    packs = pes2019.mounted_packs(folder)
+    assert packs, "DpFileList.bin names no packs"
+    assert paths[1:] == packs, paths
+    live = [p for p in pes2019.database_cpks(folder) if p.endswith("dt80_200E_x64.cpk")]
+    if live:                      # the live-update pack carries a superset of the base table
+        assert len(pes2019.Cpk2019(live[0]).read_table("Player")) == 16762
+
+
+def test_pes2019_patch_round_trip_and_restore():
+    """One ability and one name change; every other row and field stays byte-identical."""
+    box = pes2019_box()
+    path = os.path.join(box, "game", "Data", "dt10_x64.cpk")
+    original = open(path, "rb").read()
+    db = pes2019.Cpk2019(path)
+    table = db.read_table("Player")
+    i = table.find("7511")[0]
+    before = bytes(table.records[i])
+    table.set(i, "Ball Control", 80)
+    table.set_name(i, shirt="MESSI-X")
+    db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+    back = pes2019.Cpk2019(path).read_table("Player")
+    assert len(back) == len(table), "the row count changed"
+    assert back.get(i, "Ball Control") == 80 and back.shirt(i) == "MESSI-X"
+    # Ball Control is a 6-bit field at bit 134 and the shirt name ends at +102: a few bytes
+    moved = [k for k in range(pes2019.REC) if before[k] != back.records[i][k]]
+    assert len(moved) <= 6, f"{len(moved)} bytes moved: {moved}"
+    for j in range(len(back)):
+        if j != i:
+            assert bytes(back.records[j]) == bytes(table.records[j]), f"row {j} moved"
+    backups = pes2019.backup_list(os.path.join(box, "backups"))
+    assert backups, "no backup was taken"
+    for name in backups:
+        pes2019.restore_backup(name)
+    assert open(path, "rb").read() == original, "restore did not return the original bytes"
+    shutil.rmtree(box, ignore_errors=True)
+
+
+def test_pes2019_tab_swaps_the_body_and_shows_players():
+    """The tab drives the shared panel: body swap, search, select, and back again."""
+    folder = pes2019_install()
+    with gui() as app:
+        app.cfg["pes2019_dir"] = folder
+        app.set_view_mode("pes2019")
+        app.update()
+        panel = app._pes2019_panel
+        assert panel.winfo_ismapped(), "the PES 2019 panel is not on screen"
+        assert not app._one_page_body.winfo_manager(), "the PES 2021 body is still packed"
+        assert panel.copies, "the panel read no player copies"
+        panel.q.set("messi")
+        panel.fill()
+        rows = panel.tree.get_children()
+        assert rows, "the panel list came up empty"
+        panel.tree.selection_set(rows[0])
+        panel.pick()
+        assert panel.pid == 7511, panel.pid
+        assert panel.name_vars["Name"].get() == "L. MESSI", panel.name_vars["Name"].get()
+        app.set_view_mode("players")
+        app.update()
+        assert not panel.winfo_ismapped(), "the panel stayed on screen"
+        assert app._one_page_body.winfo_manager(), "the PES 2021 body did not come back"
+        app.set_view_mode("pes2019")
+        app.update()
+        assert panel.winfo_ismapped(), "the panel did not come back"
+
+
+
+def gtk4_python():
+    """An interpreter that can import GTK4, picked the way bin/pesforge-gtk4 picks one.
+
+    The interpreter running the suite is not necessarily the one with system PyGObject: a venv
+    without system site packages has no `gi` at all.
+    """
+    for candidate in (os.environ.get("PESFORGE_GTK4_PYTHON"), sys.executable,
+                      "/usr/bin/python3", "python3"):
+        if not candidate:
+            continue
+        path = candidate if os.sep in candidate else shutil.which(candidate)
+        if not path or not os.path.isfile(path):
+            continue
+        probe = subprocess.run([path, "-c", 'import gi; gi.require_version("Gtk", "4.0");'
+                                             ' from gi.repository import Gtk'], capture_output=True)
+        if probe.returncode == 0:
+            return path
+    raise RuntimeError("no interpreter with GTK4 (PyGObject) for the GTK4 app")
+
+
+def test_gtk4_app_builds_and_searches():
+    """The GTK4 screen builds on the installed PES 2019 table and its search narrows the list.
+
+    Drives the app through its own self-check (`PESFORGE_GTK_SELFTEST=1`): a window that opens is
+    not the same as a list holding the real rows with a record loaded into the form. The same run
+    proves the two data/UI fixes: no CLUB cell shows a national team where the club belongs, and
+    the window carries no inert button (the spike's Undo/Redo/Discard/Save-to-game header row).
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="1")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")],
+                         capture_output=True, text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST OK" in text, text[-600:]
+    assert out.returncode == 0, f"the app exited {out.returncode}: {text[-400:]}"
+    found = re.search(r"SELFTEST OK players=(\d+) selected=(\d+) abilities=(\d+) chips=(\d+)", text)
+    assert found, text[-300:]
+    players, selected, abilities, chips = (int(g) for g in found.groups())
+    assert players > 10000, f"only {players} players listed"
+    assert selected < players, f"row {selected} selected of {players}"
+    assert abilities == 23, f"{abilities} ability rows"
+    expected = len(pes2019.SKILLS) + len(pes2019.COM_STYLES)
+    assert chips == expected, f"{chips} skill chips, the map holds {expected}"
+    assert "CHROME OK buttons=6" in text, text[-600:]
+    found = re.search(r"nations=(\d+)", text)
+    assert found, text[-300:]
+    wanted = national_first_count(pes2019_mounted_database(game))
+    assert int(found.group(1)) == wanted and wanted > 0, (
+        f"the app repaired {found.group(1)} national-first club rows, the CPK says {wanted}")
+
+
+def test_gtk4_bulk_matrix_stages_and_commits():
+    """Tick rows, batch-edit one field across them, commit, restore — on a sandbox copy.
+
+    The app runs the whole cycle itself (`PESFORGE_GTK_SELFTEST=write`); the assertions are
+    that the staging is right, the file on disk really changed, and the backup put it back.
+    """
+    box = pes2019_box()                        # a copy of dt10_x64.cpk, never the install
+    game = os.path.join(box, "game")
+    cpk = os.path.join(game, "Data", "dt10_x64.cpk")
+    before = open(cpk, "rb").read()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, SPFL_STATE=os.path.join(box, "state"),
+               PESFORGE_GTK_SELFTEST="write")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE OK" in text, text[-600:]
+    found = re.search(r"SELFTEST WRITE OK players=(\d+) edited=(\d+) backups=(\d+) restored=(\d+)", text)
+    assert found, text[-300:]
+    assert "state=clean" in text, "the saved rows still read as edited in the list"
+    players, edited, backups, restored = (int(g) for g in found.groups())
+    assert players > 10000, f"only {players} players listed"
+    assert edited == 3, f"{edited} players edited"
+    assert backups >= 1 and restored == 1, (backups, restored)
+    assert open(cpk, "rb").read() == before, "the sandbox was not restored byte for byte"
+    shutil.rmtree(box, ignore_errors=True)
+
+
+def test_gtk4_starts_empty_and_imports_on_demand():
+    """The GTK4 window reads nothing until a database is imported, then fills itself."""
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PES2019_DIR=game, PESFORGE_GTK_SELFTEST="empty")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=600)
+    text = out.stdout + out.stderr
+    assert "SELFTEST EMPTY OK" in text, text[-600:]
+    found = re.search(r"SELFTEST EMPTY OK rows=(\d+) source=(\S+)", text)
+    assert found, text[-300:]
+    assert int(found.group(1)) > 10000, found.group(1)
+    # a pick from the game's own Data/ that carries no tables resolves to one that does
+    empty_pick = os.path.join(game, "Data", "dt00_4K_x64.cpk")
+    if os.path.isfile(empty_pick):
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", empty_pick],
+                            capture_output=True, text=True, timeout=600,
+                            env=dict(env, PESFORGE_GTK_SELFTEST="1"))
+        picked = out.stdout + out.stderr
+        assert "source=dt10_x64.cpk" in picked, picked[-400:]
+    # and a folder pick: the install itself resolves to the pack the game loads
+    pack = pes2019_mounted_database(game)
+    if pack and os.path.isfile(pack):
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, timeout=900,
+                             env=dict(env, PESFORGE_GTK_SELFTEST="1"))
+        picked = out.stdout + out.stderr
+        assert "SELFTEST OK" in picked, picked[-400:]
+        assert f"source={os.path.basename(pack)}" in picked, picked[-400:]
+
+
+def test_gtk4_import_probe_identifies_the_release():
+    """The importer reads the release out of the table, and explains a file it cannot use.
+
+    A pick also resolves: the folder the file sits in, then the install around it. SP Football
+    Life's `Data/dt10_x64.cpk` is an 86 KB stub with no player table, so a filename is never
+    enough — the resolver probes the candidates and takes the one that really carries a table.
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    junk = f"/tmp/pesforge-notacpk-{os.getpid()}.txt"
+    pack = pes2019_mounted_database(game)
+    script = (
+        "import sys; sys.path.insert(0, %r); import editor_gtk as g\n"
+        "print('good', g.probe_database(%r))\n"
+        "open(%r, 'w').write('not a cpk')\n"
+        "print('junk', g.probe_database(%r))\n"
+        "print('junk-dir', g.find_database(%r)[0] == '')\n"
+    ) % (ROOT, os.path.join(game, "Data", "dt10_x64.cpk"), junk, junk, os.path.dirname(junk))
+    # a pick that lands on a CPK without the tables must find the one that has them
+    empty = os.path.join(game, "Data", "dt00_4K_x64.cpk")
+    if os.path.isfile(empty):
+        script += ("print('file-pick', g.describe_pick(%r)[2].split('/')[-1])\n"
+                   "print('data-folder', g.find_database(%r)[0].split('/')[-1])\n"
+                   ) % (empty, os.path.dirname(empty))
+    if pack and os.path.isfile(pack):
+        script += ("print('install', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('install-vintage', g.find_database(%r)[1])\n"
+                   "print('install-ok', g.describe_pick(%r)[1])\n"
+                   ) % (game, game, game)
+    # SP Football Life's Data/ holds no database at all: the answer is one shelf up in download/
+    spfl = settings.game_dir() or ""
+    if spfl and os.path.isfile(os.path.join(spfl, "download", "data_s2627.cpk")):
+        script += ("print('spfl-root', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('spfl-vintage', g.find_database(%r)[1])\n"
+                   "print('spfl-loadable', g.describe_pick(%r)[1])\n"
+                   "print('spfl-data-pick', g.describe_pick(%r)[2].split('/')[-1])\n"
+                   ) % (spfl, spfl, spfl, os.path.join(spfl, "Data"))
+    pes15 = os.environ.get("PES2015_DIR") or ""
+    if pes15 and os.path.isfile(os.path.join(pes15, "Data", "dt10.cpk")):
+        script += ("print('pes2015-root', g.find_database(%r)[0].split('/')[-1])\n"
+                   "print('pes2015-vintage', g.find_database(%r)[1])\n"
+                   ) % (pes15, pes15)
+    out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=900,
+                         env=dict(os.environ, GDK_BACKEND="x11"))
+    text = out.stdout + out.stderr
+    assert "('pes2019'" in text, text[-400:]
+    assert "13,805" in text, text[-400:]
+    assert "'unreadable'" in text, text[-400:]
+    assert "junk-dir True" in text, text[-400:]
+    if os.path.isfile(empty):
+        assert "file-pick dt10_x64.cpk" in text, text[-400:]
+        assert "data-folder dt10_x64.cpk" in text, text[-400:]
+    if pack and os.path.isfile(pack):
+        assert f"install {os.path.basename(pack)}" in text, text[-500:]
+        assert "install-vintage pes2019" in text, text[-500:]
+        assert "install-ok True" in text, text[-500:]
+    if spfl and os.path.isfile(os.path.join(spfl, "download", "data_s2627.cpk")):
+        assert "spfl-root data_s2627.cpk" in text, text[-500:]
+        assert "spfl-vintage pes2021" in text, text[-500:]
+        assert "spfl-loadable True" in text, text[-500:]
+        assert "spfl-data-pick data_s2627.cpk" in text, text[-500:]
+    if pes15 and os.path.isfile(os.path.join(pes15, "Data", "dt10.cpk")):
+        assert "pes2015-root dt10.cpk" in text, text[-500:]
+        assert "pes2015-vintage pes2015" in text, text[-500:]
+    try:
+        os.unlink(junk)
+    except OSError:
+        pass
+
+
+def test_gtk4_import_cycle_across_installs():
+    """Import PES 2019, unload, import SP Football Life, unload, import PES 2015.
+
+    The sequence as driven by hand, asserted: this build loads its own vintage, identifies
+    the others by record size instead of mis-reading them, and unloads cleanly each time.
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="cycle", PES2019_DIR=game,
+               SPFL_DIR=settings.game_dir() or "")
+    try:
+        env["PES2015_DIR"] = pes2015_install()
+    except FileNotFoundError:
+        env["PES2015_DIR"] = ""
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST CYCLE OK" in text, text[-700:]
+    assert "step=1 name=pes2019 result=loaded" in text, text[-700:]
+    assert "step=1 name=pes2019 result=skipped" not in text, text[-700:]
+    if env["SPFL_DIR"]:
+        assert "step=2 name=spfl result=loaded" in text, text[-700:]
+        assert "PES 2021" in text, text[-700:]
+    if env["PES2015_DIR"]:
+        assert "step=3 name=pes2015 result=loaded" in text, text[-700:]
+        assert "PES 2015 · 10,091 players" in text, text[-700:]
+
+
+def test_gtk4_clicking_a_player_shows_that_player():
+    """The form follows the row that was clicked, not the previous selection.
+
+    GtkSelectionModel::selection-changed hands over the position that was current *before*
+    the change, so reading it left the form one click behind — reported as "not loading some
+    players when selected". The click itself now drives the form.
+    """
+    game = pes2019_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="select", PES2019_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST SELECT OK" in text, text[-600:]
+    assert "a click shows the row it hit: 7" in text, text[-600:]
+
+
+def test_gtk4_import_hub_describes_a_pick():
+    """The hub names what a pick holds and marks whether this build can open it."""
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="hub", PES2019_DIR=pes2019_install(),
+               SPFL_DIR=settings.game_dir() or "")
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST HUB OK" in text, text[-600:]
+    assert "a PES 2019 pack is loadable: True" in text, text[-600:]
+    assert "a PES 2015 database is loadable: True" in text, text[-600:]
+    if os.path.isfile(os.path.join(settings.game_dir() or "", "download", "data_s2627.cpk")):
+        assert "SP Football Life is loadable: True" in text, text[-600:]
+
+
+def test_gtk4_edits_and_saves_pes2015():
+    """PES 2015 is editable: load the install, change a player, save into a copy, read it back.
+
+    The check copies Data/dt10.cpk into a scratch folder shaped like an install first, and
+    asserts the game's own database is byte-identical when it finishes.
+    """
+    game = pes2015_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write2015", PES2015_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE2015 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+
+
+# ------------------------------------------------------------------ PES 5
+def pes5_install():
+    """The PES 5 install, or a skip when this machine has none (set PES5_DIR)."""
+    folder = os.environ.get("PES5_DIR") or pes5.find_game_dir()
+    if not folder or not pes5.is_pes5_dir(folder):
+        raise FileNotFoundError(2, "no PES 5 install (set PES5_DIR)", "pes5.exe")
+    return folder
+
+
+def pes5_option():
+    """The option file to decode: the install's shipped copy (a template), else the live one."""
+    try:
+        shipped = os.path.join(pes5_install(), "misc", "Option File", pes5.OPT_NAME)
+        if os.path.isfile(shipped):
+            return shipped
+    except FileNotFoundError:
+        pass
+    live = pes5.live_option_file()
+    if not live:
+        raise FileNotFoundError(2, "no PES 5 option file (set PES5_DIR)", pes5.OPT_NAME)
+    return live
+
+
+def test_pes5_reads_the_shipped_option_file():
+    """Zidane and Buffon decode exactly, and the squads invert back into club rosters."""
+    path = pes5_option()
+    db = pes5.Cpk(path)
+    assert db.bad_sums == [], db.bad_sums
+    table = db.read_table("Player")
+    assert len(table) == pes5.PLAYERS + pes5.CREATED, len(table)
+    zid = table.find("Zidane")[0]
+    assert zid == 205 and table.shirt(zid) == "Z I D A N E", (zid, table.shirt(zid))
+    assert (table.get(zid, "Age"), table.get(zid, "Height"), table.get(zid, "Weight")) == \
+        (33, 185, 78)
+    assert pes5.NATION_NAMES[table.get(zid, "Nationality")] == "France"
+    assert pes5.POSITION_NAMES[table.get(zid, "Position")] == "AM"
+    assert table.get(zid, "Technique") == 99 and table.get(zid, "Dribble Accuracy") == 96
+    assert table.get(zid, "Skill: Playmaking") == 1 and table.get(zid, "Skill: Dribbling") == 0
+    gk = table.find("Buffon")[0]
+    assert gk == 300 and table.get(gk, "GK Ability") == 97
+    assert table.get(gk, "Skill: 1-on-1 Stopper") == 1
+    teams = pes5.TeamTable(*db.read_raw("Team"))
+    assert len(teams) == 138 and teams.name(0) == "Arsenal FC", len(teams)
+    assign = pes5.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    arsenal = [(assign.number(r), table.name(assign.player(r)))
+               for r in range(len(assign)) if assign.team(r) == teams.id(0)]
+    assert arsenal[0] == (1, "Lehmann"), arsenal[:3]
+    assert table.find("205") == [205] and table.find("32768") == [pes5.PLAYERS]
+
+
+def test_pes5_skills_are_the_games_own_names():
+    """The classic panel shows the abilities the games themselves name, in their order.
+
+    The PESFan editor's table (Stats.java) abridged them — "Anti-Dribble" and "1-T Pass" are
+    in neither game — and mapped byte 20 bit 7 as "GK Kick", which sits on 59.3% of the live
+    roster (measured 2026-11-07) and on no edit menu. The names below are the games' own
+    strings (dat/e_text.afs, byte-identical in PES 5 and PES 6).
+    """
+    assert pes5.SKILLS == (
+        "Dribbling", "Tactical Dribble", "Positioning", "Reaction", "Playmaking", "Passing",
+        "Scoring", "1-1 Scoring", "Post Player", "Lines", "Middle Shooting", "Side", "Centre",
+        "Penalties", "1-Touch Pass", "Outside", "Marking", "Sliding Tackle", "Covering",
+        "D-Line Control", "Penalty Stopper", "1-on-1 Stopper", "Long Throw")
+    assert "Skill: GK Kick" not in pes5.FIELD_BY_LABEL
+
+
+def test_pes5_fixture_round_trip_and_detection():
+    """The codec on a synthetic option file: no game data needed, so CI gates on it.
+
+    The raw signature the shipped files carry, a no-edit save that is byte identical, an
+    edit confined to its own record, checksums that still pass after a write, and detection
+    reading the bytes rather than the file's name.
+    """
+    box = tempfile.mkdtemp(prefix="pesforge-pes5-fixture-")
+    try:
+        path = os.path.join(box, "KONAMI-WIN32PES5OPT")
+        fixtures.build_option_file(path)
+        raw = open(path, "rb").read()
+        assert len(raw) == pes5.FILESIZE, len(raw)
+        assert raw[pes5.SIG_OFF:pes5.SIG_OFF + 4] == b"\xe7\xb0\x05\xfa", \
+            raw[pes5.SIG_OFF:pes5.SIG_OFF + 4].hex()
+        db = pes5.Cpk(path)
+        assert db.bad_sums == []
+        table = db.read_table("Player")
+        assert len(table) == pes5.PLAYERS + pes5.CREATED
+        assert table.name(1) == "PLAYER 0001" and table.shirt(1) == "PA"
+        assert 40 <= table.get(1, "Attack") <= 99
+        again = os.path.join(box, "again.bin")
+        pes5.save(db.data, again)                     # no edits: byte for byte
+        assert open(again, "rb").read() == raw
+        orig = bytes(db.data)                         # the plaintext before the edit
+        was = table.get(1, "Attack")
+        table.set(1, "Attack", was + 1 if was < 99 else was - 1)
+        db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+        back = pes5.Cpk(path)
+        assert back.bad_sums == [], back.bad_sums
+        assert back.read_table("Player").get(1, "Attack") != was
+        lo = pes5.BLOCK[4] + pes5.REC                       # record 1's own bytes
+        hi = pes5.BLOCK[4] + 2 * pes5.REC
+        checksum = (pes5.BLOCK[4] - 8, pes5.BLOCK[4] - 4)   # block 4's recomputed sum
+        ranges = pes2015_diffs(orig, back.data)
+        assert any(lo <= r[0] and r[1] <= hi for r in ranges), ranges
+        assert all((lo <= r[0] and r[1] <= hi) or (checksum[0] <= r[0] and r[1] <= checksum[1])
+                   for r in ranges), ranges
+        names = pes5.backup_list(os.path.join(box, "backups"))
+        assert names and os.path.basename(names[0]).startswith(pes5.OPT_NAME)
+        pes5.restore_backup(names[0])
+        assert open(path, "rb").read() == raw
+        from pesforge_gtk import importing as imp       # no gi: the data layer, headless
+        vintage, note = imp.probe_database(path)
+        assert vintage == "pes5" and "5,184 players" in note, (vintage, note)
+        renamed = os.path.join(box, "definitely-a-pes2019-pack.cpk")
+        shutil.copy2(path, renamed)
+        assert imp.probe_database(renamed)[0] == "pes5"
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_pes5_probe_and_resolution():
+    """A folder pick resolves to the file the game reads, and junk is refused, not mis-read."""
+    pes5_option()                                   # skip when this machine has none
+    from pesforge_gtk import importing as imp
+    live = imp.vintage_database("pes5")
+    assert os.path.isfile(live), live
+    assert os.path.basename(live) == pes5.OPT_NAME
+    install = pes5_install()
+    found, vintage, _note = imp.find_database(install)
+    assert vintage == "pes5" and os.path.isfile(found), (found, vintage)
+    details, can_load, target = imp.describe_pick(install)
+    assert can_load and target and os.path.isfile(target), details
+    junk = os.path.join(tempfile.gettempdir(), f"pesforge-not-an-option-{os.getpid()}.bin")
+    with open(junk, "wb") as fh:
+        fh.write(b"not an option file")
+    try:
+        assert imp.probe_database(junk)[0] != "pes5", imp.probe_database(junk)
+    finally:
+        os.unlink(junk)
+
+
+def test_gtk4_edits_and_saves_pes5():
+    """PES 5 is editable: load the option file, change a player, save into a copy, read it back.
+
+    The check copies KONAMI-WIN32PES5OPT into a scratch folder first, and asserts the game's
+    own file is byte-identical when it finishes.
+    """
+    pes5_option()                                   # skip when this machine has none
+    game = pes5_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write5", PES5_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE5 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+
+
+
+def test_system_theme_matches_the_desktop():
+    """The app paints as the desktop actually declares itself, not as a False-by-default flag says.
+
+    `gtk-application-prefer-dark-theme` stays False even under Adwaita-dark, so reading only that
+    flag sent a dark desktop the light palette: dark ink into the theme's dark value boxes, where
+    every spinbutton then looked empty. The palette must agree with what the desktop declares.
+    """
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    scheme = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                            capture_output=True, text=True).stdout.strip().strip("'")
+    if scheme not in ("prefer-dark", "prefer-light"):
+        return                                     # nothing declared: the app's own default stands
+    sys.path.insert(0, ROOT)
+    import settings as _settings
+    pinned = str(_settings.load().get("mode", "")).strip().lower()
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="theme")
+    env.pop("PESFORGE_THEME", None)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=300)
+    text = out.stdout + out.stderr
+    assert "SELFTEST THEME" in text, text[-500:]
+    line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST THEME")][0]
+    mode = line.split()[2]
+    # a mode the user pinned in the app's own settings outranks what the desktop declares
+    want = pinned if pinned in ("light", "dark") else ("dark" if scheme == "prefer-dark" else "light")
+    assert mode == want, f"desktop declares {scheme}, the app painted {mode}: {line}"
+
+
+def test_gtk4_value_fields_clamp_and_step():
+    """A value field steps by one (five with Shift) and never leaves its own range.
+
+    The stepping lives in `step_widget`; the wheel and arrow controllers call it, so this pins the
+    arithmetic and the clamp without a keyboard.
+    """
+    mod = importlib.import_module("editor_gtk")
+    real = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if not real:
+        raise RuntimeError("no display for a GTK widget")
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk  # noqa:  the widget needs the binding loaded
+    Gtk.init()
+    spin = Gtk.SpinButton.new_with_range(40, 99, 1)
+    spin.set_value(97)
+    mod.step_widget(spin, 1)
+    assert spin.get_value() == 98, spin.get_value()
+    mod.step_widget(spin, 5)
+    assert spin.get_value() == 99, f"the range must clamp: {spin.get_value()}"
+    mod.step_widget(spin, -5)
+    assert spin.get_value() == 94, spin.get_value()
+    for _ in range(60):
+        mod.step_widget(spin, -1)
+    assert spin.get_value() == 40, f"the floor must hold: {spin.get_value()}"
+    bio = Gtk.SpinButton.new_with_range(150, 215, 1)
+    bio.set_value(214)
+    mod.step_widget(bio, 5)
+    assert bio.get_value() == 215, bio.get_value()
+
+# ------------------------------------------------------- synthetic fixtures (no game data)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixtures                                              # noqa: E402
+
+
+@contextlib.contextmanager
+def fixture_install(vintage, players=320, seed=7):
+    """One release's synthetic install in a scratch dir, with the state dir redirected."""
+    box = tempfile.mkdtemp(prefix=f"pesforge-fixture-{vintage}-")
+    saved = os.environ.get("SPFL_STATE")
+    os.environ["SPFL_STATE"] = os.path.join(box, "state")
+    os.makedirs(os.environ["SPFL_STATE"], exist_ok=True)
+    try:
+        yield fixtures.build_install(box, vintage, players, seed), box
+    finally:
+        if saved is None:
+            os.environ.pop("SPFL_STATE", None)
+        else:
+            os.environ["SPFL_STATE"] = saved
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_fixture_containers_are_valid():
+    """Every fixture is a well-formed container: independent reader, alignment, no overlap."""
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, _box):
+            regions = fixtures.validate_cpk(path, vintage)
+            names = {name for _s, _e, name in regions}
+            assert names == {"Player.bin", "Team.bin", "PlayerAssignment.bin"}, names
+
+
+def test_fixture_build_is_deterministic():
+    """The same seed builds the same bytes, so a fixture failure is reproducible."""
+    with fixture_install("pes2019") as (path, box):
+        again = fixtures.build_cpk("pes2019", os.path.join(box, "again.cpk"))
+        with open(path, "rb") as a, open(again, "rb") as b:
+            assert a.read() == b.read(), "the fixture generator is not deterministic"
+
+
+def test_fixture_no_edit_save_returns_the_original_bytes():
+    """Load then save with no edits: byte-identical, because the re-pack is deterministic.
+
+    The payloads are written by the same writers the app saves with, so the decoded payload
+    and the container are both identical — the stronger form of the round trip.
+    """
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            with open(path, "rb") as f:
+                before = f.read()
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            with open(path, "rb") as f:
+                assert f.read() == before, f"{vintage}: a no-edit save moved bytes"
+            records, _prefix = fixtures.player_records(path, vintage)
+            assert records == [bytes(r) for r in table.records], f"{vintage}: rows differ"
+            backups = mod.backup_list(os.path.join(box, "backups"))
+            assert backups, f"{vintage}: the save took no backup"
+            for name in backups:
+                mod.restore_backup(name)
+            with open(path, "rb") as f:
+                assert f.read() == before, f"{vintage}: restore did not return the bytes"
+
+
+def test_fixture_single_field_edit_moves_only_its_record_and_span():
+    """One field on one record: the record moves, and only the bytes its map covers."""
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            before, _prefix = fixtures.player_records(path, vintage)
+            i, label = 7, "Speed"
+            was = table.get(i, label)
+            table.set(i, label, was + 1)
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            after, _prefix = fixtures.player_records(path, vintage)
+            assert len(after) == len(before), f"{vintage}: the row count changed"
+            moved = [k for k in range(len(before)) if before[k] != after[k]]
+            assert moved == [i], f"{vintage}: records that moved: {moved}"
+            bit, width, _add = mod.FIELD_BY_LABEL[label]
+            lo, hi = bit // 8, (bit + width + 7) // 8
+            span = [k for k in range(len(before[i])) if before[i][k] != after[i][k]]
+            assert span and all(lo <= k < hi for k in span), (vintage, span, (lo, hi))
+            assert mod.Cpk(path).read_table("Player").get(i, label) == was + 1
+
+
+def test_fixture_batch_edit_moves_only_those_records():
+    """A batch write over N rows changes those N records and nothing else."""
+    picks = [3, 9, 40, 41, 300]
+    for vintage in ("pes2015", "pes2019", "pes2021"):
+        with fixture_install(vintage) as (path, box):
+            mod = fixtures.MODS[vintage]
+            db = mod.Cpk(path)
+            table = db.read_table("Player")
+            before, _prefix = fixtures.player_records(path, vintage)
+            old = {i: table.get(i, "Speed") for i in picks}
+            for i in picks:
+                table.set(i, "Speed", min(99, old[i] + 2))
+            db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+            after, _prefix = fixtures.player_records(path, vintage)
+            moved = [k for k in range(len(before)) if before[k] != after[k]]
+            assert moved == picks, f"{vintage}: moved {moved}, wanted {picks}"
+            back = mod.Cpk(path).read_table("Player")
+            for i in picks:
+                assert back.get(i, "Speed") == min(99, old[i] + 2), (vintage, i)
+
+
+def test_fixture_release_detection_reads_bytes_not_names():
+    """Three releases, a mislabeled file and a table-less stub all identify by their bytes."""
+    py = gtk4_python()
+    box = tempfile.mkdtemp(prefix="pesforge-fixture-probe-")
+    try:
+        for vintage in ("pes2015", "pes2019", "pes2021"):
+            fixtures.build_install(os.path.join(box, vintage), vintage)
+        fixtures.build_mislabeled(os.path.join(box, "mislabeled"))   # 2015 bytes, 2019 name
+        fixtures.build_stub(os.path.join(box, "stub"))
+        script = (
+            "import sys; sys.path.insert(0, %r); sys.path.insert(0, %r)\n"
+            "import editor_gtk as g\n"
+            "for name in ('pes2015', 'pes2019', 'pes2021', 'mislabeled'):\n"
+            "    path, vintage, _note = g.find_database(%r + '/' + name)\n"
+            "    print('probe', name, vintage, bool(path))\n"
+            "print('stub', g.probe_database(%r)[0])\n"
+            "print('stub-folder', g.find_database(%r)[1])\n"
+        ) % (ROOT, os.path.join(ROOT, "tests"), box,
+             os.path.join(box, "stub", "Data", "dt00_4K_x64.cpk"), os.path.join(box, "stub"))
+        out = subprocess.run([py, "-c", script], capture_output=True, text=True, timeout=300,
+                             env=dict(os.environ, GDK_BACKEND="x11"))
+        text = out.stdout + out.stderr
+        for line in ("probe pes2015 pes2015 True", "probe pes2019 pes2019 True",
+                     "probe pes2021 pes2021 True", "probe mislabeled pes2015 True",
+                     "stub no player table", "stub-folder no player table"):
+            assert line in text, f"{line!r} missing from:\n{text[-600:]}"
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_data_layer_imports_stay_toolkit_free():
+    """The data layer must not import gi or tkinter (it has to run headless, e.g. in CI)."""
+    script = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import cpk, pesdb, pesdb_maps, pes5, pes2015, pes2019, pes2021, settings, theme\n"
+        "bad = [m for m in ('gi', 'gi.repository', 'tkinter') if m in sys.modules]\n"
+        "print('toolkit-free', not bad, bad)\n"
+    ) % ROOT
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         timeout=120)
+    text = out.stdout + out.stderr
+    assert "toolkit-free True" in text, text[-500:]
 
 
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]
+    # PESFORGE_TEST_FILTER=gtk4,fixture narrows a local run to the named tests; CI runs all
+    want = os.environ.get("PESFORGE_TEST_FILTER", "").strip()
+    if want:
+        parts = [p for p in want.split(",") if p]
+        tests = [(n, f) for n, f in tests if any(p in n for p in parts)]
     failures = 0
     for name, fn in tests:
         try:
@@ -1410,6 +3018,8 @@ def main():
         except AssertionError as exc:
             failures += 1
             print(f"FAIL {name}: {exc}")
+        except RuntimeError as exc:                  # a skip for a missing optional runtime
+            print(f"skip {name}: {exc}")
     print(f"{len(tests) - failures}/{len(tests)} passed")
     return 1 if failures else 0
 

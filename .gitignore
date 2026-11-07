@@ -3,3 +3,10 @@ build/
 dist/
 raw/
 .venv/
+*.cpk
+*.bin
+backups/
+captures/
+/*.png
+.ruff_cache/
+.pytest_cache/

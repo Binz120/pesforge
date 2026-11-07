@@ -13,8 +13,22 @@ import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(_HERE, "data", "pesdb_maps.json")
 
-with open(DATA, encoding="utf-8") as _f:
-    _RAW = json.load(_f)
+
+def read_data(name):
+    """Bytes of a file the app ships in `data/`.
+
+    Works from the source tree and from inside a single-file zipapp (`.pyz`): in the archive
+    `__file__` is a path no `open()` can reach, so the archive itself is read instead.
+    """
+    if ".pyz" not in _HERE:                       # a real source tree
+        with open(os.path.join(_HERE, "data", name), "rb") as f:
+            return f.read()
+    import zipfile
+    with zipfile.ZipFile(_HERE[: _HERE.index(".pyz") + 4]) as z:
+        return z.read("data/" + name)
+
+
+_RAW = json.loads(read_data("pesdb_maps.json"))
 
 ABILITIES = {k: [a["name"] for a in v] for k, v in _RAW["abilities"].items()}
 SKILLS = {k: [(s["id"], s["name"]) for s in v] for k, v in _RAW["skills"].items()}
@@ -26,9 +40,6 @@ ALIASES = {
 }
 _ALIASES_BOTH = dict(ALIASES)
 _ALIASES_BOTH.update({dst: src for src, dst in ALIASES.items()})
-# In one game only; conversion reports these instead of guessing a value.
-# (PlaceKicking has no eFootball row but is reached from SetPieceTaking via ALIASES.)
-NO_COUNTERPART = {"DefensiveEngagement", "GKParrying", "GKClearing"}
 
 
 def abilities(version="PES2021"):
@@ -47,7 +58,9 @@ def _props(version):
 def convert_stats(values, src="EFootball", dst="PES2021"):
     """Map {stat name or PropertyName: value} between the two games.
 
-    Returns {"stats": {dst name: value}, "unmapped": [src names]}.
+    Returns {"stats": {dst name: value}, "unmapped": [src names]}. Three stats exist in one game
+    only — eFootball's Defensive Engagement and GK Parrying, PES 2021's GK Clearing — and they
+    are reported as unmapped rather than guessed at.
     """
     src_props = _props(src)
     dst_props = _props(dst)
