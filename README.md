@@ -36,7 +36,9 @@ filename: the folder itself, its `Data/` and its `download/`, and the same pair 
 the install root works too). Picking the PES 2019 install finds the pack the game loads
 (`download/dt80_200E_x64.cpk`); picking its `Data/` finds `dt10_x64.cpk`; picking a PES 2015 install
 finds `Data/dt10.cpk`; picking SP Football Life's install — or its `Data/`, which holds no database
-at all — finds `download/data_s2627.cpk`. A file pick that carries no player table (`Data/` is 40+
+at all — finds `download/data_s2627.cpk`; picking a PES 5 install — which holds no CPK anywhere —
+finds the option file the game itself reads (`~/Documents/P5OSOF/...` for Original Season,
+`~/Documents/KONAMI/...` for the plain release). A file pick that carries no player table (`Data/` is 40+
 CPKs, and SP Football Life's `Data/dt10_x64.cpk` is an 86 KB stub with no table in it) is answered
 with the file that should have been picked, and the hub's Load button before it is live.
 Candidates are opened in ranked order and the walk is capped (the 12 likeliest of what it found),
@@ -46,17 +48,17 @@ so a folder pick answers in seconds, not a scan.
 refused by name and the hub says which file it should have been. **Unload** drops the loaded
 database and returns to the empty window; it refuses while edits are pending, naming the count.
 
-**What you can edit.** One panel serves all three releases this build writes — everything the
+**What you can edit.** One panel serves all four releases this build writes — everything the
 screen shows comes from the loaded release's own map module (`pes2021.py` / `pes2019.py` /
-`pes2015.py`):
+`pes2015.py` / `pes5.py`):
 
-| | PES 2021 / SP Football Life | PES 2019 | PES 2015 |
-|---|---|---|---|
-| records | 312 bytes, 26,395 players in `download/data_s2627.cpk` | 188 bytes, 13,805 in `Data/dt10_x64.cpk` | 180 bytes, 10,091 in `Data/dt10.cpk` |
-| abilities | 25 | 23 | 19 |
-| playing style | named (dropdown) | named (dropdown) | numeric (0–21) |
-| bio rows | + Reputation | + Reputation | — |
-| skills / COM styles | 48 chips | 46 chips | 27 chips |
+| | PES 2021 / SP Football Life | PES 2019 | PES 2015 | PES 5 |
+|---|---|---|---|---|
+| records | 312 bytes, 26,395 players in `download/data_s2627.cpk` | 188 bytes, 13,805 in `Data/dt10_x64.cpk` | 180 bytes, 10,091 in `Data/dt10.cpk` | 124 bytes, 5,000 + 184 created slots in the `KONAMI-WIN32PES5OPT` option file |
+| abilities | 25 | 23 | 19 | 26 |
+| playing style | named (dropdown) | named (dropdown) | numeric (0–21) | numeric dribble style (1–4) |
+| bio rows | + Reputation | + Reputation | — | condition, consistency, weak foot 1–8, injury C/B/A |
+| skills / COM styles | 48 chips | 46 chips | 27 chips | 24 chips (the special abilities) |
 
 - **List** — virtualized (`GtkColumnView` over the whole roster): ID, NAME, CLUB, POS, SPD, BC, FIN, STA,
   STATE. Every column sorts except POS; a tick column selects rows for the bulk edit. Names elide
@@ -65,7 +67,8 @@ screen shows comes from the loaded release's own map module (`pes2021.py` / `pes
   list says how many rows are shown, and an empty result names the query.
 - **Player card** — hero name, `id · club (#squad number)`, Height/Weight/Age/Foot chips, and the
   three name slots (name, shirt name, Japanese name).
-- **Abilities** — 40–99, a spin box (and a Cairo bar that colours by tier in the wide layout);
+- **Abilities** — the release's own range (40–99, or 0–99 on the classic map), a spin box (and a
+  Cairo bar that colours by tier in the wide layout);
   **Position** is a dropdown over the release's position names.
 - **BIO / SKILLS & COM STYLES** — height, weight, age, nationality (code plus the country name),
   form, weak foot usage/accuracy, injury resistance and reputation where the release has it,
@@ -86,7 +89,8 @@ screen shows comes from the loaded release's own map module (`pes2021.py` / `pes
   like any other edit.
 
 **Save to game** (the footer button) writes every pending edit into *each copy* of the Player table
-that carries the player — the CPK you loaded plus the install's other database CPKs — backing up the
+that carries the player — the CPK you loaded plus the install's other database CPKs (for PES 5, the
+one option file) — backing up the
 regions it will touch (TOC, header table, payload) under the state folder first, then re-reading
 each copy to check the edit landed. It reports which files were written, or which one failed to
 read back. **Revert** drops the pending edits and re-reads from disk. The status line always names
@@ -94,8 +98,9 @@ the database it is reporting on.
 
 **What this build does not do** (the Tk build and the CLIs do): undo/redo, per-field revert, the
 pesmaster photo, appearance/coach/stadium editing, roster CSV, and club search as its own tab.
-All three vintages are read *and* edited here: PES 2019 (188-byte records), PES 2015 (180) and
-SP Football Life / PES 2021 (312), each through its own map module. There is no separate "PES 2015
+All four vintages are read *and* edited here: PES 2019 (188-byte records), PES 2015 (180),
+SP Football Life / PES 2021 (312) and the classic PES 5 option file (124-byte records), each
+through its own map module. There is no separate "PES 2015
 tab": the release is read off the file you import, so a tab could only disagree with it.
 
 **Self-checks** (`PESFORGE_GTK_SELFTEST=…`, each prints a marker and exits):
@@ -109,6 +114,7 @@ tab": the release is read off the file you import, so a tab could only disagree 
 | `hub` | what a pick holds — a CPK or a folder — and Load only when this build can open it |
 | `write` | tick rows, bulk-edit, save into a sandbox copy, read the edits back, restore and compare bytes |
 | `write2015` | the same for PES 2015, on a copy, with the game's own file hashed before and after |
+| `write5` | the same for the PES 5 option file, on a copy, checksums and the game's own file verified after |
 | `write2021` | the same for SP Football Life / PES 2021 (abilities, a skill bit, the shirt name) |
 | `fit` | neither editor pane needs a scrollbar at the window's size (`PESFORGE_GTK_SIZE=WxH` picks one) |
 | `theme` | the palette in force (light or dark, from the desktop) and its fg/bg contrast |
@@ -202,6 +208,28 @@ percent, so a re-packed table usually outgrows its slot and is appended at the e
 its TOC entry repointed (the file grows by about one table per save: ~0.5 MB on dt10, ~0.6 MB on the
 data pack); an edit that fits is patched in place and the file size does not move.
 
+### PES 5 (the option file)
+
+The classic era has no CPK, no WESYS and no CLI of its own — **the GTK4 window edits it**. The whole
+database is one 1,250,304-byte `KONAMI-WIN32PES5OPT`: 5,000 market players plus the 184 created
+slots, each a 124-byte record; the 138 clubs; the squads. `pes5.py` reads and writes it with the
+PESFan Editor 5.08 crypto — a whole-file XOR, a per-word block cipher over blocks 1..9, and ten
+block checksums — verified byte for byte against the shipped files.
+
+Where the file is: PES 5 Original Season redirects into
+`~/Documents/P5OSOF/Pro Evolution Soccer 5/save/folder1/`, the plain release uses
+`~/Documents/KONAMI/...`; importing an install folder resolves to that file rather than to the
+template shipped in `<game>/misc/Option File/`. The game reads it at boot, so close the game before
+saving. A save rewrites the whole file (re-encrypted, checksums recomputed) after keeping a copy
+under `<state>/backups/pes5/` — one file, one backup, and `pes5.backup_list()` /
+`pes5.restore_backup()` put it back byte for byte.
+
+Editable in this build: names (full UTF-16LE; shirt names keep the game's own A–Z, `.`, `_` and
+space alphabet), the 26 abilities, age/height/weight/
+foot/nationality, condition, consistency, weak foot 1–8, injury C/B/A, the registered position, the
+numeric dribble style and the 24 special-ability chips. Clubs and squads are read (the list's CLUB
+column, `#number` in the card); formation, kit and squad editing stay out of scope.
+
 ## Settings
 
 `~/.config/pesforge/config.json`, shared by both windows and the CLIs; `SPFL_CONFIG`, `SPFL_DIR` and
@@ -212,6 +240,7 @@ data pack); an edit that fits is patched in place and the file size does not mov
 | Game folder | Folder holding `download/data_s2627.cpk`; checked before it is accepted |
 | Database | An imported CPK that wins over the game folder (the Tk build's Club tab, the CLIs) |
 | PES 2015 / PES 2019 folder | The install each vintage panel reads; empty = found automatically |
+| PES 5 folder | The PES 5 install, for resolving the option file it plays; empty = found automatically |
 | Backup folder | Where previous file versions go; blank = `~/.local/share/pesforge/backups` |
 | Keep backups | Newest N are kept, older ones pruned on save; `0` keeps everything |
 | Ask before writing the game file | Tk build: show the review sheet before a save is written |
@@ -219,7 +248,8 @@ data pack); an edit that fits is patched in place and the file size does not mov
 | Theme | Tk build: Amber, Crimson, Ice or Pitch |
 
 The GTK4 build reads the SP Football Life / PES 2019 / PES 2015 folders (`SPFL_DIR` /
-`PES2019_DIR` / `PES2015_DIR` override them) and the backup folder and cap; it has no settings
+`PES2019_DIR` / `PES2015_DIR` override them) and the PES 5 install folder (`PES5_DIR`), plus the
+backup folder and cap; it has no settings
 dialog yet.
 
 ## Files
@@ -230,6 +260,7 @@ dialog yet.
 | `pesdb.py` | WESYS pack/unpack, CPK table extraction, 312-byte PES 2021 bit-field codec, team maps |
 | `pes2019.py` | PES 2019: 188-byte records, team/coach/stadium/assignment tables, CPK patching |
 | `pes2015.py` | PES 2015: 180-byte records, WESYS payloads, CPK patching, region backups |
+| `pes5.py` | PES 5: the classic-era option file — crypto, 124-byte records, clubs, inverted squads, whole-file backups |
 | `editor_gtk.py` | the GTK4 window (and its entry point + self-checks) |
 | `editor.py` | the Tk window (SP Football Life / PES 2021 and the vintage tabs) |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
@@ -252,7 +283,9 @@ dialog yet.
 python3 tests/run_all.py         # plain asserts, no pytest; prints N/N passed
 ```
 
-Covers the CPK/WESYS layer, both record maps, the CLI sandbox round-trips, the Tk window's layout
+Covers the CPK/WESYS layer, both record maps, the PES 5 option-file codec (a synthetic fixture
+gates CI, with no game data; the shipped and live files are decoded and written when one is
+installed), the CLI sandbox round-trips, the Tk window's layout
 and form behaviour, and the GTK4 window through its self-checks above. The GTK4 checks run under
 `PESFORGE_GTK4_PYTHON` (or the first interpreter that can `import gi`); the Tk checks need
 `tkinter`. Any check that wants a window skips rather than fails without a display, and the suite
@@ -285,6 +318,17 @@ runs the GUI ones on a throwaway window (`-alpha 0.0`) so it never flashes over 
 playability, 48 skill bits, numeric nationality), `Team.bin` rows of 700 bytes with the roster id
 the squads carry at +8, `Coach.bin` 108 bytes, `PlayerAssignment.bin` 16 bytes. The offsets are in
 `pes2019.py`, verified against the installed copy. **PES 2015** is described above.
+
+**PES 5** predates all of it: there is no container — the database *is* the option file, one
+1.25 MB file of ten blocks behind 12-byte headers (`[u32 size][u32 checksum][u32 0xD00]`) under a
+whole-file XOR and a per-word block cipher. Players are 124-byte records — 5,000 at
+`36,872 + i*124` and 184 created slots at `14,044 + k*124` (the game calls those 32768+k) — whose
+stats are u16 words at `rec[47+off]`, read as `(word >> shift) & mask`, i.e. plain bit fields over
+the record; the full name is UTF-16LE (15 characters) at +0, the shirt name 16 single-byte bytes at
++32, the call name u16 at +48. Clubs are 138 × 140 bytes at 803,608, and squads live in block 5
+(32 slots per club: u16 player ids at `667,458 + c*64`, number bytes stored one below the shown
+number at `659,414 + c*32`, 255 = none). `pes5.py` carries the map and the crypto, byte-verified
+against the shipped files; its `check` is the round trip — load, re-encode, compare.
 
 ## Good to know
 

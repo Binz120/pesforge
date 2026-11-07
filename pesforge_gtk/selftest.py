@@ -2,9 +2,9 @@
 
 Each mode drives the real window and prints one marker line per step; a failure prints
 SELFTEST FAIL and the process exits non-zero. Modes: `1` (build, search, chrome, club
-repair), `empty`, `cycle`, `select`, `hub`, `write`, `write2015`, `write2021`, `fit`,
-`theme`. The write modes never touch the game: they build a scratch install, edit it, save,
-read back, and hash the game's own file before and after to prove it never moved.
+repair), `empty`, `cycle`, `select`, `hub`, `write`, `write5`, `write2015`, `write2021`,
+`fit`, `theme`. The write modes never touch the game: they build a scratch install, edit it,
+save, read back, and hash the game's own file before and after to prove it never moved.
 """
 import hashlib
 import os
@@ -228,6 +228,47 @@ def _selftest_a11y(win):
         return _fail(win, f"squeezed cell(s): {squeezed}")
     print(f"SELFTEST A11Y OK named={named} controls={len(nodes)} "
           f"columns={len(visible)} rows={len(rows)} cells={len(cells)}", flush=True)
+    win.close()
+    return False
+
+
+def _selftest_align(win):
+    """`PESFORGE_GTK_SELFTEST=align`: one label width and one value column in the abilities grid.
+
+    A label's `set_size_request` is a minimum, so a term wider than it takes its own natural width
+    and pushes its value box out of line with the boxes above it — the classic vocabularies'
+    "Short Pass Accuracy" needs ~150px against the 110 the grid used to pay, which put boxes in
+    one column 40px apart. This fails on a second label width or a second value-box x; the
+    Position row counts too (it carried its own literal width and sat 4px out).
+    """
+    grid = None
+    for w in _all(win._form_pane):
+        if isinstance(w, Gtk.Grid) and w.get_height() > 150:
+            grid = w
+            break
+    if grid is None:
+        return _fail(win, "no abilities grid in the form pane")
+    widths, boxes, cells = {}, {}, 0
+    child = grid.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Box):
+            lab = child.get_first_child()
+            box = lab.get_next_sibling() if lab is not None else None
+            if isinstance(lab, Gtk.Label) and box is not None:
+                cells += 1
+                widths[lab.get_width()] = widths.get(lab.get_width(), 0) + 1
+                x = box.get_allocation().x
+                boxes[x] = boxes.get(x, 0) + 1
+        child = child.get_next_sibling()
+    if not cells:
+        return _fail(win, "the abilities grid has no label/value cells")
+    if len(widths) != 1 or len(boxes) != 1:
+        return _fail(win, f"the abilities grid is ragged: label widths {sorted(widths.items())}, "
+                          f"value columns at x {sorted(boxes.items())}")
+    print(f"SELFTEST ALIGN OK step={getattr(win, 'ability_label_step', 1.0)} "
+          f"cells={cells} label_w={list(widths)[0]} "
+          f"box_x={list(boxes)[0]} grid={grid.get_width()} "
+          f"pane={win._form_pane.get_first_child().get_width()}", flush=True)
     win.close()
     return False
 
@@ -755,6 +796,61 @@ def _selftest_write_run(win):
     return False
 
 
+def _selftest_write5(win):
+    """Load a copy of the PES 5 option file, edit it, save, and read the edits back.
+
+    The copy is a KONAMI-WIN32PES5OPT in a scratch folder of its own, so the save writes that
+    and never the game's file — the original's hash is checked before it finishes.
+    """
+    try:
+        src = vintage_database("pes5")
+        if not src or not os.path.isfile(src):
+            return _fail(win, f"no PES 5 option file (set PES5_DIR): {src!r}")
+        before = hashlib.sha256(open(src, "rb").read()).hexdigest()
+        root = os.path.join(os.environ.get("TMPDIR") or "/tmp", "pesforge-pes5-check")
+        copy = os.path.join(root, "KONAMI-WIN32PES5OPT")
+        os.makedirs(root, exist_ok=True)
+        shutil.copyfile(src, copy)
+        win.load_database(copy)
+        if win.table is None:
+            return _fail(win, f"could not load the copy: {win.status.get_text()}")
+        if win.vintage != "pes5" or len(win.rows) < 5000:
+            return _fail(win, f"loaded {win.vintage} with {len(win.rows)} rows")
+        if not win.name_entries["Name"].get_text().strip():
+            return _fail(win, "the first load put the option file's blank record in the form")
+        i = 3
+        pid = win.table.pid(i)
+        label = "Speed" if "Speed" in win.mod.FIELD_BY_LABEL else ability_order(win.mod)[0]
+        was = win.table.get(i, label)
+        want = min(99, was + 3)
+        win.table.set(i, label, want)
+        win._mark_dirty(i, label)
+        win.table.set_name(i, shirt="SELFTEST")
+        win._mark_dirty(i, "name:shirt")
+        win._save()
+        if "saved" not in win.status.get_text():
+            return _fail(win, f"save said {win.status.get_text()!r}")
+        reopened = win.mod.Cpk(copy)
+        back = reopened.read_table("Player")
+        hits = back.find(str(pid))
+        if not hits:
+            return _fail(win, f"player {pid} vanished from the copy")
+        j = hits[0]
+        if back.get(j, label) != want or back.shirt(j) != "SELFTEST":
+            return _fail(win, f"read back {back.get(j, label)!r}/{back.shirt(j)!r}, "
+                               f"want {want}/'SELFTEST'")
+        if reopened.bad_sums:
+            return _fail(win, f"the written file's checksums do not add up: {reopened.bad_sums}")
+        if hashlib.sha256(open(src, "rb").read()).hexdigest() != before:
+            return _fail(win, "the game's own option file was modified")
+        print(f"SELFTEST WRITE5 OK players={len(win.rows)} pid={pid} "
+              f"{label}={was}->{want} shirt=SELFTEST", flush=True)
+    except Exception as exc:
+        return _fail(win, f"{type(exc).__name__}: {exc}")
+    win.close()
+    return False
+
+
 def run(win):
     """`PESFORGE_GTK_SELFTEST=1`: prove the screen built against real data, then quit.
 
@@ -773,6 +869,8 @@ def run(win):
         return _selftest_hub(win)
     if mode == "write2015":
         return _selftest_write2015(win)
+    if mode == "write5":
+        return _selftest_write5(win)
     if mode == "write2021":
         return _selftest_write2021(win)
     if mode == "fit":
@@ -783,6 +881,8 @@ def run(win):
         return _selftest_a11y(win)
     if mode == "scale":
         return _selftest_scale(win)
+    if mode == "align":
+        return _selftest_align(win)
     if mode == "watch":
         return _selftest_watch(win)
     if mode == "theme":

@@ -24,6 +24,29 @@ COUNTRIES = country_names()
 STYLE_NAMES_FALLBACK = getattr(pes2019, "STYLE_NAMES", ())   # 2015's ids, 2019's names
 
 
+def style_names(mod):
+    """A release's playing-style names, or None when it numbers the field instead.
+
+    A map without the attribute (PES 2015) gets the shared 2019 list; a map that defines
+    STYLE_NAMES = None (PES 5, whose only style field is the numeric dribble style) is
+    saying the row is a number, and the panel then offers a spinbutton.
+    """
+    return getattr(mod, "STYLE_NAMES", STYLE_NAMES_FALLBACK)
+
+
+def country_name(mod, code):
+    """A nationality code's name, read from the release's own list when it ships one.
+
+    PES 5's country list is the classic-era enum (109 entries, England 6), not the vendor's
+    country ids — running one through the other silently shows a plausible wrong country,
+    so a module with NATION_NAMES answers for itself.
+    """
+    names = getattr(mod, "NATION_NAMES", None)
+    if names:
+        return names[code] if 0 <= code < len(names) else f"#{code}"
+    return COUNTRIES.get(code, f"#{code}")
+
+
 def ability_order(mod):
     """The abilities in the order the map lists them (23 for PES 2019, 19 for PES 2015)."""
     return tuple(mod.ABILITIES)
@@ -31,16 +54,23 @@ def ability_order(mod):
 
 # The game groups its ratings; the grid follows, so related numbers sit together
 # (Attacking → Defending → Physical → Goalkeeping) and each field's tooltip names its group.
+# Each group lists every vintage's spelling of its ratings; a label a map does not carry is
+# simply never matched.
 ABILITY_GROUPS = (
-    ("Attacking", ("Offensive Awareness", "Attacking Prowess", "Ball Control", "Dribbling",
-                   "Tight Possession", "Low Pass", "Lofted Pass", "Finishing", "Place Kicking",
-                   "Curl", "Swerve", "Heading", "Header")),
-    ("Defending", ("Defensive Awareness", "Defensive Prowess", "Ball Winning", "Aggression")),
-    ("Physical", ("Speed", "Acceleration", "Explosive Power", "Kicking Power", "Jump",
-                  "Physical Contact", "Balance", "Unwavering Balance", "Body Balance",
-                  "Stamina")),
-    ("Goalkeeping", ("GK Awareness", "Goalkeeping", "GK Catching", "GK Catch", "GK Clearing",
-                     "Clearing", "GK Reflexes", "Reflexes", "GK Reach", "Coverage", "Saving")),
+    ("Attacking", ("Offensive Awareness", "Attacking Prowess", "Attack", "Ball Control",
+                   "Technique", "Dribbling", "Dribble Accuracy", "Dribble Speed",
+                   "Tight Possession", "Low Pass", "Short Pass Accuracy", "Short Pass Speed",
+                   "Lofted Pass", "Long Pass Accuracy", "Long Pass Speed", "Finishing",
+                   "Shot Accuracy", "Shot Technique", "Place Kicking", "Free Kick", "Curl",
+                   "Curling", "Swerve", "Heading", "Header")),
+    ("Defending", ("Defensive Awareness", "Defensive Prowess", "Defence", "Ball Winning",
+                   "Aggression")),
+    ("Physical", ("Speed", "Acceleration", "Explosive Power", "Kicking Power", "Shot Power",
+                  "Jump", "Physical Contact", "Balance", "Unwavering Balance", "Body Balance",
+                  "Stamina", "Response")),
+    ("Goalkeeping", ("GK Awareness", "Goalkeeping", "GK Ability", "GK Catching", "GK Catch",
+                     "GK Clearing", "Clearing", "GK Reflexes", "Reflexes", "GK Reach",
+                     "Coverage", "Saving")),
 )
 
 
@@ -80,6 +110,18 @@ OVR_ALIASES = {
                 "GK Awareness": "Goalkeeping", "GK Reflexes": "Saving", "GK Reach": "Saving",
                 "GK Catching": "Saving", "GK Clearing": "Saving",
                 "Tight Possession": None, "Aggression": None, "Physical Contact": None},
+    # The classic era renamed more than it kept; the five 2021 keeper ratings fold onto the
+    # one keeper stat PES 5 has, and the two it lacks outright drop their weight.
+    "pes5": {"Offensive Awareness": "Attack", "Defensive Awareness": "Defence",
+             "Ball Control": "Technique", "Dribbling": "Dribble Accuracy",
+             "Low Pass": "Short Pass Accuracy", "Lofted Pass": "Long Pass Accuracy",
+             "Finishing": "Shot Accuracy", "Place Kicking": "Free Kick", "Curl": "Curling",
+             "Header": "Heading", "GK Awareness": "GK Ability", "GK Catching": "GK Ability",
+             "GK Reflexes": "GK Ability", "GK Reach": "GK Ability",
+             "GK Clearing": "GK Ability", "Kicking Power": "Shot Power",
+             "Physical Contact": "Balance", "Balance": "Balance", "Speed": "Speed",
+             "Acceleration": "Acceleration", "Jump": "Jump", "Stamina": "Stamina",
+             "Ball Winning": None, "Tight Possession": None},
 }
 
 
@@ -93,6 +135,9 @@ def overall_rating(table, index, mod):
     fields = getattr(mod, "FIELD_BY_LABEL", {})
     position = table.get(index, "Registered Position" if "Registered Position" in fields
                          else "Position")
+    # a release whose position codes are not the model's own maps them first (PES 5: 2 CWP,
+    # 3 CBT, 5 DMF ... against 2021's 1 CB, 4 DMF)
+    position = getattr(mod, "OVR_POSITION", {}).get(int(position), position)
     weights = pesdb.OVR_MODEL.get(int(position))
     if not weights:                       # a position the model does not cover: the general six
         names = ("Offensive Awareness", "Defensive Awareness", "Finishing", "Speed",

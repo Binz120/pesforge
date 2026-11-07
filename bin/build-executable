@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-for m in editor_gtk pes2015 pes2019 pes2021 pesdb pesdb_maps cpk settings theme; do
+for m in editor_gtk pes5 pes2015 pes2019 pes2021 pesdb pesdb_maps cpk settings theme; do
     cp "$m.py" "$stage/"
 done
 # the app package, stylesheet included (`__pycache__` stays out of the archive)

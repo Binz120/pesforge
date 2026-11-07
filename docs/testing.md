@@ -72,16 +72,21 @@ scroll), 900 stacks (the panes scroll, as designed), 917 and 941 are split with 
 - Synthetic fixture tests (no game data, so CI can gate on them): container validity via an
   independent TOC/WESYS reader, deterministic builds, no-edit save byte-identity, single
   field edit touching only its record and byte span, batch edit touching only its records,
-  release detection for the three releases plus a mislabeled file and a table-less stub,
+  release detection for the CPK releases plus a mislabeled file and a table-less stub,
   and the data layer's freedom from `gi`/`tkinter`.
+- PES 5 (the classic-era option file): the same round-trip rules against a synthetic
+  `KONAMI-WIN32PES5OPT` written through `pes5.save()` (signature, checksums, no-edit
+  byte-identity, one-record confinement, restore), plus the shipped/live file decoded
+  against known cards and the app's own `write5` save check when one is installed.
 
 Tests that need a real install raise `FileNotFoundError`/`RuntimeError` and the runner
 counts them as skipped; read the skip lines, not just the "N/N passed" tail.
 
 ## Self-check modes (GTK4)
 
-`PESFORGE_GTK_SELFTEST=` `1` | `empty` | `cycle` | `select` | `hub` | `write` | `write2015` |
-`write2021` | `fit` | `sweep` | `a11y` | `scale` | `theme`, plus `PESFORGE_GTK_SIZE=WxH`
+`PESFORGE_GTK_SELFTEST=` `1` | `empty` | `cycle` | `select` | `hub` | `write` | `write5` |
+`write2015` | `write2021` | `fit` | `sweep` | `a11y` | `scale` | `theme`, plus
+`PESFORGE_GTK_SIZE=WxH`
 and `--db <cpk|folder>`.
 `fit` is the layout gate: it fails when either editor pane's content exceeds its scroller.
 `sweep` is the geometry-and-history gate: see the layout section above.

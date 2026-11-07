@@ -147,7 +147,8 @@ class SavingMixin:
                      + f" · backups in {backup}" + (f" ({pruned} old pruned)" if pruned else "")
                      + (f" · changes in {os.path.basename(report)}" if report else "")
                      + (" · EDIT00000000 is present and overrides this file in game"
-                        if settings.edit_save_files() else ""))
+                        if getattr(self.mod, "EDIT_SAVE", True) and settings.edit_save_files()
+                        else ""))
         self._update_bulk()
 
     def _change_report(self, edits, written):

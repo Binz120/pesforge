@@ -37,6 +37,7 @@ import pesdb_maps as maps
 import pes2015
 import pes2019
 import pes2021
+import pes5
 import settings
 
 # Any machine: SPFL_GAME wins, else whatever the editor would auto-detect.
@@ -2084,6 +2085,33 @@ def test_gtk4_follows_the_desktop_text_scale():
     assert heights[-1] >= heights[0] * 1.8, heights      # and by roughly the factor (2.0 at most)
 
 
+def test_gtk4_ability_boxes_share_one_column():
+    """The abilities grid is straight: one label width, one value-box column (the user's report).
+
+    In a Box per cell, a label wider than its `set_size_request` takes its own natural width and
+    shifts the value box beside it, so the boxes line up per row instead of per column — what
+    "misaligned" looked like on a real screenshot (40px apart, in the rows whose neighbours had
+    long names like "Short Pass Accuracy"). The labels are measured and drawn at one step now;
+    this fails if a second label width or a second box x appears, at both shapes, Position
+    included.
+    """
+    game = os.path.dirname(os.path.dirname(pes2021_database()))
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    for size, expect_cells in (("941x1030", 26), ("1504x1030", 26)):
+        env = dict(os.environ, PESFORGE_GTK_SELFTEST="align", PESFORGE_GTK_SIZE=size,
+                   SPFL_DIR=game)
+        out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py"), "--db", game],
+                             capture_output=True, text=True, env=env, timeout=600)
+        text = out.stdout + out.stderr
+        assert "SELFTEST ALIGN OK" in text, text[-900:]
+        line = [ln for ln in text.splitlines() if ln.startswith("SELFTEST ALIGN OK")][0]
+        parts = dict(p.split("=") for p in line.split() if "=" in p)
+        assert int(parts["cells"]) == expect_cells, line
+        assert int(parts["box_x"]) > int(parts["label_w"]), line
+
+
 def test_gtk4_resizes_under_a_window_manager():
     """A real shrink and grow under a window manager: the same size decides the same layout.
 
@@ -2601,6 +2629,148 @@ def test_gtk4_edits_and_saves_pes2015():
     assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
 
 
+# ------------------------------------------------------------------ PES 5
+def pes5_install():
+    """The PES 5 install, or a skip when this machine has none (set PES5_DIR)."""
+    folder = os.environ.get("PES5_DIR") or pes5.find_game_dir()
+    if not folder or not pes5.is_pes5_dir(folder):
+        raise FileNotFoundError(2, "no PES 5 install (set PES5_DIR)", "pes5.exe")
+    return folder
+
+
+def pes5_option():
+    """The option file to decode: the install's shipped copy (a template), else the live one."""
+    try:
+        shipped = os.path.join(pes5_install(), "misc", "Option File", pes5.OPT_NAME)
+        if os.path.isfile(shipped):
+            return shipped
+    except FileNotFoundError:
+        pass
+    live = pes5.live_option_file()
+    if not live:
+        raise FileNotFoundError(2, "no PES 5 option file (set PES5_DIR)", pes5.OPT_NAME)
+    return live
+
+
+def test_pes5_reads_the_shipped_option_file():
+    """Zidane and Buffon decode exactly, and the squads invert back into club rosters."""
+    path = pes5_option()
+    db = pes5.Cpk(path)
+    assert db.bad_sums == [], db.bad_sums
+    table = db.read_table("Player")
+    assert len(table) == pes5.PLAYERS + pes5.CREATED, len(table)
+    zid = table.find("Zidane")[0]
+    assert zid == 205 and table.shirt(zid) == "Z I D A N E", (zid, table.shirt(zid))
+    assert (table.get(zid, "Age"), table.get(zid, "Height"), table.get(zid, "Weight")) == \
+        (33, 185, 78)
+    assert pes5.NATION_NAMES[table.get(zid, "Nationality")] == "France"
+    assert pes5.POSITION_NAMES[table.get(zid, "Position")] == "AM"
+    assert table.get(zid, "Technique") == 99 and table.get(zid, "Dribble Accuracy") == 96
+    assert table.get(zid, "Skill: Playmaking") == 1 and table.get(zid, "Skill: Dribbling") == 0
+    gk = table.find("Buffon")[0]
+    assert gk == 300 and table.get(gk, "GK Ability") == 97
+    assert table.get(gk, "Skill: 1-on-1 GK") == 1 and table.get(gk, "Skill: GK Kick") == 1
+    teams = pes5.TeamTable(*db.read_raw("Team"))
+    assert len(teams) == 138 and teams.name(0) == "Arsenal FC", len(teams)
+    assign = pes5.AssignmentTable(*db.read_raw("PlayerAssignment"))
+    arsenal = [(assign.number(r), table.name(assign.player(r)))
+               for r in range(len(assign)) if assign.team(r) == teams.id(0)]
+    assert arsenal[0] == (1, "Lehmann"), arsenal[:3]
+    assert table.find("205") == [205] and table.find("32768") == [pes5.PLAYERS]
+
+
+def test_pes5_fixture_round_trip_and_detection():
+    """The codec on a synthetic option file: no game data needed, so CI gates on it.
+
+    The raw signature the shipped files carry, a no-edit save that is byte identical, an
+    edit confined to its own record, checksums that still pass after a write, and detection
+    reading the bytes rather than the file's name.
+    """
+    box = tempfile.mkdtemp(prefix="pesforge-pes5-fixture-")
+    try:
+        path = os.path.join(box, "KONAMI-WIN32PES5OPT")
+        fixtures.build_option_file(path)
+        raw = open(path, "rb").read()
+        assert len(raw) == pes5.FILESIZE, len(raw)
+        assert raw[pes5.SIG_OFF:pes5.SIG_OFF + 4] == b"\xe7\xb0\x05\xfa", \
+            raw[pes5.SIG_OFF:pes5.SIG_OFF + 4].hex()
+        db = pes5.Cpk(path)
+        assert db.bad_sums == []
+        table = db.read_table("Player")
+        assert len(table) == pes5.PLAYERS + pes5.CREATED
+        assert table.name(1) == "PLAYER 0001" and table.shirt(1) == "PA"
+        assert 40 <= table.get(1, "Attack") <= 99
+        again = os.path.join(box, "again.bin")
+        pes5.save(db.data, again)                     # no edits: byte for byte
+        assert open(again, "rb").read() == raw
+        orig = bytes(db.data)                         # the plaintext before the edit
+        was = table.get(1, "Attack")
+        table.set(1, "Attack", was + 1 if was < 99 else was - 1)
+        db.patch("Player", table.to_payload(), backup_dir=os.path.join(box, "backups"))
+        back = pes5.Cpk(path)
+        assert back.bad_sums == [], back.bad_sums
+        assert back.read_table("Player").get(1, "Attack") != was
+        lo = pes5.BLOCK[4] + pes5.REC                       # record 1's own bytes
+        hi = pes5.BLOCK[4] + 2 * pes5.REC
+        checksum = (pes5.BLOCK[4] - 8, pes5.BLOCK[4] - 4)   # block 4's recomputed sum
+        ranges = pes2015_diffs(orig, back.data)
+        assert any(lo <= r[0] and r[1] <= hi for r in ranges), ranges
+        assert all((lo <= r[0] and r[1] <= hi) or (checksum[0] <= r[0] and r[1] <= checksum[1])
+                   for r in ranges), ranges
+        names = pes5.backup_list(os.path.join(box, "backups"))
+        assert names and os.path.basename(names[0]).startswith(pes5.OPT_NAME)
+        pes5.restore_backup(names[0])
+        assert open(path, "rb").read() == raw
+        from pesforge_gtk import importing as imp       # no gi: the data layer, headless
+        vintage, note = imp.probe_database(path)
+        assert vintage == "pes5" and "5,184 players" in note, (vintage, note)
+        renamed = os.path.join(box, "definitely-a-pes2019-pack.cpk")
+        shutil.copy2(path, renamed)
+        assert imp.probe_database(renamed)[0] == "pes5"
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+
+
+def test_pes5_probe_and_resolution():
+    """A folder pick resolves to the file the game reads, and junk is refused, not mis-read."""
+    pes5_option()                                   # skip when this machine has none
+    from pesforge_gtk import importing as imp
+    live = imp.vintage_database("pes5")
+    assert os.path.isfile(live), live
+    assert os.path.basename(live) == pes5.OPT_NAME
+    install = pes5_install()
+    found, vintage, _note = imp.find_database(install)
+    assert vintage == "pes5" and os.path.isfile(found), (found, vintage)
+    details, can_load, target = imp.describe_pick(install)
+    assert can_load and target and os.path.isfile(target), details
+    junk = os.path.join(tempfile.gettempdir(), f"pesforge-not-an-option-{os.getpid()}.bin")
+    with open(junk, "wb") as fh:
+        fh.write(b"not an option file")
+    try:
+        assert imp.probe_database(junk)[0] != "pes5", imp.probe_database(junk)
+    finally:
+        os.unlink(junk)
+
+
+def test_gtk4_edits_and_saves_pes5():
+    """PES 5 is editable: load the option file, change a player, save into a copy, read it back.
+
+    The check copies KONAMI-WIN32PES5OPT into a scratch folder first, and asserts the game's
+    own file is byte-identical when it finishes.
+    """
+    pes5_option()                                   # skip when this machine has none
+    game = pes5_install()
+    py = gtk4_python()
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("no display for the GTK4 app")
+    env = dict(os.environ, PESFORGE_GTK_SELFTEST="write5", PES5_DIR=game)
+    out = subprocess.run([py, os.path.join(ROOT, "editor_gtk.py")], capture_output=True,
+                         text=True, env=env, timeout=900)
+    text = out.stdout + out.stderr
+    assert "SELFTEST WRITE5 OK" in text, text[-700:]
+    assert "Speed=" in text and "shirt=SELFTEST" in text, text[-700:]
+
+
 
 def test_system_theme_matches_the_desktop():
     """The app paints as the desktop actually declares itself, not as a False-by-default flag says.
@@ -2804,7 +2974,7 @@ def test_data_layer_imports_stay_toolkit_free():
     """The data layer must not import gi or tkinter (it has to run headless, e.g. in CI)."""
     script = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import cpk, pesdb, pesdb_maps, pes2015, pes2019, pes2021, settings, theme\n"
+        "import cpk, pesdb, pesdb_maps, pes5, pes2015, pes2019, pes2021, settings, theme\n"
         "bad = [m for m in ('gi', 'gi.repository', 'tkinter') if m in sys.modules]\n"
         "print('toolkit-free', not bad, bad)\n"
     ) % ROOT

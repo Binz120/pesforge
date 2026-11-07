@@ -2,7 +2,7 @@
 
 Everything here derives from the loaded release's map module (`self.mod`): ability order,
 bio rows and their ranges, positions, playing styles and the skill chips — one panel,
-three releases.
+every release.
 """
 import gi
 
@@ -10,11 +10,12 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Pango  # noqa: E402
 
 from .reference import (  # noqa: E402
-    ABILITY_GROUPS, COUNTRIES, STYLE_NAMES_FALLBACK, ability_group, field_range,
-    grouped_ability_order,
+    ABILITY_GROUPS, ability_group, country_name, field_range, grouped_ability_order,
+    style_names,
 )
 from .widgets import (  # noqa: E402
-    AbilityBar, a11y, dim_label, ellipsizing_dropdown, select_all_on_focus, slim_spin,
+    AbilityBar, a11y, dim_label, ellipsizing_dropdown, fit_field_labels, select_all_on_focus,
+    slim_spin,
     spin_steps, set_widget_value,
 )
 
@@ -74,8 +75,12 @@ class FormPaneMixin:
         slots = getattr(self.mod, "NAME_SLOTS",
                        (("Name", "full"), ("Shirt Name", "shirt"), ("Japanese Name", "japanese")))
         nrow = Gtk.Grid(column_spacing=10, row_spacing=0) if narrow else None
+        name_label_w, name_label_step = fit_field_labels(
+            [k for k, _off in slots], 11 if narrow else 15, budget=560, parent=inner, pad=0,
+            gap=10, box=160, cols=2 if narrow else 1)   # one width, or the entries drift
+        #   and the labels' own naturals must fit it, or a long slot name shifts its entry
         for i, (key, off) in enumerate(slots):
-            lab = dim_label(key, 72 if narrow else 96, 11 if narrow else 15)
+            lab = dim_label(key, name_label_w, 11 if narrow else 15, scale=name_label_step)
             e = Gtk.Entry()
             e.set_hexpand(True)
             e.set_tooltip_text(f"up to {self._name_limit()} bytes")
@@ -103,13 +108,20 @@ class FormPaneMixin:
         # size a tiled window gets on this desktop) and being 13px short of it
         grid = Gtk.Grid(column_spacing=2, row_spacing=0)
         order = grouped_ability_order(self.mod)
+        # 575 = the 591px form pane at 917x1030 minus its 16px of margins: the narrowest a
+        # split pane gets, so the grid is sized for the layout's own promise
+        ability_label_w, ability_label_step = fit_field_labels(
+            [*order, "Position"], 20, budget=575, parent=inner, pad=1, cols=cols)
+        self.ability_label_step = ability_label_step     # the align check reports it
         for n, label in enumerate(order):
             cell = Gtk.Box(spacing=6)
-            cell.append(dim_label(label, 110, 20))
-            spin = Gtk.SpinButton.new_with_range(40, 99, 1)
+            cell.append(dim_label(label, ability_label_w, 20, scale=ability_label_step))
+            # the range is the release's own: 40..99 from the six-bit +40 maps, 0..99 on the
+            # classic map (its stats are stored as the number the game shows)
+            lo, hi = field_range(self.mod, label)
+            spin = Gtk.SpinButton.new_with_range(lo, hi, 1)
             spin.set_width_chars(4)          # without this the entry reserves ~112px
             spin.set_size_request(72, 28)    # one box size for every value control in the grid
-            lo, hi = spin.get_range()        # the range belongs on the field, not floating above
             spin.set_tooltip_text(f"{label} · {ability_group(label)} · {int(lo)} to {int(hi)}")
             a11y(spin, f"{label}, {ability_group(label)}, {int(lo)} to {int(hi)}")
             select_all_on_focus(spin)
@@ -119,14 +131,14 @@ class FormPaneMixin:
             spin.connect("value-changed", self._on_ability_changed, label)
             cell.append(spin)
             if not narrow:                   # the wide layout has room for the value bars
-                bar = AbilityBar(42)
+                bar = AbilityBar(42, lo)     # its 0 sits on the release's own floor
                 cell.append(bar)
                 self.abilities[label] = (spin, bar)
             else:
                 self.abilities[label] = (spin, None)
             grid.attach(cell, n % cols, n // cols, 1, 1)
         pos_cell = Gtk.Box(spacing=6)
-        pos_cell.append(dim_label("Position", 114, 20))
+        pos_cell.append(dim_label("Position", ability_label_w, 20, scale=ability_label_step))
         self.position = ellipsizing_dropdown(self.mod.POSITION_NAMES, 5)   # "DMF" fits, its popup keeps the long form
         a11y(self.position, "registered position")
         self.position.set_size_request(72, 28)                      # same box as the value fields
@@ -195,8 +207,9 @@ class FormPaneMixin:
         pairs = []
 
         # PES 2015 stores the same style ids as 2019 (0 None, 17 Defensive Goalkeeper) but its
-        # map carries no names, so it borrows the shared list
-        names = getattr(self.mod, "STYLE_NAMES", None) or STYLE_NAMES_FALLBACK
+        # map carries no names, so it borrows the shared list; a map with STYLE_NAMES = None
+        # (PES 5) numbers the style field, and gets the spinbutton below.
+        names = style_names(self.mod)
         if names:
             self.style = ellipsizing_dropdown(names)       # roomy: no truncation, the box is the longest style
             a11y(self.style, "playing style")
@@ -214,8 +227,13 @@ class FormPaneMixin:
         # line below it, so their labels started at a different x than the rows above and the
         # boxes looked like they were floating. The grid sizes each value column to its widest
         # member, so the boxes line up and a country name is never cut short.
-        fields = [(label, self.BIO_RANGES[label]) for label in self.BIO_LABELS
-                  if label in self.mod.FIELD_BY_LABEL]
+        # A release's own bio rows and ranges win: PES 5's height stops at 211 cm and its
+        # weak-foot fields run 1..8 where the CPK releases' run 1..4; the window's lists are
+        # the fallback every other vintage uses.
+        bio_labels = getattr(self.mod, "BIO_LABELS", None) or self.BIO_LABELS
+        bio_ranges = getattr(self.mod, "BIO_RANGES", None) or self.BIO_RANGES
+        fields = [(label, bio_ranges[label]) for label in bio_labels
+                  if label in self.mod.FIELD_BY_LABEL and label in bio_ranges]
         # style and foot follow the last row's dropdown, as in the game's own panel
         fields += [("Playing Style", None), ("Foot", None)]
         for label, span in fields:
@@ -227,10 +245,14 @@ class FormPaneMixin:
             elif key == "Nationality":
                 # a code, not a number: offer the country itself. The list is the whole code
                 # range, so the selected index *is* the stored value — nothing to drift.
-                widget = ellipsizing_dropdown([COUNTRIES.get(c, f"#{c}") for c in range(512)],
+                span_n = len(self.mod.NATION_NAMES) if hasattr(self.mod, "NATION_NAMES") else 512
+                widget = ellipsizing_dropdown([country_name(self.mod, c) for c in range(span_n)],
                                               12)                        # 7 cut "Portugal" in half
                 if hasattr(widget, "set_enable_search"):
                     widget.set_enable_search(True)
+            elif key in getattr(self.mod, "CHOICE_FIELDS", {}):
+                # a stored code whose meaning is a word (PES 5's injury tolerance is C/B/A)
+                widget = ellipsizing_dropdown(self.mod.CHOICE_FIELDS[key], 5)
             else:
                 lo, hi = span
                 widget = Gtk.SpinButton.new_with_range(lo, hi, 1)

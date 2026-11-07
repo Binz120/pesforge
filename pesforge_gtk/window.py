@@ -196,9 +196,10 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
         title = Gtk.Label(label="No database loaded")
         title.add_css_class("hero")
         box.append(title)
-        hint = Gtk.Label(label="Import the CPK that carries the player tables — for example\n"
-                               "PES 2019's Data/dt10_x64.cpk, PES 2015's Data/dt10.cpk or "
-                               "an SP Football Life download/data_s*.cpk",
+        hint = Gtk.Label(label="Import the file that carries the player tables — for example\n"
+                               "PES 2019's Data/dt10_x64.cpk, PES 2015's Data/dt10.cpk, an "
+                               "SP Football Life download/data_s*.cpk, or PES 5's "
+                               "KONAMI-WIN32PES5OPT option file in Documents",
                          justify=Gtk.Justification.CENTER)
         hint.add_css_class("hint")
         hint.set_wrap(True)                     # a long hint must not hold the window open
@@ -209,8 +210,9 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
         button.set_halign(Gtk.Align.CENTER)
         button.connect("clicked", lambda _b: self.import_database())
         box.append(button)
-        version = Gtk.Label(label="reads PES 2021 / SP Football Life, PES 2019 and PES 2015 CPKs · "
-                                  "edits 180-, 188- and 312-byte player records")
+        version = Gtk.Label(label="reads PES 2021 / SP Football Life, PES 2019 and PES 2015 CPKs "
+                                  "and the PES 5 option file · "
+                                  "edits 124-, 180-, 188- and 312-byte player records")
         version.add_css_class("hint")
         version.set_wrap(True)
         version.set_max_width_chars(60)
@@ -387,8 +389,9 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
             action=Gtk.FileChooserAction.SELECT_FOLDER if folder else Gtk.FileChooserAction.OPEN)
         if not folder:
             filters = Gtk.FileFilter()
-            filters.set_name("CRI CPK database")
+            filters.set_name("PES databases (*.cpk, KONAMI-WIN32PES5OPT)")
             filters.add_pattern("*.cpk")
+            filters.add_pattern("KONAMI-WIN32PES5OPT")   # the classic era's single file
             chooser.add_filter(filters)
         chooser.set_current_folder(Gio.File.new_for_path(import_start_folder(self.last_folder)))
 
@@ -425,7 +428,8 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
             if target and os.path.basename(target) != name:
                 where += f" → {os.path.basename(target)}"
             tail = ("" if vintage in ("pes2021", "no player table")
-                    else " · this build edits PES 2019, PES 2015 and SP Football Life records.")
+                    else " · this build edits PES 2021 / SP Football Life, PES 2019, PES 2015 "
+                         "and PES 5 databases.")
             self._status(f"{where}: {vintage} — {note}{tail}")
             return False
         mod = VINTAGES[vintage]["module"]
@@ -471,7 +475,7 @@ class PesForgeGtk(BatchBarMixin, EditingMixin, FormPaneMixin, LayoutMixin, ListP
         self.provenance = name + (f" ({swapped} had no player table)" if swapped else "")
         self._status(f"{VINTAGES[vintage]['label']} · {len(self.rows):,} players · {note}"
                      + (" · EDIT00000000 is present and overrides this file in game"
-                        if settings.edit_save_files() else ""))
+                        if getattr(mod, "EDIT_SAVE", True) and settings.edit_save_files() else ""))
         return True
 
 

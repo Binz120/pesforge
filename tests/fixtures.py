@@ -4,7 +4,8 @@ Every fixture is built from the modules' own record maps through their own table
 records are filled with deterministic pseudo-random values (random.Random(seed)), wrapped
 into a WESYS payload by the release's own writer, and stored in a minimal but faithful CRI
 CPK container (header @UTF, `TOC ` block, TOC @UTF, 2 KiB-aligned payloads behind 2048-byte
-leads) assembled here.
+leads) assembled here. `build_option_file` does the same for the classic era, whose database
+is a single KONAMI-WIN32PES5OPT written through `pes5.save()`.
 
 What the fixtures are for:
 
@@ -30,6 +31,7 @@ if _ROOT not in sys.path:
 import pes2015
 import pes2019
 import pes2021
+import pes5
 import pesdb
 
 LEAD = 0x800                 # 2048: the lead block in front of every payload
@@ -287,6 +289,48 @@ def build_mislabeled(root):
     return build_cpk("pes2015", path)
 
 
+# ------------------------------------------------------- PES 5 option file
+def build_option_file(path, seed=7, players_n=48, clubs_n=8):
+    """A synthetic PES 5 option file: the real layout and crypto, seeded records inside.
+
+    Written through `pes5.save()`, so the raw signature at 0x140C and the ten block
+    checksums are the module's own. Players 1..players_n are named and filled from the
+    record map; the first clubs_n clubs get a name and a four-player squad each.
+    """
+    rng = random.Random(seed)
+    data = bytearray(pes5.FILESIZE)
+    for off, size in zip(pes5.BLOCK, pes5.BLOBSIZE):
+        struct.pack_into("<III", data, off - 12, size, 0, 0xD00)   # size, checksum, marker
+    blob = bytes((pes5.PLAYERS + pes5.CREATED) * pes5.REC)
+    table = pes5.PlayerTable(blob)
+    for i in range(1, players_n + 1):
+        # the shirt slot's own alphabet is A-Z . _ and space (the whole shipped file uses
+        # exactly those), so the fixture's shirt names stay inside it
+        table.set_name(i, full=f"PLAYER {i:04d}", shirt=f"P{chr(65 + (i - 1) % 26)}")
+        for label in pes5.ABILITIES:
+            table.set(i, label, 40 + rng.randrange(60))
+        table.set(i, "Position", rng.randrange(len(pes5.POSITION_NAMES)))
+        table.set(i, "Nationality", rng.randrange(len(pes5.NATION_NAMES)))
+        table.set(i, "Height", 160 + rng.randrange(40))
+        table.set(i, "Age", 18 + rng.randrange(20))
+        for skill in pes5.SKILLS:
+            table.set(i, "Skill: " + skill, rng.randrange(2))
+    payload = table.to_payload()
+    data[pes5.BLOCK[4]:pes5.BLOCK[4] + pes5.PLAYER_BYTES] = payload[:pes5.PLAYER_BYTES]
+    data[pes5.BLOCK[3]:pes5.BLOCK[3] + pes5.CREATED_BYTES] = payload[pes5.PLAYER_BYTES:]
+    for c in range(clubs_n):
+        name = f"CLUB {c:03d}".encode("utf-8")
+        base = pes5.CLUB_BLOCK + c * pes5.CLUB_REC
+        data[base:base + len(name)] = name
+        for s in range(4):
+            pid = 1 + (c * 4 + s) % players_n
+            struct.pack_into("<H", data, pes5.SQUAD_BLOCK + 9746 + c * 64 + s * 2, pid)
+            data[pes5.SQUAD_BLOCK + 1702 + c * 32 + s] = s        # stored one below 1..4
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    pes5.save(data, path)
+    return path
+
+
 # ---------------------------------------------------------------- independent reader
 def read_utf(buf, base):
     """A second, independent @UTF parser — deliberately not `cpk.Utf`.
@@ -438,3 +482,9 @@ if __name__ == "__main__":                    # a quick self-check: build and re
         _rows, _prefix = player_records(_path, _v)
         print(f"{_v}: {_path} ({os.path.getsize(_path):,} bytes, "
               f"{len(_rows)} players, prefix {_prefix!r}) ok")
+    _box = tempfile.mkdtemp(prefix="pesforge-fixture-")
+    _path = build_option_file(os.path.join(_box, "KONAMI-WIN32PES5OPT"))
+    _db = pes5.Cpk(_path)
+    print(f"pes5: {_path} ({os.path.getsize(_path):,} bytes, "
+          f"{len(_db.read_table('Player'))} player slots, checksums "
+          f"{'ok' if not _db.bad_sums else _db.bad_sums}) ok")

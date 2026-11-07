@@ -14,7 +14,7 @@ from gi.repository import Gtk  # noqa: E402
 import pesdb  # noqa: E402
 
 from .reference import (  # noqa: E402
-    ABILITY_GROUPS, COUNTRIES, STYLE_NAMES_FALLBACK, overall_rating, tier_of,
+    ABILITY_GROUPS, country_name, overall_rating, style_names, tier_of,
 )
 from .widgets import set_widget_value, widget_value  # noqa: E402
 
@@ -50,12 +50,12 @@ class EditingMixin:
         for key, spin in self.bio.items():
             set_widget_value(spin, t.get(index, key))
         style = t.get(index, "Playing Style")
-        if hasattr(self.style, "set_selected"):          # a named list, wherever it came from
-            names = getattr(self.mod, "STYLE_NAMES", None) or STYLE_NAMES_FALLBACK
+        names = style_names(self.mod)
+        if names:                                        # a named list, wherever it came from
             style = min(style, len(names) - 1)
             self.style.set_selected(style)
             self.style.set_tooltip_text(names[style] if style < len(names) else "")
-        else:                                            # 2015 numbers them
+        else:                                            # a release that numbers the style field
             self.style.set_value(style)
         self.foot.set_selected(t.get(index, "Foot"))
         for label, chip in self.chips.items():
@@ -249,7 +249,7 @@ class EditingMixin:
         club = self.clubs.get(self.assign.team(rows[0]), "free agent") if rows else "free agent"
         number = self.assign.number(rows[0]) if rows else 0
         return (f"id {pid} · {club} (#{number}) · "
-                f"{COUNTRIES.get(self.table.get(index, 'Nationality'), '')} · "
+                f"{country_name(self.mod, self.table.get(index, 'Nationality'))} · "
                 f"{len(self.packs)} packs searched")
 
     def _on_bio_changed(self, spin, key):

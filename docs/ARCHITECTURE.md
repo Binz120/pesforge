@@ -95,8 +95,9 @@ traps that cost real time in this split:
 
 `bin/check` runs exactly what CI runs. 98 tests: the data layer, the CLIs, the Tk editor and
 the GTK4 app (through `PESFORGE_GTK_SELFTEST` subprocesses), plus synthetic-fixture tests
-that need no game data (`tests/fixtures.py` builds minimal faithful CPKs for all three
-releases, a table-less stub and a mislabeled file, and re-reads written containers with an
+that need no game data (`tests/fixtures.py` builds minimal faithful CPKs for all three CPK
+releases plus a PES 5 option file, a table-less stub and a mislabeled file, and re-reads
+written containers with an
 independent parser). Details, the display trap and the selftest modes: `docs/testing.md`.
 
 ## Build

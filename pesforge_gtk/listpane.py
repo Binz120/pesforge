@@ -278,14 +278,16 @@ class ListPaneMixin:
         return names[value] if 0 <= value < len(names) else str(value)
 
     def club_rows(self, pid):
-        """The player's club assignment rows: national-team rows sit below `NATIONAL_MAX`.
+        """The player's club assignment rows: national-team rows sit below the release's own max.
 
         The country row often comes first, and "first row wins" then shows a nation where the
         club belongs (D. RANDOLPH read as IRELAND instead of TEESSIDE) — the same skew the
-        PES 2021 editor fixes by skipping team ids under 100.
+        PES 2021 editor fixes by skipping team ids under 100. PES 5 numbers its nations 0..63,
+        so the threshold is the module's own (NATIONAL_MAX), not pesdb's.
         """
+        limit = getattr(self.mod, "NATIONAL_MAX", pesdb.NATIONAL_MAX)
         return [r for r in self.assign_by_pid.get(pid, ())
-                if self.assign.team(r) > pesdb.NATIONAL_MAX]
+                if self.assign.team(r) > limit]
 
     def populate(self):
         """Fill the list model — run after load_rows(), so the store matches the table.
@@ -337,13 +339,18 @@ class ListPaneMixin:
         self.count.set_tooltip_text(text)
 
     def _load_first(self):
-        """Load row 0 into the form: the detail pane must not sit empty.
+        """Load the first named row into the form: the detail pane must not sit empty.
 
         It is *not* selected — the form follows the cursor, the bulk pick follows the ticks,
-        and a ticked row must mean the user ticked it.
+        and a ticked row must mean the user ticked it. The classic option file ships a blank
+        record 0 (and blank created slots), so a name is what makes a row a player worth
+        showing; the scan is bounded, with the old first-row behaviour as the fallback.
         """
         if self.index is None and self.sorted.get_n_items():
-            row = self.sorted.get_item(0)
+            limit = min(self.sorted.get_n_items(), 64)
+            row = next((self.sorted.get_item(i) for i in range(limit)
+                        if self.sorted.get_item(i) is not None
+                        and self.sorted.get_item(i).name), self.sorted.get_item(0))
             if row is not None:
                 self._load(row.index)
         self._update_bulk()
