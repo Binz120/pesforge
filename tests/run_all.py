@@ -2444,7 +2444,7 @@ def test_gtk4_bulk_matrix_stages_and_commits():
 
 
 def test_gtk4_starts_empty_and_imports_on_demand():
-    """The GTK4 window reads nothing until a database is imported, then fills itself."""
+    """The app reads nothing until a database is imported, then fills itself."""
     game = pes2019_install()
     py = gtk4_python()
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):

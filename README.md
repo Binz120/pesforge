@@ -1,13 +1,13 @@
 # PESForge
 
 A player and club database editor for **five PES releases** on Linux: SP Football Life 2027 /
-PES 2021, PES 2019, PES 2015, and the classic PES 5 and PES 6 option files. One GTK4 window covers all of
+PES 2021, PES 2019, PES 2015, and the classic PES 5 and PES 6 option files. One app covers all of
 them, with headless CLIs, timestamped backups and byte-verified writes; the game itself never has
 to run.
 
-![The GTK4 window, dark palette](docs/screenshot-dark.png)
+![The app in its dark palette](docs/screenshot-dark.png)
 
-![The GTK4 window, light palette](docs/screenshot-light.png)
+![The app in its light palette](docs/screenshot-light.png)
 
 The window (`editor_gtk.py` over the `pesforge_gtk/` package) is what this build is about. The
 original Tk window (`legacy/editor.py`) stays in the repo because it still has a few features the
@@ -20,13 +20,13 @@ The Tk window's own README is kept at `docs/tk-build.md`.
 ## Run
 
 ```bash
-./bin/pesforge-gtk4              # the GTK4 window
+./bin/pesforge-gtk4              # the app
 ./bin/pesforge-gtk4 --check      # python/GTK versions, both installs it can see, no window
 ./bin/pesforge-gtk4 --db <cpk|folder>   # open straight into a database (or find it in a folder)
 ./install.sh                     # ~/.local/bin launchers + menu entries, no root
 ```
 
-## The GTK4 window
+## The app
 
 **It starts empty.** Nothing is read until you import a database: an empty page with one
 **Import database…** action, and Save/Revert/the search box all insensitive. **Import database…**
@@ -230,7 +230,7 @@ data pack); an edit that fits is patched in place and the file size does not mov
 
 ### PES 5 and PES 6 (the option files)
 
-The classic era has no CPK, no WESYS and no CLI of its own — **the GTK4 window edits it**. The whole
+The classic era has no CPK, no WESYS and no CLI of its own — **the app edits it**. The whole
 database is one 1,250,304-byte `KONAMI-WIN32PES5OPT`: 5,000 market players plus the 184 created
 slots, each a 124-byte record; the 138 clubs; the squads. `pes5.py` reads and writes it with the
 PESFan Editor 5.08 crypto — a whole-file XOR, a per-word block cipher over blocks 1..9, and ten
@@ -296,7 +296,7 @@ file.
 | `pes5.py` | PES 5: the classic-era option file — crypto, 124-byte records, clubs, inverted squads, whole-file backups |
 | `pes6.py` | PES 6: the same shape for `KONAMI-WIN32PES6OPT` — its own block map, cipher key and club numbering |
 | `editor_gtk.py` | the GTK4 entry point and self-checks (the window lives in `pesforge_gtk/`) |
-| `pesforge_gtk/` | the GTK4 window: shell, panes, batch bar, saving, layout, stylesheet, self-checks |
+| `pesforge_gtk/` | the app: shell, panes, batch bar, saving, layout, stylesheet, self-checks |
 | `legacy/editor.py` | the Tk window (SP Football Life / PES 2021 and the vintage tabs); `bin/pesforge` still runs it |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
 | `cli2015.py` | headless PES 2015 find / show / set / export / tables / backups / restore |
@@ -323,7 +323,7 @@ python3 tests/run_all.py         # plain asserts, no pytest; prints N/N passed
 Covers the CPK/WESYS layer, both record maps, the classic option-file codecs (synthetic
 fixtures gate CI, with no game data; the shipped and live files are decoded and written when one
 is installed), the CLI sandbox round-trips, the Tk window's layout
-and form behaviour, and the GTK4 window through its self-checks above. The GTK4 checks run under
+and form behaviour, and the app through its self-checks above. The GTK4 checks run under
 `PESFORGE_GTK4_PYTHON` (or the first interpreter that can `import gi`); the Tk checks need
 `tkinter`. Any check that wants a window skips rather than fails without a display, and the suite
 runs the GUI ones on a throwaway window (`-alpha 0.0`) so it never flashes over your desktop.

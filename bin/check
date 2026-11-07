@@ -2,7 +2,7 @@
 # bin/check — exactly what CI runs: the whole assert suite, GUI checks included.
 #
 # The GTK4 checks need a display. When DISPLAY is set it is used with the Wayland backend
-# disabled: on a Wayland session a GTK window otherwise lands on the live desktop even when
+# disabled: on a Wayland session the app's window otherwise lands on the live desktop even when
 # DISPLAY names a headless server (that is how a test run once drew on the user's screen).
 # With no DISPLAY, xvfb-run provides one; without Xvfb either, the GUI checks skip and the
 # run still covers the data layer, the fixture tests and the CLIs.
