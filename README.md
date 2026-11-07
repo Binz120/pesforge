@@ -1,9 +1,14 @@
 # PESForge GTK4
 
 The GTK4 build of [PESForge](https://github.com/Binz120/pesforge). One repo, two windows onto the
-same data layer: the GTK4 + libadwaita window (`editor_gtk.py`, what this fork is about) and the
-original Tk window (`editor.py`), which stays here because it still has the features the GTK4 build
-does not. The CPK/WESYS readers, the CLIs and the test suite are shared.
+same data layer: the GTK4 window (`editor_gtk.py` over the `pesforge_gtk/` package, what this
+fork is about) and the original Tk window (`legacy/editor.py`), which stays here because it still
+has the features the GTK4 build does not. The CPK/WESYS readers, the CLIs and the test suite are
+shared.
+
+![The GTK4 window, dark palette](docs/screenshot-dark.png)
+
+![The GTK4 window, light palette](docs/screenshot-light.png)
 
 GTK4 and PyGObject ship with every current desktop, so the GTK4 build needs nothing installed and
 no venv. It draws through Wayland or X11 directly — none of Tk's XWayland workarounds appear here.
@@ -58,7 +63,7 @@ screen shows comes from the loaded release's own map module (`pes2021.py` / `pes
 | abilities | 25 | 23 | 19 | 26 |
 | playing style | named (dropdown) | named (dropdown) | numeric (0–21) | numeric dribble style (1–4) |
 | bio rows | + Reputation | + Reputation | — | condition, consistency, weak foot 1–8, injury C/B/A |
-| skills / COM styles | 48 chips | 46 chips | 27 chips | 24 chips (the special abilities) |
+| skills / COM styles | 48 chips | 46 chips | 27 chips | 23 chips (the special abilities, under the games' own names) |
 
 - **List** — virtualized (`GtkColumnView` over the whole roster): ID, NAME, CLUB, POS, SPD, BC, FIN, STA,
   STATE. Every column sorts except POS; a tick column selects rows for the bulk edit. Names elide
@@ -82,8 +87,9 @@ screen shows comes from the loaded release's own map module (`pes2021.py` / `pes
 - **Theme** — light or dark follows the desktop (GTK's own preference, then the freedesktop
   portal; `PESFORGE_THEME=light|dark` overrides) and the switch is followed live. Which palette
   light and dark use comes from the same `theme` key the Tk build's Settings writes
-  (`amber`/`crimson`/`ice`/`pitch`); every combination has to clear 4.5:1 on its own, which
-  `PESFORGE_GTK_SELFTEST=theme` reports.
+  (`amber`/`crimson`/`ice`/`pitch`). Each palette brings its own surfaces in both modes, so a
+  light desktop gets a genuinely icy Ice and not amber with blue buttons; every combination has
+  to clear 4.5:1 on its own, which `PESFORGE_GTK_SELFTEST=theme` reports.
 - **Bulk matrix** — tick any number of rows and a tray appears: *set / add / subtract* one field
   across the selection, clamped to the field's own range (abilities stop at 99). Staged in memory
   like any other edit.
@@ -118,6 +124,11 @@ tab": the release is read off the file you import, so a tab could only disagree 
 | `write2021` | the same for SP Football Life / PES 2021 (abilities, a skill bit, the shirt name) |
 | `fit` | neither editor pane needs a scrollbar at the window's size (`PESFORGE_GTK_SIZE=WxH` picks one) |
 | `theme` | the palette in force (light or dark, from the desktop) and its fg/bg contrast |
+| `sweep` | the layout across the point where the panes restack, and back down again |
+| `align` | one measured label width per grid, so every value box sits in one column |
+| `a11y` | every control the window builds carries a screen-reader name |
+| `scale` | the text scale in use, from 1.0 to 2.0, and the widgets that follow it |
+| `watch` | the resize sweep driven under a real window manager (the suite runs this one) |
 
 ## The Tk build (`editor.py`)
 
@@ -227,8 +238,11 @@ under `<state>/backups/pes5/` — one file, one backup, and `pes5.backup_list()`
 Editable in this build: names (full UTF-16LE; shirt names keep the game's own A–Z, `.`, `_` and
 space alphabet), the 26 abilities, age/height/weight/
 foot/nationality, condition, consistency, weak foot 1–8, injury C/B/A, the registered position, the
-numeric dribble style and the 24 special-ability chips. Clubs and squads are read (the list's CLUB
+numeric dribble style and the 23 special-ability chips, named as the games name them (their own
+edit menus' strings, byte-identical in PES 5 and PES 6). Clubs and squads are read (the list's CLUB
 column, `#number` in the card); formation, kit and squad editing stay out of scope.
+
+![The PES 5 panel: the 23 special abilities under the games' own names](docs/screenshot-pes5.png)
 
 ## Settings
 
@@ -249,8 +263,9 @@ column, `#number` in the card); formation, kit and squad editing stay out of sco
 
 The GTK4 build reads the SP Football Life / PES 2019 / PES 2015 folders (`SPFL_DIR` /
 `PES2019_DIR` / `PES2015_DIR` override them) and the PES 5 install folder (`PES5_DIR`), plus the
-backup folder and cap; it has no settings
-dialog yet.
+backup folder and cap. Its Settings popover sets the theme mode (follow the desktop, light or
+dark), the palette and the backup cap; the Tk-only rows (save confirmation, photos) stay in the
+file.
 
 ## Files
 
@@ -261,8 +276,9 @@ dialog yet.
 | `pes2019.py` | PES 2019: 188-byte records, team/coach/stadium/assignment tables, CPK patching |
 | `pes2015.py` | PES 2015: 180-byte records, WESYS payloads, CPK patching, region backups |
 | `pes5.py` | PES 5: the classic-era option file — crypto, 124-byte records, clubs, inverted squads, whole-file backups |
-| `editor_gtk.py` | the GTK4 window (and its entry point + self-checks) |
-| `editor.py` | the Tk window (SP Football Life / PES 2021 and the vintage tabs) |
+| `editor_gtk.py` | the GTK4 entry point and self-checks (the window lives in `pesforge_gtk/`) |
+| `pesforge_gtk/` | the GTK4 window: shell, panes, batch bar, saving, layout, stylesheet, self-checks |
+| `legacy/editor.py` | the Tk window (SP Football Life / PES 2021 and the vintage tabs); `bin/pesforge` still runs it |
 | `cli.py` | headless find / show / set / export / import / squad / transfer / coaches / stadium / shirt / copy |
 | `cli2015.py` | headless PES 2015 find / show / set / export / tables / backups / restore |
 | `settings.py` | config file: game folder, backups, save confirmation, photos, theme, window size |
@@ -276,6 +292,8 @@ dialog yet.
 | `bin/pesforge2015` | launcher for the PES 2015 CLI (plain Python, no display) |
 | `install.sh` | user-level install: launchers + menu entries, no root |
 | `tests/run_all.py` | the whole suite: `python3 tests/run_all.py` (needs a display) |
+| `docs/` | architecture, testing, accessibility, the Tk vs GTK comparison, the in-game checklist |
+| `REPORT.md` | the GTK4 hardening pass: what moved, what was measured, what is left |
 
 ## Tests
 
