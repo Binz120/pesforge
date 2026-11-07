@@ -1,5 +1,10 @@
 # PESForge
 
+> [!WARNING]
+> **Very early development.** PESForge is at an early stage: features are still being added,
+> rough edges are expected, and things can change or break between commits. It backs up before
+> every write, but keep your own copies of the files you edit.
+
 A player and club database editor for **five PES releases** on Linux: SP Football Life 2027 /
 PES 2021, PES 2019, PES 2015, and the classic PES 5 and PES 6 option files. One app covers all of
 them, with headless CLIs, timestamped backups and byte-verified writes; the game itself never has
