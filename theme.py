@@ -38,9 +38,8 @@ BASE = {
     },
 }
 
-# The same palettes for a light desktop: only amber has one so far, and any other name falls back
-# to it (its accent is the app's own). Everything else is derived by the same maths below, so a
-# light palette holds the same contrast floors.
+# The same palettes for a light desktop: amber's are hand-tuned, and every other palette takes
+# those surfaces and tints them toward its own hue (see light_base).
 LIGHT = {
     "amber": {
         "bg": "#f6f3ee", "panel": "#fffefc", "panel2": "#ece5da", "fg": "#2b2117",
@@ -49,17 +48,26 @@ LIGHT = {
     },
 }
 
+LIGHT_TINT = 0.13        # how far a light palette's surfaces lean toward its own hue
+
 
 def light_base(name):
-    """A light base for any palette: the light amber surfaces carrying that palette's accent.
+    """A light base for any palette: the light surfaces, tinted with that palette's own hue.
 
-    Only amber needed hand-tuning; the others take its surfaces and have their accent darkened
-    until it reads on them, so a light desktop can still pick crimson or ice.
+    The first version handed every palette amber's warm surfaces and only swapped the accent, so
+    choosing Ice on a light desktop painted an amber window with blue buttons — the setting looked
+    like it had not applied (reported with a screenshot of the palette row). Each palette's
+    surfaces and rules are blended a few percent toward its own accent instead: enough to read as
+    cool, green or rose at a glance, not enough to move the contrast floors the tokens are built
+    to hold. The accent is still darkened until it reads on them.
     """
     if name in LIGHT:
         return LIGHT[name]
+    hue = BASE.get(name, BASE[DEFAULT])["accent"]
     base = dict(LIGHT[DEFAULT])
-    base["accent"] = away(BASE.get(name, BASE[DEFAULT])["accent"], base["panel2"], 4.5)
+    for token in ("bg", "panel", "panel2", "line", "dim"):
+        base[token] = mix(base[token], hue, LIGHT_TINT)
+    base["accent"] = away(hue, base["panel2"], 4.5)
     return base
 
 # Settings offers these in this order; the first is the default.
@@ -186,7 +194,10 @@ def tokens(name=DEFAULT, mode="dark"):
         "line_strong": away(away(base["line"], panel, FLOORS["line_strong"]), bg,
                             FLOORS["line_strong"]),
         "accent": accent,
-        "accent_text": away(accent, panel, FLOORS["accent_text"]),
+        # accent used as text lands on the section bands, which are `panel2`: floored against
+        # both, the way `hint` already is (amber's sat at 3.67 on panel2)
+        "accent_text": away(away(accent, panel, FLOORS["accent_text"]), panel2,
+                            FLOORS["accent_text"]),
         "accent_hi": mix(accent, fg, 0.22),
         "accent_lo": mix(accent, bg, 0.32),
         "green": base["green"],
